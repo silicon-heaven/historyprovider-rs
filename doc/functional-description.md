@@ -4,6 +4,7 @@ _historyprovider-rs_ (hp-rs) whose goal is to gather logs from the shv tree and 
 To do that _hp-rs_ does these things:
 - retrieves logs from other sources
 - exposes a `getLog` interface for every site
+- maintains a log directory for every log source
 - exposes a `_shvjournal` node, which serves as a controlling node and also contain every file that _hp-rs_ has under its
   possession
 
@@ -31,11 +32,12 @@ There three ways _hp-rs_ can obtain logs:
 0) Capturing events.
 1) Downloading files via "file synchronization".
 2) Downloading logs via `getLog` and saving them to files.
-2) Receiving logs via pushLog.
+3) Receiving logs via pushLog.
 
-If the log directory is empty for the specific site, _hp-rs_ only downloads history up until a specific point (controlled
-by the configuration). Afterwards, only new logs are ever downloaded, _hp-rs_ never downloads logs, that are older than it
-already has
+Syncing is done on a per-source basis. A source can have a nested subdirectory tree. If the local database for a
+specific leaf subdirectory is empty, _hp-rs_ only downloads history up until a specific point (controlled by the
+configuration). Afterwards, only new logs are ever downloaded, _hp-rs_ never downloads logs, that are older than it
+already has.
 
 ### Capturing events
 This is the most straightforward way of getting logs and isn't really "downloading". _hp-rs_ subscribes all the sites for
