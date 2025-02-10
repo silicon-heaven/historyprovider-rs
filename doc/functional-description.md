@@ -113,7 +113,8 @@ Note: this method is deprecated, and only used for legacy devices.
 ### Receiving logs via pushLog
 Some devices can't connect to the broker fulltime, so instead of _hp-rs_ downloading logs, the devices "push" the logs
 to _hp-rs_. The process is done by calling the `pushLog` method on the site node. Pushlog sites have a `pushLog: true`
-key in their site `_meta` node.
+key in their site `_meta` node. The details on how to push logs (including the format) are in the `<site_path>:pushLog`
+method description.
 
 ## When does _hp-rs_ sync logs?
 ### Manually through the `syncLog` method
