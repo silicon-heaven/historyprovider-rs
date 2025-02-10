@@ -108,6 +108,8 @@ Devices that don't support directly retrieving files, _hp-rs_ falls back to retr
 method, figures out a filename and saves that to the disk. The filenames are more or less guessed, so they won't
 correspond to the filenames on the device.
 
+Note: this method is deprecated, and only used for legacy devices.
+
 ### Receiving logs via pushLog
 Some devices can't connect to the broker fulltime, so instead of _hp-rs_ downloading logs, the devices "push" the logs
 to _hp-rs_. The process is done by calling the `pushLog` method on the site node. Pushlog sites have a `pushLog: true`
