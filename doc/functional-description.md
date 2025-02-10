@@ -82,6 +82,8 @@ files for the source and subdirectory, start downloading files not older than th
 ```
 The API can be detected by the presence of the `sha1` method. If it exists, it's the newer "List" API. Otherwise, it's
 the map API. For a single source, only detect the method once.
+
+Note: the Map API is only supported because of SHV2, and is deprecated.
 12) The source can return less data than requested, this is not an error, just make another request.
 13) If the source returns MORE data than requested, it is an error, reject the response.
 14) If any of the files are rejected for any reason, skip all queued file downloads from the current source, and try
