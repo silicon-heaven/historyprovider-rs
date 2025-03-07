@@ -1,0 +1,20 @@
+[package]
+name = "historyprovider"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "hp"
+
+[dependencies]
+tokio = { version = "1.44.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.0.16" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.0.20" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.4.2", default-features = false, features = ["tokio"] }
+futures = "0.3.31"
+log = "0.4.26"
+clap = { version = "4.5.31", features = ["derive"] }
+# simple_logger = { version = "5.0.0", features = ["stderr"] }
+simple_logger = { version = "5.0.0" }
+url = "2.5.4"
+duration-str = "0.13.0"
