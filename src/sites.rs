@@ -11,7 +11,7 @@ use crate::State;
 
 pub struct Sites(pub(crate) RwLock<BTreeMap<String, Site>>);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Site {
     pub name: String,
     pub site_type: String,
@@ -24,12 +24,12 @@ fn collect_sites<'a>(
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
         // Using the `type` node to detect sites.
-        return match sites_subtree.get("type") {
-            Some(site_type) => {
+        return match sites_subtree.get("type").map(RpcValue::value) {
+            Some(shvproto::Value::String(site_type)) => {
                 [(
                     path_prefix.join("/"),
                     Site {
-                        name: sites_subtree.get("name").map(RpcValue::to_string).unwrap_or_default(),
+                        name: sites_subtree.get("name").map(RpcValue::as_str).unwrap_or_default().into(),
                         site_type: site_type.to_string(),
                     },
                 )]
@@ -49,6 +49,36 @@ fn collect_sites<'a>(
             )
         )
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::sites::Site;
+
+    #[test]
+    fn collect_sites() {
+        let sites_tree = shvproto::make_map!(
+            "site" => shvproto::make_map!(
+                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1")
+            ),
+        );
+        let sites = super::collect_sites(&[], &sites_tree);
+        println!("{sites_tree:#?}");
+        println!("sites: {}", sites
+            .iter()
+            .map(|(path, site)| format!("{path}: {site:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
+        assert_eq!(
+            sites, [
+            ("site".to_string(), Site { name: "test1".to_string(), site_type: "DepotG3".to_string() })
+        ]
+        .into_iter()
+        .collect::<BTreeMap<_,_>>());
+    }
 }
 
 pub(crate) async fn load_sites(
@@ -81,7 +111,12 @@ pub(crate) async fn load_sites(
                                 }
                             }
                         };
-                    sites_info.iter().for_each(|(path, site)| log::info!("{path}: {site:?}"));
+                    log::info!("Loaded sites:\n{}", sites_info
+                        .iter()
+                        .map(|(path, site)| format!("{path}: {site:?}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                    );
                     *app_state.sites.0.write().await = sites_info;
                 },
                 None => break,
