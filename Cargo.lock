@@ -321,9 +321,9 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
+checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -927,8 +927,8 @@ checksum = "875b3680cb2f8f71bdcf9a30f38d48282f5d3c95cbf9b3fa57269bb5d5c06828"
 
 [[package]]
 name = "libshvproto-macros"
-version = "0.1.3"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#a090250b49b671493a79c0cd1a3cfcd111f0a8be"
+version = "0.1.4"
+source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#0a56957befb55abda361cece54825a5b598d059c"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -1270,8 +1270,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.4.2"
-source = "git+https://github.com/silicon-heaven/libshvclient-rs?branch=main#630ac32db656c847fe347fa80f8a20849c545183"
+version = "0.4.3"
 dependencies = [
  "async-broadcast",
  "duration-str 0.12.0",
@@ -1288,8 +1287,8 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "3.1.0"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#a090250b49b671493a79c0cd1a3cfcd111f0a8be"
+version = "3.3.0"
+source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#0a56957befb55abda361cece54825a5b598d059c"
 dependencies = [
  "bytes",
  "chrono",
@@ -1301,8 +1300,8 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "3.2.0"
-source = "git+https://github.com/silicon-heaven/libshvrpc-rs?branch=master#510d79066c46b118fe30eb0caeba8711f39f3a91"
+version = "3.2.1"
+source = "git+https://github.com/silicon-heaven/libshvrpc-rs?branch=master#cbbe4117695c426df4ce71697663956158d219b6"
 dependencies = [
  "async-trait",
  "crc",

@@ -24,7 +24,7 @@ fn collect_sites<'a>(
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
         // Using the `type` node to detect sites.
-        return match sites_subtree.get("type").map(RpcValue::value) {
+        return match sites_subtree.get("type").map(|v| &v.value) {
             Some(shvproto::Value::String(site_type)) => {
                 [(
                     path_prefix.join("/"),

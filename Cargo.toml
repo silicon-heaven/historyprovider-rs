@@ -10,7 +10,7 @@ name = "hp"
 tokio = { version = "1.44.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.0.16" }
 shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.0.20" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.4.2", default-features = false, features = ["tokio"] }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "export-children-on-path", version = "0.4.3", default-features = false, features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.26"
 clap = { version = "4.5.31", features = ["derive"] }
