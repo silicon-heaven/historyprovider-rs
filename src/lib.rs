@@ -32,13 +32,15 @@ pub struct State {
     sites: sites::Sites,
 }
 
+pub(crate) type ClientCommandSender = shvclient::ClientCommandSender<State>;
+
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
     let app_state = AppState::new(State {
         sites: sites::Sites(Default::default()),
     });
 
-    shvclient::Client::new(DotAppNode::new("historyprovider-rs"))
-        .mount_dynamic("history",
+    shvclient::Client::new()
+        .mount_dynamic("",
             shvclient::MethodsGetter::new(tree::methods_getter),
             shvclient::RequestHandler::stateful(tree::request_handler)
         )

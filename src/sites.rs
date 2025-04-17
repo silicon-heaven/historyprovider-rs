@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use futures::StreamExt;
 use shvclient::client::CallRpcMethodErrorKind;
-use shvclient::AppState;
+use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use tokio::sync::RwLock;
 
-use crate::State;
+use crate::{ClientCommandSender, State};
 
 
 pub struct Sites(pub(crate) RwLock<BTreeMap<String, Site>>);
@@ -82,8 +82,8 @@ mod tests {
 }
 
 pub(crate) async fn load_sites(
-    client_cmd_tx: shvclient::ClientCommandSender,
-    client_evt_rx: shvclient::ClientEventsReceiver,
+    client_cmd_tx: ClientCommandSender,
+    client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,
 )
 {
