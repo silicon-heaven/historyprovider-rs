@@ -6,6 +6,7 @@ use sha1::Digest;
 use shvclient::client::MetaMethods;
 use shvclient::clientnode::{children_on_path, ConstantNode, METH_LS};
 use shvclient::AppState;
+use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
@@ -55,14 +56,20 @@ static DOT_APP_NODE: std::sync::LazyLock<shvclient::appnodes::DotAppNode> = std:
     shvclient::appnodes::DotAppNode::new("historyprovider-rs")
 );
 
-macro_rules! send_response_and_return {
-    ($resp:ident, $client_cmd_tx:ident, $resp_arg:expr) => {
-        {
-            $resp.set_result($resp_arg);
-            $client_cmd_tx.send_message($resp).unwrap();
-            return;
-        }
-    }
+type RpcRequestResult = Result<RpcValue, RpcError>;
+
+fn rpc_error_unknown_method(method: impl AsRef<str>) -> RpcError {
+    RpcError::new(
+        RpcErrorCode::MethodNotFound,
+        format!("Unknown method '{}'", method.as_ref())
+    )
+}
+
+fn rpc_error_filesystem(err: std::io::Error) -> RpcError {
+    RpcError::new(
+        RpcErrorCode::MethodCallException,
+        format!("Filesystem error: {err}")
+    )
 }
 
 async fn get_dir_entries(path: impl AsRef<str>) -> Result<Vec<String>, tokio::io::Error> {
@@ -216,55 +223,38 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     Some(MetaMethods::from(&[]))
 }
 
-async fn shvjournal_request_handler(rq: RpcMessage, client_cmd_tx: ClientCommandSender, app_state: AppState<State>) {
-    let mut resp = rq.prepare_response().unwrap();
+async fn shvjournal_request_handler(
+    rq: RpcMessage,
+    client_cmd_tx: ClientCommandSender,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+
     let method = rq.method().unwrap_or_default();
     let path = rq.shv_path().unwrap_or_default();
     if path == "_shvjournal" {
         match method {
             METH_LS => { /* handled as a directory */ }
-            METH_LOG_SIZE_LIMIT => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            METH_TOTAL_LOG_SIZE => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            METH_LOG_USAGE => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            METH_SYNC_LOG => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            METH_SYNC_INFO => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            METH_SANITIZE_LOG => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            _ => {
-                resp.set_error(RpcError::new(
-                        RpcErrorCode::MethodNotFound,
-                        format!("Unknown method '{}'", rq.method().unwrap_or_default())));
-                client_cmd_tx.send_message(resp).unwrap();
-                return;
-            }
+            METH_LOG_SIZE_LIMIT => return Ok("To be implemented".into()),
+            METH_TOTAL_LOG_SIZE => return Ok("To be implemented".into()),
+            METH_LOG_USAGE => return Ok("To be implemented".into()),
+            METH_SYNC_LOG => return Ok("To be implemented".into()),
+            METH_SYNC_INFO => return Ok("To be implemented".into()),
+            METH_SANITIZE_LOG => return Ok("To be implemented".into()),
+            _ => return Err(rpc_error_unknown_method(method)),
         }
     }
     let shvjournal_base_dir = "."; // TODO: get the base dir from settings
     let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
-    let path_meta = match std::fs::metadata(&path) {
-        Ok(path_meta) => path_meta,
-        Err(err) => {
-            resp.set_error(RpcError::new(
-                    RpcErrorCode::MethodCallException,
-                    format!("FS node error: {err}")));
-            client_cmd_tx.send_message(resp).unwrap();
-            return;
-        }
-    };
+    let path_meta = std::fs::metadata(&path).map_err(rpc_error_filesystem)?;
+
     if path_meta.is_dir() {
         // lsfiles, mkfile, mkdir, rmdir
         match method {
             METH_LS => {
-                match get_dir_entries(path).await {
-                    Ok(res) =>
-                        send_response_and_return!(resp, client_cmd_tx, res),
-                    Err(err) => {
-                        resp.set_error(RpcError::new(
-                                RpcErrorCode::MethodCallException,
-                                format!("FS node error: {err}")));
-                        client_cmd_tx.send_message(resp).unwrap();
-                        return;
-                    }
-                }
+                return get_dir_entries(path)
+                    .await
+                    .map_err(rpc_error_filesystem)
+                    .map(RpcValue::from);
             }
             _ => { }
         }
@@ -284,71 +274,41 @@ async fn shvjournal_request_handler(rq: RpcMessage, client_cmd_tx: ClientCommand
         }
     }
 
-    let read_file_and = async |handler: &(dyn Send + Sync + Fn(Vec<u8>) -> shvproto::RpcValue)| {
-        let mut resp = resp.clone();
-        let client_cmd_tx = client_cmd_tx.clone();
-        // let path = path.as_ref();
-        let path = path.clone();
-        let _l = LogObject::new(format!("read: {path}"));
-        match tokio::fs::read(path).await {
-            Ok(data) => send_response_and_return!(resp, client_cmd_tx, handler(data)),
-            Err(err) => {
-                resp.set_error(RpcError::new(
-                        RpcErrorCode::MethodCallException,
-                        format!("FS node error: {err}")));
-                client_cmd_tx.send_message(resp).unwrap();
-            }
-        }
-    };
-
     if path_meta.is_file() {
         match method {
-            METH_LS => send_response_and_return!(resp, client_cmd_tx, shvproto::List::new()),
+            METH_LS => return Ok(shvproto::List::new().into()),
             METH_HASH => {
                 let _l = LogObject::new(format!("hash: {path}"));
-                let file = match tokio::fs::File::open(&path).await {
-                    Err(err) => {
-                        resp.set_error(RpcError::new(
-                                RpcErrorCode::MethodCallException,
-                                format!("FS node error: {err}")));
-                        client_cmd_tx.send_message(resp).unwrap();
-                        return;
-                    }
-                    Ok(file) => file,
-                };
+                let file = tokio::fs::File::open(&path)
+                    .await
+                    .map_err(rpc_error_filesystem)?;
+
                 const READER_CAPACITY: usize = 1 << 16;
                 let mut file_stream = ReaderStream::with_capacity(file, READER_CAPACITY);
                 let mut hasher = sha1::Sha1::new();
                 while let Some(res) = file_stream.next().await {
-                    match res {
-                        Err(err) => {
-                            resp.set_error(RpcError::new(
-                                    RpcErrorCode::MethodCallException,
-                                    format!("FS node error: {err}")));
-                            client_cmd_tx.send_message(resp).unwrap();
-                            return;
-                        }
-                        Ok(bytes) => hasher.update(&bytes),
-                    }
+                    let bytes = res
+                        .map_err(rpc_error_filesystem)?;
+                    hasher.update(&bytes);
                 }
                 let res = hex::encode(hasher.finalize());
-                send_response_and_return!(resp, client_cmd_tx, res);
+                return Ok(res.into());
             }
-            METH_SIZE => send_response_and_return!(resp, client_cmd_tx, path_meta.size()),
+            METH_SIZE => return Ok(path_meta.size().into()),
             METH_READ => {
-                read_file_and(&|data| data.into()).await;
+                return tokio::fs::read(path)
+                    .await
+                    .map_err(rpc_error_filesystem)
+                    .map(RpcValue::from);
             }
-            METH_READ_COMPRESSED => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            METH_SIZE_COMPRESSED => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
-            _ => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_READ_COMPRESSED => return Ok("To be implemented".into()),
+            METH_SIZE_COMPRESSED => return Ok("To be implemented".into()),
+            _ => return Ok("To be implemented".into()),
 
         }
     }
 
-    resp.set_error(RpcError::new(
-            RpcErrorCode::MethodNotFound,
-            format!("Unknown method '{}'", rq.method().unwrap_or_default())));
-    client_cmd_tx.send_message(resp).unwrap();
+    Err(rpc_error_unknown_method(method))
 }
 
 pub(crate) async fn methods_getter(path: String, app_state: Option<AppState<State>>) -> Option<MetaMethods> {
@@ -427,72 +387,74 @@ pub(crate) async fn methods_getter(path: String, app_state: Option<AppState<Stat
     // TODO: put the processed data to a request cache in the app state: path -> children
 }
 
-pub(crate) async fn request_handler(rq: RpcMessage, client_cmd_tx: ClientCommandSender, app_state: Option<AppState<State>>) {
-    let app_state = app_state.expect("AppState is Some");
+pub(crate) async fn request_handler(
+    rq: RpcMessage,
+    client_cmd_tx: ClientCommandSender,
+    app_state: Option<AppState<State>>,
+) {
     let mut resp = rq.prepare_response().unwrap();
+    resp.set_result_or_error(request_handler_impl(rq, client_cmd_tx.clone(), app_state).await);
+    client_cmd_tx.send_message(resp).unwrap();
+}
 
+async fn request_handler_impl(
+    rq: RpcMessage,
+    client_cmd_tx: ClientCommandSender,
+    app_state: Option<AppState<State>>,
+) -> RpcRequestResult {
+    let app_state = app_state.expect("AppState is Some");
     let path = rq.shv_path().unwrap_or_default();
+    let method = rq.method().unwrap_or_default();
     if path == ".app" {
-        if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-            send_response_and_return!(resp, client_cmd_tx, shvproto::List::new());
+        if method == shvclient::clientnode::METH_LS {
+            return Ok(shvproto::List::new().into());
         }
-        let res = &DOT_APP_NODE.process_request(&rq).unwrap();
-        resp.set_result_or_error(res.clone());
-        client_cmd_tx.send_message(resp).unwrap();
-        return;
+        return DOT_APP_NODE
+            .process_request(&rq)
+            .unwrap_or_else(|| Err(rpc_error_unknown_method(method)));
     }
 
     if path.starts_with("_shvjournal") {
-        shvjournal_request_handler(rq, client_cmd_tx, app_state).await;
-        return;
+        return shvjournal_request_handler(rq, client_cmd_tx, app_state).await;
     }
 
     if path == "_valuecache" {
-        if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-            send_response_and_return!(resp, client_cmd_tx, shvproto::List::new());
+        if method == shvclient::clientnode::METH_LS {
+            return Ok(shvproto::List::new().into());
         }
-        resp.set_error(RpcError::new(
-                RpcErrorCode::MethodNotFound,
-                format!("Unknown method '{}'", rq.method().unwrap_or_default())));
-        client_cmd_tx.send_message(resp).unwrap();
-        return;
+        return Err(rpc_error_unknown_method(method));
     }
 
     if path.is_empty() {
-        match rq.method() {
-            Some(shvclient::clientnode::METH_LS) => {
+        match method {
+            shvclient::clientnode::METH_LS => {
                 let mut nodes = vec![
                     ".app".to_string(),
                     "_shvjournal".to_string(),
                     "_valuecache".to_string()
                 ];
                 nodes.append(&mut children_on_path(&*app_state.sites.0.read().await, path).unwrap_or_default());
-                send_response_and_return!(resp, client_cmd_tx, nodes);
+                return Ok(nodes.into());
             }
-            _ => send_response_and_return!(resp, client_cmd_tx, "Not implemented"),
+            _ => return Ok("Not implemented".into()),
         }
     }
 
     let children = children_on_path(&*app_state.sites.0.read().await, path)
         .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
 
-    if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-        send_response_and_return!(resp, client_cmd_tx, children);
+    if method == shvclient::clientnode::METH_LS {
+        return Ok(children.into());
     }
 
     if children.is_empty() {
         // Handle methods for a site path
-        match rq.method() {
-            Some(self::METH_GET_LOG) => {
-                send_response_and_return!(resp, client_cmd_tx, vec!["getLog: TODO"]);
-            },
+        match method {
+            self::METH_GET_LOG => return Ok(vec!["getLog: TODO"].into()),
             _ => {}
         }
     }
 
-    resp.set_error(RpcError::new(
-            RpcErrorCode::MethodNotFound,
-            format!("Unknown method '{}'", rq.method().unwrap_or_default())));
-    client_cmd_tx.send_message(resp).unwrap();
+    Err(rpc_error_unknown_method(method))
 }
 
