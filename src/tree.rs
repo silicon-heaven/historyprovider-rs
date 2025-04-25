@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 
+use async_compression::tokio::write::GzipEncoder;
 use futures::StreamExt;
 use sha1::Digest;
 use shvclient::client::MetaMethods;
@@ -10,6 +11,7 @@ use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
+use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio_util::io::ReaderStream;
 
 use crate::{ClientCommandSender, State};
@@ -62,8 +64,8 @@ enum NodeType {
     Root,
     DotApp,
     ValueCache,
-    Journal,
-    Site,
+    ShvJournal,
+    History,
 }
 
 impl NodeType {
@@ -72,8 +74,8 @@ impl NodeType {
             "" => Self::Root,
             ".app" => Self::DotApp,
             "_valuecache" => Self::ValueCache,
-            path if path.starts_with("_shvjournal") => Self::Journal,
-            _ => Self::Site,
+            path if path.starts_with("_shvjournal") => Self::ShvJournal,
+            _ => Self::History,
         }
     }
 }
@@ -345,19 +347,64 @@ async fn shvjournal_request_handler(
                 }
                 Ok(hex::encode(hasher.finalize()).into())
             }
-            METH_SIZE => Ok(path_meta.size().into()),
+            METH_SIZE => Ok((path_meta.size() as i64).into()),
             METH_READ => {
                 tokio::fs::read(path)
                     .await
                     .map_err(rpc_error_filesystem)
                     .map(RpcValue::from)
             }
-            METH_READ_COMPRESSED => Ok("To be implemented".into()),
-            METH_SIZE_COMPRESSED => Ok("To be implemented".into()),
+            METH_READ_COMPRESSED =>
+                compress_file(path)
+                    .await
+                    .map_err(rpc_error_filesystem)
+                    .map(RpcValue::from),
+            METH_SIZE_COMPRESSED =>
+                compress_file(path)
+                    .await
+                    .map_err(rpc_error_filesystem)
+                    .and_then(|res| i64::try_from(res.len())
+                        .map(RpcValue::from)
+                        .map_err(|err|
+                            RpcError::new(
+                                RpcErrorCode::MethodCallException,
+                                format!("Cannot get data size: {err}")
+                            )
+                        )
+                    ),
             _ => Err(rpc_error_unknown_method(method)),
         }
     } else {
         Err(rpc_error_unknown_method(method))
+    }
+}
+
+async fn compress_file(path: impl AsRef<str>) -> tokio::io::Result<Vec<u8>> {
+    let file = tokio::fs::File::open(path.as_ref()).await?;
+    let file_size = file.metadata().await?.size();
+    let compressed_file_size_hint = file_size / 4;
+    let mut reader = BufReader::new(file);
+    let mut res = Vec::with_capacity(compressed_file_size_hint as usize);
+    let mut encoder = GzipEncoder::new(&mut res);
+    tokio::io::copy_buf(&mut reader, &mut encoder).await?;
+    encoder.shutdown().await?;
+    Ok(res)
+}
+
+async fn history_request_handler(
+    rq: RpcMessage,
+    _client_cmd_tx: ClientCommandSender,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let method = rq.method().unwrap_or_default();
+    let path = rq.shv_path().unwrap_or_default();
+    let children = children_on_path(&*app_state.sites.0.read().await, path)
+        .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
+
+    match method {
+        METH_LS => Ok(children.into()),
+        METH_GET_LOG if children.is_empty() => Ok(vec!["getLog: TODO"].into()),
+        _ => Err(rpc_error_unknown_method(method)),
     }
 }
 
@@ -368,7 +415,7 @@ pub(crate) async fn methods_getter(
     let app_state = app_state.expect("AppState is Some");
     match NodeType::from_path(&path) {
         NodeType::DotApp => Some(MetaMethods::from(shvclient::appnodes::DOT_APP_METHODS)),
-        NodeType::Journal => shvjournal_methods_getter(path, app_state).await,
+        NodeType::ShvJournal => shvjournal_methods_getter(path, app_state).await,
         NodeType::ValueCache =>
             Some(MetaMethods::from(&[
                     &MetaMethod {
@@ -422,7 +469,7 @@ pub(crate) async fn methods_getter(
                     // uptime
                     // reloadSites (wr) -> Bool
         ])),
-        NodeType::Site => {
+        NodeType::History => {
             let children = children_on_path(&*app_state.sites.0.read().await, path)?;
             if children.is_empty() {
                 // `path` is a site path
@@ -469,25 +516,10 @@ async fn request_handler_impl(
         }
         NodeType::ValueCache =>
             valuecache_request_handler(rq, client_cmd_tx, app_state).await,
-        NodeType::Journal =>
+        NodeType::ShvJournal =>
             shvjournal_request_handler(rq, app_state).await,
-        NodeType::Site => async {
-            let children = children_on_path(&*app_state.sites.0.read().await, path)
-                .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
-
-            if method == shvclient::clientnode::METH_LS {
-                return Ok(children.into());
-            }
-
-            if children.is_empty() {
-                // Handle methods for a site path
-                match method {
-                    self::METH_GET_LOG => return Ok(vec!["getLog: TODO"].into()),
-                    _ => { }
-                }
-            }
-            Err(rpc_error_unknown_method(method))
-        }.await,
+        NodeType::History =>
+            history_request_handler(rq, client_cmd_tx, app_state).await,
     }
 }
 
