@@ -1,12 +1,19 @@
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
+
+use futures::StreamExt;
+use sha1::Digest;
 use shvclient::client::MetaMethods;
-use shvclient::clientnode::{children_on_path, ConstantNode};
+use shvclient::clientnode::{children_on_path, ConstantNode, METH_LS};
 use shvclient::AppState;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
+use tokio_util::io::ReaderStream;
 
 use crate::{ClientCommandSender, State};
 
+// History site node methods
 const METH_GET_LOG: &str = "getLog";
 
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod {
@@ -19,56 +26,397 @@ const META_METHOD_GET_LOG: MetaMethod = MetaMethod {
     description: "",
 };
 
-// root node methods:
-//
-// appName
-// deviceId
-// deviceType
-// version
-// gitCommit
-// shvVersion
-// shvGitCommit
-// uptime
-// reloadSites (wr) -> Bool
-
+// Root node methods
 const METH_UPTIME: &str = "uptime";
 const METH_RELOAD_SITES: &str = "reloadSites";
 
-const META_METHODS_ROOT_NODE: &[&MetaMethod] = &[
-    &MetaMethod {
-        name: METH_UPTIME,
-        flags: 0,
-        access: shvrpc::metamethod::AccessLevel::Read,
-        param: "Null",
-        result: "String",
-        signals: &[],
-        description: "",
-    },
-    &MetaMethod {
-        name: METH_RELOAD_SITES,
-        flags: 0,
-        access: shvrpc::metamethod::AccessLevel::Write,
-        param: "Null",
-        result: "Bool",
-        signals: &[],
-        description: "",
-    },
-];
+// File nodes methods
+const METH_HASH: &str = "hash";
+const METH_SIZE: &str = "size";
+const METH_READ: &str = "read";
+const METH_SIZE_COMPRESSED: &str = "sizeCompressed";
+const METH_READ_COMPRESSED: &str = "readCompressed";
+const METH_WRITE: &str = "write";
+const METH_DELETE: &str = "delete";
+
+// _shvjournal node methods
+const METH_LOG_SIZE_LIMIT: &str = "logSizeLimit";
+const METH_TOTAL_LOG_SIZE: &str = "totalLogSize";
+const METH_LOG_USAGE: &str = "logUsage";
+const METH_SYNC_LOG: &str = "syncLog";
+const METH_SYNC_INFO: &str = "syncInfo";
+const METH_SANITIZE_LOG: &str = "sanitizeLog";
+
+// _valuecache node methods
+const METH_GET: &str = "get";
+const METH_GET_CACHE: &str = "getCache";
 
 static DOT_APP_NODE: std::sync::LazyLock<shvclient::appnodes::DotAppNode> = std::sync::LazyLock::new(||
     shvclient::appnodes::DotAppNode::new("historyprovider-rs")
 );
 
+macro_rules! send_response_and_return {
+    ($resp:ident, $client_cmd_tx:ident, $resp_arg:expr) => {
+        {
+            $resp.set_result($resp_arg);
+            $client_cmd_tx.send_message($resp).unwrap();
+            return;
+        }
+    }
+}
+
+async fn get_dir_entries(path: impl AsRef<str>) -> Result<Vec<String>, tokio::io::Error> {
+    let mut read_dir = tokio::fs::read_dir(path.as_ref()).await?;
+    let mut res = Vec::new();
+    while let Some(entry) = read_dir.next_entry().await? {
+        if let Some(name) = entry.file_name().to_str().map(String::from) {
+            res.push(name);
+        }
+    }
+    Ok(res)
+}
+
+async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<State>) -> Option<MetaMethods> {
+    let path = path.as_ref();
+    if path == "_shvjournal" {
+        return Some(MetaMethods::from(&[
+                &MetaMethod {
+                    name: METH_LOG_SIZE_LIMIT,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Developer,
+                    param: "Null",
+                    result: "Int",
+                    signals: &[],
+                    description: "",
+                },
+                &MetaMethod {
+                    name: METH_TOTAL_LOG_SIZE,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Developer,
+                    param: "Null",
+                    result: "Int",
+                    signals: &[],
+                    description: "Returns: total size occupied by logs.",
+                },
+                &MetaMethod {
+                    name: METH_LOG_USAGE,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Developer,
+                    param: "Null",
+                    result: "Decimal",
+                    signals: &[],
+                    description: "Returns: percentage of space occupied by logs.",
+                },
+                &MetaMethod {
+                    name: METH_SYNC_LOG,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Write,
+                    param: "String|Map",
+                    result: "List",
+                    signals: &[],
+                    description: "syncLog - triggers a manual sync\nAccepts a mandatory string param, only the subtree signified by the string is synced.\nsyncLog also takes a map param in this format: {\n\twaitForFinished: bool // the method waits until the whole operation is finished and only then returns a response\n\tshvPath: string // the subtree to be synced\n}\n\nReturns: a list of all leaf sites that will be synced\n",
+                },
+                &MetaMethod {
+                    name: METH_SYNC_INFO,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "String",
+                    result: "Map",
+                    signals: &[],
+                    description: "syncInfo - returns info about sites' sync status\nOptionally takes a string that filters the sites by prefix.\n\nReturns: a map where they is the path of the site and the value is a map with a status string and a last updated timestamp.\n",
+                },
+                &MetaMethod {
+                    name: METH_SANITIZE_LOG,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Developer,
+                    param: "Null",
+                    result: "String",
+                    signals: &[],
+                    description: "",
+                },
+                ]));
+    }
+    let shvjournal_base_dir = "."; // TODO: get the base dir from settings
+    let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
+    // probe the path on the fs
+    let Ok(path_meta) = std::fs::metadata(path) else {
+        return None;
+    };
+    if path_meta.is_dir() {
+        // lsfiles, mkfile, mkdir, rmdir
+        return Some(MetaMethods::from(&[]));
+    }
+    if path_meta.is_file() {
+        return Some(MetaMethods::from(&[
+                &MetaMethod {
+                    name: METH_HASH,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "Map|Null",
+                    result: "String",
+                    signals: &[],
+                    description: "",
+                },
+                &MetaMethod {
+                    name: METH_SIZE,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Browse,
+                    param: "",
+                    result: "Int",
+                    signals: &[],
+                    description: "",
+                },
+                &MetaMethod {
+                    name: METH_SIZE_COMPRESSED,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Browse,
+                    param: "",
+                    result: "Int",
+                    signals: &[],
+                    description: "",
+                },
+                &MetaMethod {
+                    name: METH_READ,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "Map",
+                    result: "Blob",
+                    signals: &[],
+                    description: "Parameters\n  offset: file offset to start read, default is 0\n  size: number of bytes to read starting on offset, default is till end of file\n",
+                },
+                &MetaMethod {
+                    name: METH_READ_COMPRESSED,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "Map",
+                    result: "Blob",
+                    signals: &[],
+                    description: "Parameters\n  read() parameters\n  compressionType: gzip (default) | qcompress",
+                },
+                // &MetaMethod {
+                //     name: METH_WRITE,
+                //     flags: 0,
+                //     access: shvrpc::metamethod::AccessLevel::Write,
+                //     param: "String | List",
+                //     result: "Bool",
+                //     signals: &[],
+                //     description: "",
+                // },
+                // &MetaMethod {
+                //     name: METH_DELETE,
+                //     flags: 0,
+                //     access: shvrpc::metamethod::AccessLevel::Service,
+                //     param: "",
+                //     result: "Bool",
+                //     signals: &[],
+                //     description: "",
+                // },
+                ]));
+    }
+    Some(MetaMethods::from(&[]))
+}
+
+async fn shvjournal_request_handler(rq: RpcMessage, client_cmd_tx: ClientCommandSender, app_state: AppState<State>) {
+    let mut resp = rq.prepare_response().unwrap();
+    let method = rq.method().unwrap_or_default();
+    let path = rq.shv_path().unwrap_or_default();
+    if path == "_shvjournal" {
+        match method {
+            METH_LS => { /* handled as a directory */ }
+            METH_LOG_SIZE_LIMIT => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_TOTAL_LOG_SIZE => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_LOG_USAGE => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_SYNC_LOG => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_SYNC_INFO => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_SANITIZE_LOG => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            _ => {
+                resp.set_error(RpcError::new(
+                        RpcErrorCode::MethodNotFound,
+                        format!("Unknown method '{}'", rq.method().unwrap_or_default())));
+                client_cmd_tx.send_message(resp).unwrap();
+                return;
+            }
+        }
+    }
+    let shvjournal_base_dir = "."; // TODO: get the base dir from settings
+    let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
+    let path_meta = match std::fs::metadata(&path) {
+        Ok(path_meta) => path_meta,
+        Err(err) => {
+            resp.set_error(RpcError::new(
+                    RpcErrorCode::MethodCallException,
+                    format!("FS node error: {err}")));
+            client_cmd_tx.send_message(resp).unwrap();
+            return;
+        }
+    };
+    if path_meta.is_dir() {
+        // lsfiles, mkfile, mkdir, rmdir
+        match method {
+            METH_LS => {
+                match get_dir_entries(path).await {
+                    Ok(res) =>
+                        send_response_and_return!(resp, client_cmd_tx, res),
+                    Err(err) => {
+                        resp.set_error(RpcError::new(
+                                RpcErrorCode::MethodCallException,
+                                format!("FS node error: {err}")));
+                        client_cmd_tx.send_message(resp).unwrap();
+                        return;
+                    }
+                }
+            }
+            _ => { }
+        }
+    }
+
+    struct LogObject { msg: String }
+    impl LogObject {
+        fn new(msg: impl AsRef<str>) -> Self {
+            let msg = msg.as_ref();
+            log::warn!("create: {msg}");
+            Self { msg: msg.into() }
+        }
+    }
+    impl Drop for LogObject {
+        fn drop(&mut self) {
+            log::warn!("drop: {}", self.msg);
+        }
+    }
+
+    let read_file_and = async |handler: &(dyn Send + Sync + Fn(Vec<u8>) -> shvproto::RpcValue)| {
+        let mut resp = resp.clone();
+        let client_cmd_tx = client_cmd_tx.clone();
+        // let path = path.as_ref();
+        let path = path.clone();
+        let _l = LogObject::new(format!("read: {path}"));
+        match tokio::fs::read(path).await {
+            Ok(data) => send_response_and_return!(resp, client_cmd_tx, handler(data)),
+            Err(err) => {
+                resp.set_error(RpcError::new(
+                        RpcErrorCode::MethodCallException,
+                        format!("FS node error: {err}")));
+                client_cmd_tx.send_message(resp).unwrap();
+            }
+        }
+    };
+
+    if path_meta.is_file() {
+        match method {
+            METH_LS => send_response_and_return!(resp, client_cmd_tx, shvproto::List::new()),
+            METH_HASH => {
+                let _l = LogObject::new(format!("hash: {path}"));
+                let file = match tokio::fs::File::open(&path).await {
+                    Err(err) => {
+                        resp.set_error(RpcError::new(
+                                RpcErrorCode::MethodCallException,
+                                format!("FS node error: {err}")));
+                        client_cmd_tx.send_message(resp).unwrap();
+                        return;
+                    }
+                    Ok(file) => file,
+                };
+                const READER_CAPACITY: usize = 1 << 16;
+                let mut file_stream = ReaderStream::with_capacity(file, READER_CAPACITY);
+                let mut hasher = sha1::Sha1::new();
+                while let Some(res) = file_stream.next().await {
+                    match res {
+                        Err(err) => {
+                            resp.set_error(RpcError::new(
+                                    RpcErrorCode::MethodCallException,
+                                    format!("FS node error: {err}")));
+                            client_cmd_tx.send_message(resp).unwrap();
+                            return;
+                        }
+                        Ok(bytes) => hasher.update(&bytes),
+                    }
+                }
+                let res = hex::encode(hasher.finalize());
+                send_response_and_return!(resp, client_cmd_tx, res);
+            }
+            METH_SIZE => send_response_and_return!(resp, client_cmd_tx, path_meta.size()),
+            METH_READ => {
+                read_file_and(&|data| data.into()).await;
+            }
+            METH_READ_COMPRESSED => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            METH_SIZE_COMPRESSED => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+            _ => send_response_and_return!(resp, client_cmd_tx, "To be implemented"),
+
+        }
+    }
+
+    resp.set_error(RpcError::new(
+            RpcErrorCode::MethodNotFound,
+            format!("Unknown method '{}'", rq.method().unwrap_or_default())));
+    client_cmd_tx.send_message(resp).unwrap();
+}
+
 pub(crate) async fn methods_getter(path: String, app_state: Option<AppState<State>>) -> Option<MetaMethods> {
     let app_state = app_state.expect("AppState is Some");
-    if path.as_str() == ".app" {
+    let path = path.as_str();
+    if path == ".app" {
         return Some(MetaMethods::from(shvclient::appnodes::DOT_APP_METHODS));
     }
-    let children = children_on_path(&*app_state.sites.0.read().await, path.clone())?;
+    if path.starts_with("_shvjournal") {
+        return shvjournal_methods_getter(path, app_state).await;
+    }
+    if path == "_valuecache" {
+        return Some(MetaMethods::from(&[
+                &MetaMethod {
+                    name: METH_GET,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Developer,
+                    param: "String",
+                    result: "RpcValue",
+                    signals: &[],
+                    description: "",
+                },
+                &MetaMethod {
+                    name: METH_GET_CACHE,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Developer,
+                    param: "Null",
+                    result: "Map",
+                    signals: &[],
+                    description: "",
+                },
+        ]));
+    }
     // root node
     if path.is_empty() {
-        return Some(MetaMethods::from(META_METHODS_ROOT_NODE));
+        return Some(MetaMethods::from(&[
+                &MetaMethod {
+                    name: METH_UPTIME,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "Null",
+                    result: "String",
+                    signals: &[],
+                    description: "",
+                },
+                &MetaMethod {
+                    name: METH_RELOAD_SITES,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Write,
+                    param: "Null",
+                    result: "Bool",
+                    signals: &[],
+                    description: "",
+                },
+                // TODO: All root node methods:
+                //
+                // appName
+                // deviceId
+                // deviceType
+                // version
+                // gitCommit
+                // shvVersion
+                // shvGitCommit
+                // uptime
+                // reloadSites (wr) -> Bool
+        ]));
     }
+    let children = children_on_path(&*app_state.sites.0.read().await, path)?;
     if children.is_empty() {
         // `path` is a site path
         Some(MetaMethods::from(&[&META_METHOD_GET_LOG]))
@@ -82,20 +430,11 @@ pub(crate) async fn methods_getter(path: String, app_state: Option<AppState<Stat
 pub(crate) async fn request_handler(rq: RpcMessage, client_cmd_tx: ClientCommandSender, app_state: Option<AppState<State>>) {
     let app_state = app_state.expect("AppState is Some");
     let mut resp = rq.prepare_response().unwrap();
-    macro_rules! send_response_and_return {
-        ($resp_arg:expr) => {
-            {
-                resp.set_result($resp_arg);
-                client_cmd_tx.send_message(resp).unwrap();
-                return;
-            }
-        }
-    }
 
     let path = rq.shv_path().unwrap_or_default();
     if path == ".app" {
         if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-            send_response_and_return!(shvproto::List::new());
+            send_response_and_return!(resp, client_cmd_tx, shvproto::List::new());
         }
         let res = &DOT_APP_NODE.process_request(&rq).unwrap();
         resp.set_result_or_error(res.clone());
@@ -103,22 +442,18 @@ pub(crate) async fn request_handler(rq: RpcMessage, client_cmd_tx: ClientCommand
         return;
     }
 
-    if path == "_shvjournal" {
-        if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-            send_response_and_return!(());
-        }
-        let res = &DOT_APP_NODE.process_request(&rq).unwrap();
-        resp.set_result_or_error(res.clone());
-        client_cmd_tx.send_message(resp).unwrap();
+    if path.starts_with("_shvjournal") {
+        shvjournal_request_handler(rq, client_cmd_tx, app_state).await;
         return;
     }
 
     if path == "_valuecache" {
         if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-            send_response_and_return!(());
+            send_response_and_return!(resp, client_cmd_tx, shvproto::List::new());
         }
-        let res = &DOT_APP_NODE.process_request(&rq).unwrap();
-        resp.set_result_or_error(res.clone());
+        resp.set_error(RpcError::new(
+                RpcErrorCode::MethodNotFound,
+                format!("Unknown method '{}'", rq.method().unwrap_or_default())));
         client_cmd_tx.send_message(resp).unwrap();
         return;
     }
@@ -132,9 +467,9 @@ pub(crate) async fn request_handler(rq: RpcMessage, client_cmd_tx: ClientCommand
                     "_valuecache".to_string()
                 ];
                 nodes.append(&mut children_on_path(&*app_state.sites.0.read().await, path).unwrap_or_default());
-                send_response_and_return!(nodes)
+                send_response_and_return!(resp, client_cmd_tx, nodes);
             }
-            _ => send_response_and_return!("Not implemented"),
+            _ => send_response_and_return!(resp, client_cmd_tx, "Not implemented"),
         }
     }
 
@@ -142,14 +477,14 @@ pub(crate) async fn request_handler(rq: RpcMessage, client_cmd_tx: ClientCommand
         .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
 
     if let Some(shvclient::clientnode::METH_LS) = rq.method() {
-        send_response_and_return!(children);
+        send_response_and_return!(resp, client_cmd_tx, children);
     }
 
     if children.is_empty() {
         // Handle methods for a site path
         match rq.method() {
             Some(self::METH_GET_LOG) => {
-                send_response_and_return!(vec!["getLog: TODO"]);
+                send_response_and_return!(resp, client_cmd_tx, vec!["getLog: TODO"]);
             },
             _ => {}
         }
@@ -157,7 +492,7 @@ pub(crate) async fn request_handler(rq: RpcMessage, client_cmd_tx: ClientCommand
 
     resp.set_error(RpcError::new(
             RpcErrorCode::MethodNotFound,
-            format!("Unknown method '{:?}'", rq.method())));
+            format!("Unknown method '{}'", rq.method().unwrap_or_default())));
     client_cmd_tx.send_message(resp).unwrap();
 }
 

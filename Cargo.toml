@@ -17,7 +17,10 @@ clap = { version = "4.5.31", features = ["derive"] }
 # simple_logger = { version = "5.0.0", features = ["stderr"] }
 simple_logger = { version = "5.0.0" }
 url = "2.5.4"
-duration-str = "0.13.0"
+duration-str = "0.17"
+sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
+hex = "0.4.3"
+tokio-util = { version = "0.7.15", features = ["io"] }
 
 # [patch."https://github.com/silicon-heaven/libshvclient-rs"]
 # shvclient = { path = "../libshvclient-rs" }
