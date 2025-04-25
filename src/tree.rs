@@ -58,6 +58,26 @@ static DOT_APP_NODE: std::sync::LazyLock<shvclient::appnodes::DotAppNode> = std:
 
 type RpcRequestResult = Result<RpcValue, RpcError>;
 
+enum NodeType {
+    Root,
+    DotApp,
+    ValueCache,
+    Journal,
+    Site,
+}
+
+impl NodeType {
+    fn from_path(path: &str) -> Self {
+        match path {
+            "" => Self::Root,
+            ".app" => Self::DotApp,
+            "_valuecache" => Self::ValueCache,
+            path if path.starts_with("_shvjournal") => Self::Journal,
+            _ => Self::Site,
+        }
+    }
+}
+
 fn rpc_error_unknown_method(method: impl AsRef<str>) -> RpcError {
     RpcError::new(
         RpcErrorCode::MethodNotFound,
@@ -223,9 +243,58 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     Some(MetaMethods::from(&[]))
 }
 
+async fn root_request_handler(
+    rq: RpcMessage,
+    _client_cmd_tx: ClientCommandSender,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+
+    let method = rq.method().unwrap_or_default();
+    const ROOT_PATH: &str = "";
+    match method {
+        METH_LS => {
+            let mut nodes = vec![
+                ".app".to_string(),
+                "_shvjournal".to_string(),
+                "_valuecache".to_string()
+            ];
+            nodes.append(&mut children_on_path(&*app_state.sites.0.read().await, ROOT_PATH).unwrap_or_default());
+            Ok(nodes.into())
+        }
+        _ => Ok("Not implemented".into()),
+    }
+}
+
+async fn valuecache_request_handler(
+    rq: RpcMessage,
+    _client_cmd_tx: ClientCommandSender,
+    _app_state: AppState<State>,
+) -> RpcRequestResult {
+    let method = rq.method().unwrap_or_default();
+    match method {
+        METH_LS => Ok(shvproto::List::new().into()),
+        METH_GET => Ok("Not implemented".into()),
+        METH_GET_CACHE => Ok("Not implemented".into()),
+        _ => Err(rpc_error_unknown_method(method)),
+    }
+}
+
+struct LogObject { msg: String }
+impl LogObject {
+    fn new(msg: impl AsRef<str>) -> Self {
+        let msg = msg.as_ref();
+        log::warn!("create: {msg}");
+        Self { msg: msg.into() }
+    }
+}
+impl Drop for LogObject {
+    fn drop(&mut self) {
+        log::warn!("drop: {}", self.msg);
+    }
+}
+
 async fn shvjournal_request_handler(
     rq: RpcMessage,
-    client_cmd_tx: ClientCommandSender,
     app_state: AppState<State>,
 ) -> RpcRequestResult {
 
@@ -243,40 +312,24 @@ async fn shvjournal_request_handler(
             _ => return Err(rpc_error_unknown_method(method)),
         }
     }
-    let shvjournal_base_dir = "."; // TODO: get the base dir from settings
-    let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
+    let journal_base_dir = "."; // TODO: get the base dir from settings
+    let path = path.replacen("_shvjournal", &journal_base_dir, 1);
     let path_meta = std::fs::metadata(&path).map_err(rpc_error_filesystem)?;
 
     if path_meta.is_dir() {
         // lsfiles, mkfile, mkdir, rmdir
         match method {
             METH_LS => {
-                return get_dir_entries(path)
+                get_dir_entries(path)
                     .await
                     .map_err(rpc_error_filesystem)
-                    .map(RpcValue::from);
+                    .map(RpcValue::from)
             }
-            _ => { }
+            _ => Err(rpc_error_unknown_method(method)),
         }
-    }
-
-    struct LogObject { msg: String }
-    impl LogObject {
-        fn new(msg: impl AsRef<str>) -> Self {
-            let msg = msg.as_ref();
-            log::warn!("create: {msg}");
-            Self { msg: msg.into() }
-        }
-    }
-    impl Drop for LogObject {
-        fn drop(&mut self) {
-            log::warn!("drop: {}", self.msg);
-        }
-    }
-
-    if path_meta.is_file() {
+    } else if path_meta.is_file() {
         match method {
-            METH_LS => return Ok(shvproto::List::new().into()),
+            METH_LS => Ok(shvproto::List::new().into()),
             METH_HASH => {
                 let _l = LogObject::new(format!("hash: {path}"));
                 let file = tokio::fs::File::open(&path)
@@ -287,102 +340,98 @@ async fn shvjournal_request_handler(
                 let mut file_stream = ReaderStream::with_capacity(file, READER_CAPACITY);
                 let mut hasher = sha1::Sha1::new();
                 while let Some(res) = file_stream.next().await {
-                    let bytes = res
-                        .map_err(rpc_error_filesystem)?;
+                    let bytes = res.map_err(rpc_error_filesystem)?;
                     hasher.update(&bytes);
                 }
-                let res = hex::encode(hasher.finalize());
-                return Ok(res.into());
+                Ok(hex::encode(hasher.finalize()).into())
             }
-            METH_SIZE => return Ok(path_meta.size().into()),
+            METH_SIZE => Ok(path_meta.size().into()),
             METH_READ => {
-                return tokio::fs::read(path)
+                tokio::fs::read(path)
                     .await
                     .map_err(rpc_error_filesystem)
-                    .map(RpcValue::from);
+                    .map(RpcValue::from)
             }
-            METH_READ_COMPRESSED => return Ok("To be implemented".into()),
-            METH_SIZE_COMPRESSED => return Ok("To be implemented".into()),
-            _ => return Ok("To be implemented".into()),
-
+            METH_READ_COMPRESSED => Ok("To be implemented".into()),
+            METH_SIZE_COMPRESSED => Ok("To be implemented".into()),
+            _ => Err(rpc_error_unknown_method(method)),
         }
+    } else {
+        Err(rpc_error_unknown_method(method))
     }
-
-    Err(rpc_error_unknown_method(method))
 }
 
-pub(crate) async fn methods_getter(path: String, app_state: Option<AppState<State>>) -> Option<MetaMethods> {
+pub(crate) async fn methods_getter(
+    path: String,
+    app_state: Option<AppState<State>>
+) -> Option<MetaMethods> {
     let app_state = app_state.expect("AppState is Some");
-    let path = path.as_str();
-    if path == ".app" {
-        return Some(MetaMethods::from(shvclient::appnodes::DOT_APP_METHODS));
-    }
-    if path.starts_with("_shvjournal") {
-        return shvjournal_methods_getter(path, app_state).await;
-    }
-    if path == "_valuecache" {
-        return Some(MetaMethods::from(&[
-                &MetaMethod {
-                    name: METH_GET,
-                    flags: 0,
-                    access: shvrpc::metamethod::AccessLevel::Developer,
-                    param: "String",
-                    result: "RpcValue",
-                    signals: &[],
-                    description: "",
-                },
-                &MetaMethod {
-                    name: METH_GET_CACHE,
-                    flags: 0,
-                    access: shvrpc::metamethod::AccessLevel::Developer,
-                    param: "Null",
-                    result: "Map",
-                    signals: &[],
-                    description: "",
-                },
-        ]));
-    }
-    // root node
-    if path.is_empty() {
-        return Some(MetaMethods::from(&[
-                &MetaMethod {
-                    name: METH_UPTIME,
-                    flags: 0,
-                    access: shvrpc::metamethod::AccessLevel::Read,
-                    param: "Null",
-                    result: "String",
-                    signals: &[],
-                    description: "",
-                },
-                &MetaMethod {
-                    name: METH_RELOAD_SITES,
-                    flags: 0,
-                    access: shvrpc::metamethod::AccessLevel::Write,
-                    param: "Null",
-                    result: "Bool",
-                    signals: &[],
-                    description: "",
-                },
-                // TODO: All root node methods:
-                //
-                // appName
-                // deviceId
-                // deviceType
-                // version
-                // gitCommit
-                // shvVersion
-                // shvGitCommit
-                // uptime
-                // reloadSites (wr) -> Bool
-        ]));
-    }
-    let children = children_on_path(&*app_state.sites.0.read().await, path)?;
-    if children.is_empty() {
-        // `path` is a site path
-        Some(MetaMethods::from(&[&META_METHOD_GET_LOG]))
-    } else {
-        // `path` is a dir in the middle of the tree
-        Some(MetaMethods::from(&[]))
+    match NodeType::from_path(&path) {
+        NodeType::DotApp => Some(MetaMethods::from(shvclient::appnodes::DOT_APP_METHODS)),
+        NodeType::Journal => shvjournal_methods_getter(path, app_state).await,
+        NodeType::ValueCache =>
+            Some(MetaMethods::from(&[
+                    &MetaMethod {
+                        name: METH_GET,
+                        flags: 0,
+                        access: shvrpc::metamethod::AccessLevel::Developer,
+                        param: "String",
+                        result: "RpcValue",
+                        signals: &[],
+                        description: "",
+                    },
+                    &MetaMethod {
+                        name: METH_GET_CACHE,
+                        flags: 0,
+                        access: shvrpc::metamethod::AccessLevel::Developer,
+                        param: "Null",
+                        result: "Map",
+                        signals: &[],
+                        description: "",
+                    },
+            ])),
+        NodeType::Root =>
+            Some(MetaMethods::from(&[
+                    &MetaMethod {
+                        name: METH_UPTIME,
+                        flags: 0,
+                        access: shvrpc::metamethod::AccessLevel::Read,
+                        param: "Null",
+                        result: "String",
+                        signals: &[],
+                        description: "",
+                    },
+                    &MetaMethod {
+                        name: METH_RELOAD_SITES,
+                        flags: 0,
+                        access: shvrpc::metamethod::AccessLevel::Write,
+                        param: "Null",
+                        result: "Bool",
+                        signals: &[],
+                        description: "",
+                    },
+                    // TODO: All root node methods:
+                    //
+                    // appName
+                    // deviceId
+                    // deviceType
+                    // version
+                    // gitCommit
+                    // shvVersion
+                    // shvGitCommit
+                    // uptime
+                    // reloadSites (wr) -> Bool
+        ])),
+        NodeType::Site => {
+            let children = children_on_path(&*app_state.sites.0.read().await, path)?;
+            if children.is_empty() {
+                // `path` is a site path
+                Some(MetaMethods::from(&[&META_METHOD_GET_LOG]))
+            } else {
+                // `path` is a dir in the middle of the tree
+                Some(MetaMethods::from(&[]))
+            }
+        }
     }
     // TODO: put the processed data to a request cache in the app state: path -> children
 }
@@ -405,56 +454,40 @@ async fn request_handler_impl(
     let app_state = app_state.expect("AppState is Some");
     let path = rq.shv_path().unwrap_or_default();
     let method = rq.method().unwrap_or_default();
-    if path == ".app" {
-        if method == shvclient::clientnode::METH_LS {
-            return Ok(shvproto::List::new().into());
-        }
-        return DOT_APP_NODE
-            .process_request(&rq)
-            .unwrap_or_else(|| Err(rpc_error_unknown_method(method)));
-    }
 
-    if path.starts_with("_shvjournal") {
-        return shvjournal_request_handler(rq, client_cmd_tx, app_state).await;
-    }
-
-    if path == "_valuecache" {
-        if method == shvclient::clientnode::METH_LS {
-            return Ok(shvproto::List::new().into());
-        }
-        return Err(rpc_error_unknown_method(method));
-    }
-
-    if path.is_empty() {
-        match method {
-            shvclient::clientnode::METH_LS => {
-                let mut nodes = vec![
-                    ".app".to_string(),
-                    "_shvjournal".to_string(),
-                    "_valuecache".to_string()
-                ];
-                nodes.append(&mut children_on_path(&*app_state.sites.0.read().await, path).unwrap_or_default());
-                return Ok(nodes.into());
+    match NodeType::from_path(path) {
+        NodeType::Root =>
+            root_request_handler(rq, client_cmd_tx, app_state).await,
+        NodeType::DotApp => {
+            if method == shvclient::clientnode::METH_LS {
+                Ok(shvproto::List::new().into())
+            } else {
+                DOT_APP_NODE
+                    .process_request(&rq)
+                    .unwrap_or_else(|| Err(rpc_error_unknown_method(method)))
             }
-            _ => return Ok("Not implemented".into()),
         }
+        NodeType::ValueCache =>
+            valuecache_request_handler(rq, client_cmd_tx, app_state).await,
+        NodeType::Journal =>
+            shvjournal_request_handler(rq, app_state).await,
+        NodeType::Site => async {
+            let children = children_on_path(&*app_state.sites.0.read().await, path)
+                .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
+
+            if method == shvclient::clientnode::METH_LS {
+                return Ok(children.into());
+            }
+
+            if children.is_empty() {
+                // Handle methods for a site path
+                match method {
+                    self::METH_GET_LOG => return Ok(vec!["getLog: TODO"].into()),
+                    _ => { }
+                }
+            }
+            Err(rpc_error_unknown_method(method))
+        }.await,
     }
-
-    let children = children_on_path(&*app_state.sites.0.read().await, path)
-        .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
-
-    if method == shvclient::clientnode::METH_LS {
-        return Ok(children.into());
-    }
-
-    if children.is_empty() {
-        // Handle methods for a site path
-        match method {
-            self::METH_GET_LOG => return Ok(vec!["getLog: TODO"].into()),
-            _ => {}
-        }
-    }
-
-    Err(rpc_error_unknown_method(method))
 }
 
