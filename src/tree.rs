@@ -11,7 +11,7 @@ use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
-use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio_util::io::ReaderStream;
 
 use crate::{ClientCommandSender, State};
@@ -167,16 +167,14 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     }
     let shvjournal_base_dir = "."; // TODO: get the base dir from settings
     let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
+
     // probe the path on the fs
-    let Ok(path_meta) = std::fs::metadata(path) else {
-        return None;
-    };
+    let path_meta = std::fs::metadata(path).ok()?;
     if path_meta.is_dir() {
-        // lsfiles, mkfile, mkdir, rmdir
-        return Some(MetaMethods::from(&[]));
-    }
-    if path_meta.is_file() {
-        return Some(MetaMethods::from(&[
+        // TODO: lsfiles, mkfile, mkdir, rmdir
+        Some(MetaMethods::from(&[]))
+    } else if path_meta.is_file() {
+        Some(MetaMethods::from(&[
                 &MetaMethod {
                     name: METH_HASH,
                     flags: 0,
@@ -240,9 +238,10 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
                 //     signals: &[],
                 //     description: "",
                 // },
-                ]));
+                ]))
+    } else {
+        Some(MetaMethods::from(&[]))
     }
-    Some(MetaMethods::from(&[]))
 }
 
 async fn root_request_handler(
@@ -281,17 +280,17 @@ async fn valuecache_request_handler(
     }
 }
 
-struct LogObject { msg: String }
-impl LogObject {
+struct ScopedLog { msg: String }
+impl ScopedLog {
     fn new(msg: impl AsRef<str>) -> Self {
         let msg = msg.as_ref();
-        log::warn!("create: {msg}");
+        log::debug!("init: {msg}");
         Self { msg: msg.into() }
     }
 }
-impl Drop for LogObject {
+impl Drop for ScopedLog {
     fn drop(&mut self) {
-        log::warn!("drop: {}", self.msg);
+        log::debug!("drop: {}", self.msg);
     }
 }
 
@@ -333,11 +332,12 @@ async fn shvjournal_request_handler(
         match method {
             METH_LS => Ok(shvproto::List::new().into()),
             METH_HASH => {
-                let _l = LogObject::new(format!("hash: {path}"));
+                let _l = ScopedLog::new(format!("hash: {path}"));
                 let file = tokio::fs::File::open(&path)
                     .await
                     .map_err(rpc_error_filesystem)?;
 
+                // 64 KiB buffer performs better for large files than the 8 KiB default
                 const READER_CAPACITY: usize = 1 << 16;
                 let mut file_stream = ReaderStream::with_capacity(file, READER_CAPACITY);
                 let mut hasher = sha1::Sha1::new();
@@ -349,18 +349,48 @@ async fn shvjournal_request_handler(
             }
             METH_SIZE => Ok((path_meta.size() as i64).into()),
             METH_READ => {
-                tokio::fs::read(path)
+                let read_params: ReadParams = rq
+                    .param()
+                    .unwrap_or_default()
+                    .try_into()
+                    .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
+                let offset = read_params.offset.unwrap_or(0);
+                let size = read_params.size.unwrap_or(0);
+                let res = read_file(path, offset, size)
                     .await
-                    .map_err(rpc_error_filesystem)
-                    .map(RpcValue::from)
+                    .map_err(rpc_error_filesystem)?;
+                let mut result_meta = shvproto::MetaMap::new();
+                result_meta
+                    .insert("offset", (offset as i64).into())
+                    .insert("size", (res.len() as i64).into());
+                Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
-            METH_READ_COMPRESSED =>
-                compress_file(path)
+            METH_READ_COMPRESSED => {
+                let read_params: ReadParams = rq
+                    .param()
+                    .unwrap_or_default()
+                    .try_into()
+                    .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
+                let offset = read_params.offset.unwrap_or(0);
+                let size = read_params.size.unwrap_or(0);
+                let res = compress_file(path, offset, size)
                     .await
-                    .map_err(rpc_error_filesystem)
-                    .map(RpcValue::from),
-            METH_SIZE_COMPRESSED =>
-                compress_file(path)
+                    .map_err(rpc_error_filesystem)?;
+                let mut result_meta = shvproto::MetaMap::new();
+                result_meta
+                    .insert("offset", (offset as i64).into())
+                    .insert("size", (res.len() as i64).into());
+                Ok(RpcValue::new(res.into(), Some(result_meta)))
+            }
+            METH_SIZE_COMPRESSED => {
+                let read_params: ReadParams = rq
+                    .param()
+                    .unwrap_or_default()
+                    .try_into()
+                    .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
+                let offset = read_params.offset.unwrap_or(0);
+                let size = read_params.size.unwrap_or(0);
+                compress_file(path, offset, size)
                     .await
                     .map_err(rpc_error_filesystem)
                     .and_then(|res| i64::try_from(res.len())
@@ -371,7 +401,8 @@ async fn shvjournal_request_handler(
                                 format!("Cannot get data size: {err}")
                             )
                         )
-                    ),
+                    )
+            }
             _ => Err(rpc_error_unknown_method(method)),
         }
     } else {
@@ -379,16 +410,81 @@ async fn shvjournal_request_handler(
     }
 }
 
-async fn compress_file(path: impl AsRef<str>) -> tokio::io::Result<Vec<u8>> {
-    let file = tokio::fs::File::open(path.as_ref()).await?;
+#[derive(Default)]
+struct ReadParams {
+    offset: Option<u64>,
+    size: Option<u64>,
+}
+
+impl TryFrom<&RpcValue> for ReadParams {
+    type Error = String;
+
+    fn try_from(value: &RpcValue) -> Result<Self, Self::Error> {
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+
+        let map: shvproto::rpcvalue::Map = value.try_into()?;
+
+        let parse_param = |param_name: &str| -> Result<Option<u64>, String> {
+            match map.get(param_name) {
+                None => Ok(None),
+                Some(val) => {
+                    i64::try_from(val)
+                        .map_err(|e| e.to_string())
+                        .and_then(|v| u64::try_from(v)
+                            .map_err(|e| e.to_string())
+                        )
+                        .map_err(|e| format!("Error parsing `{param_name}` parameter: {e}"))
+                        .map(Some)
+                }
+            }
+        };
+
+        let offset = parse_param("offset")?;
+        let size = parse_param("size")?;
+
+        Ok(Self { offset, size })
+    }
+}
+
+
+async fn with_file_reader<F, Fut, R>(
+    path: impl AsRef<str>,
+    offset: u64,
+    size: u64,
+    process: F,
+) -> tokio::io::Result<R>
+where
+    F: FnOnce(Box<dyn AsyncBufRead + Unpin + Send>) -> Fut + Send,
+    Fut: Future<Output = tokio::io::Result<R>> + Send,
+{
+    const MAX_READ_SIZE: u64 = 1 << 20;
+    let mut file = tokio::fs::File::open(path.as_ref()).await?;
+    file.seek(std::io::SeekFrom::Start(offset)).await?;
     let file_size = file.metadata().await?.size();
-    let compressed_file_size_hint = file_size / 4;
-    let mut reader = BufReader::new(file);
-    let mut res = Vec::with_capacity(compressed_file_size_hint as usize);
-    let mut encoder = GzipEncoder::new(&mut res);
-    tokio::io::copy_buf(&mut reader, &mut encoder).await?;
-    encoder.shutdown().await?;
-    Ok(res)
+    let size = if size == 0 { file_size } else { size }.min(file_size).min(MAX_READ_SIZE);
+    let reader = BufReader::new(file).take(size);
+    process(Box::new(reader)).await
+}
+
+async fn read_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::Result<Vec<u8>> {
+    with_file_reader(path, offset, size, |mut reader| async move {
+        let mut res = Vec::new();
+        reader.read_to_end(&mut res).await?;
+        Ok(res)
+    }).await
+}
+
+async fn compress_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::Result<Vec<u8>> {
+    let _l = ScopedLog::new(format!("compress: {}", path.as_ref()));
+    with_file_reader(path, offset, size, |mut reader| async move {
+        let mut res = Vec::new();
+        let mut encoder = GzipEncoder::new(&mut res);
+        tokio::io::copy_buf(&mut reader, &mut encoder).await?;
+        encoder.shutdown().await?;
+        Ok(res)
+    }).await
 }
 
 async fn history_request_handler(
