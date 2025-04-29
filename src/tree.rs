@@ -373,13 +373,13 @@ async fn shvjournal_request_handler(
                     .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
                 let offset = read_params.offset.unwrap_or(0);
                 let size = read_params.size.unwrap_or(0);
-                let res = compress_file(path, offset, size)
+                let (res, bytes_read) = compress_file(path, offset, size)
                     .await
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
                 result_meta
                     .insert("offset", (offset as i64).into())
-                    .insert("size", (res.len() as i64).into());
+                    .insert("size", (bytes_read as i64).into());
                 Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
             METH_SIZE_COMPRESSED => {
@@ -390,18 +390,15 @@ async fn shvjournal_request_handler(
                     .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
                 let offset = read_params.offset.unwrap_or(0);
                 let size = read_params.size.unwrap_or(0);
-                compress_file(path, offset, size)
+                let (res_len, bytes_read) = compress_file(path, offset, size)
                     .await
                     .map_err(rpc_error_filesystem)
-                    .and_then(|res| i64::try_from(res.len())
-                        .map(RpcValue::from)
-                        .map_err(|err|
-                            RpcError::new(
-                                RpcErrorCode::MethodCallException,
-                                format!("Cannot get data size: {err}")
-                            )
-                        )
-                    )
+                    .map(|(res, bytes_read)| (res.len(), bytes_read))?;
+                let mut result_meta = shvproto::MetaMap::new();
+                result_meta
+                    .insert("offset", (offset as i64).into())
+                    .insert("size", (bytes_read as i64).into());
+                Ok(RpcValue::new((res_len as i64).into(), Some(result_meta)))
             }
             _ => Err(rpc_error_unknown_method(method)),
         }
@@ -459,7 +456,7 @@ where
     F: FnOnce(Box<dyn AsyncBufRead + Unpin + Send>) -> Fut + Send,
     Fut: Future<Output = tokio::io::Result<R>> + Send,
 {
-    const MAX_READ_SIZE: u64 = 1 << 20;
+    const MAX_READ_SIZE: u64 = 10 * (1 << 20);
     let mut file = tokio::fs::File::open(path.as_ref()).await?;
     file.seek(std::io::SeekFrom::Start(offset)).await?;
     let file_size = file.metadata().await?.size();
@@ -476,14 +473,14 @@ async fn read_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::
     }).await
 }
 
-async fn compress_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::Result<Vec<u8>> {
+async fn compress_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::Result<(Vec<u8>, u64)> {
     let _l = ScopedLog::new(format!("compress: {}", path.as_ref()));
     with_file_reader(path, offset, size, |mut reader| async move {
         let mut res = Vec::new();
         let mut encoder = GzipEncoder::new(&mut res);
-        tokio::io::copy_buf(&mut reader, &mut encoder).await?;
+        let bytes_read = tokio::io::copy_buf(&mut reader, &mut encoder).await?;
         encoder.shutdown().await?;
-        Ok(res)
+        Ok((res, bytes_read))
     }).await
 }
 
