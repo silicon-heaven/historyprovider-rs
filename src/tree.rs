@@ -9,6 +9,7 @@ use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
+use tokio::fs::DirEntry;
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tokio_util::io::ReaderStream;
 
@@ -35,10 +36,11 @@ const METH_RELOAD_SITES: &str = "reloadSites";
 const METH_HASH: &str = "hash";
 const METH_SIZE: &str = "size";
 const METH_READ: &str = "read";
-const METH_SIZE_COMPRESSED: &str = "sizeCompressed";
 const METH_READ_COMPRESSED: &str = "readCompressed";
 // const METH_WRITE: &str = "write";
 // const METH_DELETE: &str = "delete";
+
+const METH_LS_FILES: &str = "lsfiles";
 
 // _shvjournal node methods
 const METH_LOG_SIZE_LIMIT: &str = "logSizeLimit";
@@ -92,12 +94,19 @@ fn rpc_error_filesystem(err: std::io::Error) -> RpcError {
     )
 }
 
-async fn get_dir_entries(path: impl AsRef<str>) -> Result<Vec<String>, tokio::io::Error> {
+async fn get_dir_entries<T, F>(
+    path: impl AsRef<str>,
+    mut transform: F,
+) -> Result<Vec<T>, tokio::io::Error>
+where
+    F: AsyncFnMut(DirEntry) -> Option<T>,
+    T: Send + 'static,
+{
     let mut read_dir = tokio::fs::read_dir(path.as_ref()).await?;
     let mut res = Vec::new();
     while let Some(entry) = read_dir.next_entry().await? {
-        if let Some(name) = entry.file_name().to_str().map(String::from) {
-            res.push(name);
+        if let Some(v) = transform(entry).await {
+            res.push(v);
         }
     }
     Ok(res)
@@ -107,6 +116,15 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     let path = path.as_ref();
     if path == "_shvjournal" {
         return Some(MetaMethods::from(&[
+                &MetaMethod {
+                    name: METH_LS_FILES,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "Map|Null",
+                    result: "List",
+                    signals: &[],
+                    description: "",
+                },
                 &MetaMethod {
                     name: METH_LOG_SIZE_LIMIT,
                     flags: 0,
@@ -168,8 +186,18 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     // probe the path on the fs
     let path_meta = tokio::fs::metadata(path).await.ok()?;
     if path_meta.is_dir() {
-        // TODO: lsfiles, mkfile, mkdir, rmdir
-        Some(MetaMethods::from(&[]))
+        // TODO: mkfile, mkdir, rmdir
+        Some(MetaMethods::from(&[
+                &MetaMethod {
+                    name: METH_LS_FILES,
+                    flags: 0,
+                    access: shvrpc::metamethod::AccessLevel::Read,
+                    param: "Map|Null",
+                    result: "List",
+                    signals: &[],
+                    description: "",
+                },
+        ]))
     } else if path_meta.is_file() {
         Some(MetaMethods::from(&[
                 &MetaMethod {
@@ -183,15 +211,6 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
                 },
                 &MetaMethod {
                     name: METH_SIZE,
-                    flags: 0,
-                    access: shvrpc::metamethod::AccessLevel::Browse,
-                    param: "",
-                    result: "Int",
-                    signals: &[],
-                    description: "",
-                },
-                &MetaMethod {
-                    name: METH_SIZE_COMPRESSED,
                     flags: 0,
                     access: shvrpc::metamethod::AccessLevel::Browse,
                     param: "",
@@ -291,6 +310,18 @@ impl Drop for ScopedLog {
     }
 }
 
+struct LsFilesEntry {
+    name: String,
+    ftype: char,
+    size: i64,
+}
+
+impl From<LsFilesEntry> for RpcValue {
+    fn from(value: LsFilesEntry) -> Self {
+        shvproto::make_list!(value.name, value.ftype.to_string(), value.size).into()
+    }
+}
+
 async fn shvjournal_request_handler(
     rq: RpcMessage,
     app_state: AppState<State>,
@@ -301,7 +332,7 @@ async fn shvjournal_request_handler(
     assert!(path.starts_with("_shvjournal"));
     if path == "_shvjournal" {
         match method {
-            METH_LS => { /* handled as a directory */ }
+            METH_LS | METH_LS_FILES => { /* handled as a directory */ }
             METH_LOG_SIZE_LIMIT => return Ok("To be implemented".into()),
             METH_TOTAL_LOG_SIZE => return Ok("To be implemented".into()),
             METH_LOG_USAGE => return Ok("To be implemented".into()),
@@ -317,11 +348,32 @@ async fn shvjournal_request_handler(
         .map_err(rpc_error_filesystem)?;
 
     if path_meta.is_dir() {
-        // lsfiles, mkfile, mkdir, rmdir
         match method {
             METH_LS => {
-                get_dir_entries(path)
+                get_dir_entries(path,
+                    async |entry| {
+                        entry.file_name().to_str().map(String::from)
+                    })
                     .await
+                    .map(|mut res| { res.sort(); res })
+                    .map_err(rpc_error_filesystem)
+                    .map(RpcValue::from)
+            }
+            METH_LS_FILES => {
+                get_dir_entries(path,
+                    async |entry| {
+                        let meta = entry
+                            .metadata()
+                            .await
+                            .inspect_err(|e| log::error!("Cannot read metadata of file `{}`: {}", entry.path().to_string_lossy(), e))
+                            .ok()?;
+                        let name = entry.file_name().to_str().map(String::from)?;
+                        let ftype = if meta.is_dir() { 'd' } else if meta.is_file() { 'f' } else { return None };
+                        let size = meta.len() as i64;
+                        Some(LsFilesEntry { name, ftype, size })
+                    })
+                    .await
+                    .map(|mut res| { res.sort_by(|a, b| a.name.cmp(&b.name)); res })
                     .map_err(rpc_error_filesystem)
                     .map(RpcValue::from)
             }
