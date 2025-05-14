@@ -1,4 +1,3 @@
-use std::os::unix::fs::MetadataExt;
 
 use async_compression::tokio::write::GzipEncoder;
 use futures::StreamExt;
@@ -347,7 +346,7 @@ async fn shvjournal_request_handler(
                 }
                 Ok(hex::encode(hasher.finalize()).into())
             }
-            METH_SIZE => Ok((path_meta.size() as i64).into()),
+            METH_SIZE => Ok((path_meta.len() as i64).into()),
             METH_READ => {
                 let read_params: ReadParams = rq
                     .param()
@@ -441,7 +440,7 @@ where
     const MAX_READ_SIZE: u64 = 10 * (1 << 20);
     let mut file = tokio::fs::File::open(path.as_ref()).await?;
     file.seek(std::io::SeekFrom::Start(offset)).await?;
-    let file_size = file.metadata().await?.size();
+    let file_size = file.metadata().await?.len();
     let size = if size == 0 { file_size } else { size }.min(file_size).min(MAX_READ_SIZE);
     let reader = BufReader::new(file).take(size);
     process(Box::new(reader)).await
