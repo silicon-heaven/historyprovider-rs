@@ -22,6 +22,8 @@ sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.15", features = ["io"] }
 async-compression = { version = "0.4.23", features = ["gzip", "tokio"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_yaml_ng = "0.10.0"
 
 # [patch."https://github.com/silicon-heaven/libshvclient-rs"]
 # shvclient = { path = "../libshvclient-rs" }

@@ -97,8 +97,9 @@ pub(crate) async fn main() -> shvrpc::Result<()> {
     init_logger(&cli_opts);
     print_banner(format!("{} {} starting", std::module_path!(), PKG_VERSION));
 
-    let hp_config = HpConfig::load(&cli_opts.hp_config)?;
+    let hp_config = cli_opts.hp_config.clone();
     let client_config = load_client_config(cli_opts).expect("Invalid config");
+    let hp_config = HpConfig::load(hp_config)?;
 
     historyprovider::run(&hp_config, &client_config).await
 }

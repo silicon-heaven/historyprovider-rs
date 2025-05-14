@@ -164,8 +164,7 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
                 },
                 ]));
     }
-    let shvjournal_base_dir = "."; // TODO: get the base dir from settings
-    let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
+    let path = path.replacen("_shvjournal", &app_state.config.journal_dir, 1);
 
     // probe the path on the fs
     let path_meta = tokio::fs::metadata(path).await.ok()?;
@@ -300,6 +299,7 @@ async fn shvjournal_request_handler(
 
     let method = rq.method().unwrap_or_default();
     let path = rq.shv_path().unwrap_or_default();
+    assert!(path.starts_with("_shvjournal"));
     if path == "_shvjournal" {
         match method {
             METH_LS => { /* handled as a directory */ }
@@ -312,8 +312,7 @@ async fn shvjournal_request_handler(
             _ => return Err(rpc_error_unknown_method(method)),
         }
     }
-    let journal_base_dir = "."; // TODO: get the base dir from settings
-    let path = path.replacen("_shvjournal", &journal_base_dir, 1);
+    let path = path.replacen("_shvjournal", &app_state.config.journal_dir, 1);
     let path_meta = tokio::fs::metadata(&path)
         .await
         .map_err(rpc_error_filesystem)?;

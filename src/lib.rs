@@ -1,42 +1,45 @@
-use shvclient::appnodes::DotAppNode;
+use log::info;
+use serde::Deserialize;
 use shvclient::AppState;
 use shvrpc::client::ClientConfig;
 
 mod sites;
 mod tree;
 
+fn default_journal_dir() -> String {
+    "/tmp/hp-rs/shvjournal".into()
+}
+
+#[derive(Clone, Deserialize)]
 pub struct HpConfig {
+    #[serde(default = "default_journal_dir")]
+    journal_dir: String,
 }
 
 impl HpConfig {
-    pub fn load(config_file: impl AsRef<str>) -> Result<Self, String> {
-        Ok(HpConfig { })
+    pub fn load(config_file: impl AsRef<std::path::Path>) -> Result<Self, String> {
+        let config = std::fs::read_to_string(config_file)
+            .map_err(|e| format!("Config file read error: {}", e))?;
+        serde_yaml_ng::from_str(&config)
+            .map_err(|e| format!("Config file format error: {}", e))
     }
 }
 
-// pub(crate) trait Client {
-//     fn send_message(message: RpcMessage);
-//     async fn call_rpc_method<T, E>(
-//         &self,
-//         path: &str,
-//         method: &str,
-//         param: Option<RpcValue>,
-//     ) -> Result<T, CallRpcMethodError>
-//     where
-//         T: TryFrom<RpcValue, Error = E>,
-//         E: std::fmt::Display;
-//     async fn subscribe(&self, ri: ShvRI) -> Result<Subscriber, CallRpcMethodError>;
-// }
-
-pub struct State {
+struct State {
     sites: sites::Sites,
+    config: HpConfig,
 }
 
 pub(crate) type ClientCommandSender = shvclient::ClientCommandSender<State>;
 
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
+    info!("Setting up journal dir: {}", &hp_config.journal_dir);
+    std::fs::create_dir_all(&hp_config.journal_dir)?;
+    info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
+
     let app_state = AppState::new(State {
         sites: sites::Sites(Default::default()),
+        config: hp_config.clone(),
     });
 
     shvclient::Client::new()
