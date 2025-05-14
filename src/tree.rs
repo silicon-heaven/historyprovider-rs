@@ -382,24 +382,6 @@ async fn shvjournal_request_handler(
                     .insert("size", (bytes_read as i64).into());
                 Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
-            METH_SIZE_COMPRESSED => {
-                let read_params: ReadParams = rq
-                    .param()
-                    .unwrap_or_default()
-                    .try_into()
-                    .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
-                let offset = read_params.offset.unwrap_or(0);
-                let size = read_params.size.unwrap_or(0);
-                let (res_len, bytes_read) = compress_file(path, offset, size)
-                    .await
-                    .map_err(rpc_error_filesystem)
-                    .map(|(res, bytes_read)| (res.len(), bytes_read))?;
-                let mut result_meta = shvproto::MetaMap::new();
-                result_meta
-                    .insert("offset", (offset as i64).into())
-                    .insert("size", (bytes_read as i64).into());
-                Ok(RpcValue::new((res_len as i64).into(), Some(result_meta)))
-            }
             _ => Err(rpc_error_unknown_method(method)),
         }
     } else {
