@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 
 use async_compression::tokio::write::GzipEncoder;
@@ -11,7 +10,7 @@ use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tokio_util::io::ReaderStream;
 
 use crate::{ClientCommandSender, State};
@@ -39,8 +38,8 @@ const METH_SIZE: &str = "size";
 const METH_READ: &str = "read";
 const METH_SIZE_COMPRESSED: &str = "sizeCompressed";
 const METH_READ_COMPRESSED: &str = "readCompressed";
-const METH_WRITE: &str = "write";
-const METH_DELETE: &str = "delete";
+// const METH_WRITE: &str = "write";
+// const METH_DELETE: &str = "delete";
 
 // _shvjournal node methods
 const METH_LOG_SIZE_LIMIT: &str = "logSizeLimit";
@@ -169,7 +168,7 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     let path = path.replacen("_shvjournal", &shvjournal_base_dir, 1);
 
     // probe the path on the fs
-    let path_meta = std::fs::metadata(path).ok()?;
+    let path_meta = tokio::fs::metadata(path).await.ok()?;
     if path_meta.is_dir() {
         // TODO: lsfiles, mkfile, mkdir, rmdir
         Some(MetaMethods::from(&[]))
@@ -315,7 +314,9 @@ async fn shvjournal_request_handler(
     }
     let journal_base_dir = "."; // TODO: get the base dir from settings
     let path = path.replacen("_shvjournal", &journal_base_dir, 1);
-    let path_meta = std::fs::metadata(&path).map_err(rpc_error_filesystem)?;
+    let path_meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(rpc_error_filesystem)?;
 
     if path_meta.is_dir() {
         // lsfiles, mkfile, mkdir, rmdir
