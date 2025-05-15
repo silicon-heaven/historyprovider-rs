@@ -112,6 +112,10 @@ where
     Ok(res)
 }
 
+fn path_contains_parent_dir_references(path: impl AsRef<str>) -> bool {
+    path.as_ref().split('/').any(|fragment| fragment == "..")
+}
+
 async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<State>) -> Option<MetaMethods> {
     let path = path.as_ref();
     if path == "_shvjournal" {
@@ -180,6 +184,12 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
                     description: "",
                 },
                 ]));
+    }
+
+    assert!(path.starts_with("_shvjournal"));
+    if path_contains_parent_dir_references(path) {
+        // Reject parent dir references
+        return None;
     }
     let path = path.replacen("_shvjournal", &app_state.config.journal_dir, 1);
 
@@ -329,7 +339,6 @@ async fn shvjournal_request_handler(
 
     let method = rq.method().unwrap_or_default();
     let path = rq.shv_path().unwrap_or_default();
-    assert!(path.starts_with("_shvjournal"));
     if path == "_shvjournal" {
         match method {
             METH_LS | METH_LS_FILES => { /* handled as a directory */ }
@@ -342,6 +351,8 @@ async fn shvjournal_request_handler(
             _ => return Err(rpc_error_unknown_method(method)),
         }
     }
+    assert!(path.starts_with("_shvjournal"));
+    assert!(!path_contains_parent_dir_references(path));
     let path = path.replacen("_shvjournal", &app_state.config.journal_dir, 1);
     let path_meta = tokio::fs::metadata(&path)
         .await
