@@ -8,7 +8,6 @@ use tokio::sync::RwLock;
 
 use crate::{ClientCommandSender, State};
 
-
 pub struct Sites(pub(crate) RwLock<BTreeMap<String, Site>>);
 
 #[derive(Debug, PartialEq)]
@@ -44,6 +43,75 @@ fn collect_sites<'a>(
         .iter()
         .flat_map(|(key, val)|
             collect_sites(
+                &path_segments.iter().copied().chain([key.as_str()]).collect::<Vec<_>>(),
+                val.as_map(),
+            )
+        )
+        .collect()
+}
+
+#[derive(Debug)]
+enum HpType {
+    Normal,
+    Legacy,
+    PushLog,
+}
+
+#[derive(Debug)]
+pub(crate) struct SubHp {
+    // SHV path of the log files within the sub HP
+    sync_path: String,
+    hp_type: HpType,
+}
+
+const DEFAULT_SYNC_PATH_DEVICE: &str = ".app/history";
+const DEFAULT_SYNC_PATH_HP: &str = ".local/history/_shvjournal";
+
+fn collect_sub_hps<'a>(
+    path_segments: &[&'a str],
+    sites_subtree: &'a shvproto::Map,
+) -> BTreeMap<String, SubHp>
+{
+    if !path_segments.is_empty() {
+        let sub_hp = sites_subtree
+            .get("_meta")
+            .and_then(|v| {
+                let meta = v.as_map();
+                meta
+                    .get("HP")
+                    .or_else(|| meta.get("HP3"))
+                    .map(|hp| {
+                        let hp = hp.as_map();
+                        let hp_type = if hp.get("pushLog").is_some_and(RpcValue::as_bool) {
+                            HpType::PushLog
+                        } else if meta.contains_key("HP") {
+                            HpType::Legacy
+                        } else {
+                            HpType::Normal
+                        };
+                        let is_device = meta.contains_key("type");
+                        let sync_path = hp
+                            .get("syncPath")
+                            .map(RpcValue::as_str)
+                            .unwrap_or_else(||
+                                if is_device { DEFAULT_SYNC_PATH_DEVICE }
+                                else { DEFAULT_SYNC_PATH_HP }
+                            )
+                            .to_string();
+                        SubHp {
+                            sync_path,
+                            hp_type,
+                                }
+                    })
+            });
+        if let Some(v) = sub_hp {
+            return BTreeMap::from([(path_segments.join("/"), v)]);
+        }
+    }
+    sites_subtree
+        .iter()
+        .flat_map(|(key, val)|
+            collect_sub_hps(
                 &path_segments.iter().copied().chain([key.as_str()]).collect::<Vec<_>>(),
                 val.as_map(),
             )
@@ -95,10 +163,12 @@ pub(crate) async fn load_sites(
                 Some(client_event) => if matches!(client_event, shvclient::ClientEvent::Connected(_)) {
                     log::info!("Getting sites info");
 
-                    let sites_info = match client_cmd_tx
+                    let sites = client_cmd_tx
                         .call_rpc_method("sites", "getSites", None)
-                        .await
-                        .map(|sites: shvproto::Map| collect_sites(&[], &sites)) {
+                        .await;
+
+                    let (sites_info, sub_hps) = match sites
+                        .map(|sites: shvproto::Map| (collect_sites(&[], &sites), collect_sub_hps(&[], &sites))) {
                             Ok(sites_info) => sites_info,
                             Err(err) => match err.error() {
                                 CallRpcMethodErrorKind::ConnectionClosed => {
@@ -111,7 +181,15 @@ pub(crate) async fn load_sites(
                                 }
                             }
                         };
+
                     log::info!("Loaded sites:\n{}", sites_info
+                        .iter()
+                        .map(|(path, site)| format!("{path}: {site:?}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                    );
+
+                    log::info!("Loaded sub HPs:\n{}", sub_hps
                         .iter()
                         .map(|(path, site)| format!("{path}: {site:?}"))
                         .collect::<Vec<_>>()
