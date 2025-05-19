@@ -1,10 +1,13 @@
+use futures::channel::mpsc::{unbounded, UnboundedSender};
 use log::info;
 use serde::Deserialize;
 use shvclient::AppState;
 use shvrpc::client::ClientConfig;
+use tokio::sync::RwLock;
 
 mod sites;
 mod tree;
+mod sync;
 
 fn default_journal_dir() -> String {
     "/tmp/hp-rs/shvjournal".into()
@@ -26,9 +29,9 @@ impl HpConfig {
 }
 
 struct State {
-    sites: sites::Sites,
-    sub_hps: sites::SubHps,
+    sites_data: RwLock<sites::SitesData>,
     config: HpConfig,
+    sync_cmd_tx: UnboundedSender<sync::SyncCommand>,
 }
 
 pub(crate) type ClientCommandSender = shvclient::ClientCommandSender<State>;
@@ -38,10 +41,12 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     std::fs::create_dir_all(&hp_config.journal_dir)?;
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
 
+    let (sync_cmd_tx, sync_cmd_rx) = unbounded();
+
     let app_state = AppState::new(State {
-        sites: sites::Sites(Default::default()),
-        sub_hps: sites::SubHps(Default::default()),
+        sites_data: RwLock::default(),
         config: hp_config.clone(),
+        sync_cmd_tx,
     });
 
     shvclient::Client::new()
@@ -51,7 +56,8 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         )
         .with_app_state(app_state.clone())
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
-            tokio::spawn(sites::load_sites(client_cmd_tx, client_evt_rx, app_state));
+            tokio::spawn(sites::load_sites(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
+            tokio::spawn(sync::sync_task(client_cmd_tx, client_evt_rx, app_state, sync_cmd_rx));
         })
         .await
 }

@@ -1,15 +1,21 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use futures::StreamExt;
 use shvclient::client::CallRpcMethodErrorKind;
 use shvclient::clientnode::find_longest_path_prefix;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
-use tokio::sync::RwLock;
 
 use crate::{ClientCommandSender, State};
 
-pub(crate) struct Sites(pub(crate) RwLock<BTreeMap<String, SiteInfo>>);
+
+#[derive(Clone,Default)]
+pub(crate) struct SitesData {
+    pub(crate) sites_info: Arc<BTreeMap<String, SiteInfo>>,
+    pub(crate) sub_hps: Arc<BTreeMap<String, SubHpInfo>>,
+}
+
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct SiteInfo {
@@ -18,15 +24,26 @@ pub(crate) struct SiteInfo {
     pub(crate) sub_hp: String,
 }
 
-fn collect_sites<'a>(
-    path_segments: &[&'a str],
-    sites_subtree: &'a shvproto::Map,
+pub(crate) fn is_device(site_meta: &shvproto::Map) -> bool {
+    site_meta
+        .get("type")
+        .is_some_and(|v| match &v.value {
+            shvproto::Value::String(site_type) if site_type.as_str() != "ShvAgent" => true,
+            _ => false,
+        })
+}
+
+fn collect_sites(
+    path_segments: &[&str],
+    sites_subtree: &shvproto::Map,
 ) -> BTreeMap<String, SiteInfo>
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
         // Using the `type` node to detect sites.
         return sites_subtree
-            .get("type")
+            .get("HP")
+            .or_else(|| sites_subtree.get("HP3"))
+            .and_then(|_| sites_subtree.get("type"))
             .and_then(|v| match &v.value {
                 shvproto::Value::String(site_type) => Some(site_type),
                 _ => None,
@@ -61,8 +78,6 @@ fn collect_sites<'a>(
         .collect()
 }
 
-pub(crate) struct SubHps(pub(crate) RwLock<BTreeMap<String, SubHpInfo>>);
-
 #[derive(Debug)]
 pub(crate) enum SubHpInfo {
     Normal {
@@ -86,9 +101,9 @@ const DOWNLOAD_CHUNK_SIZE_MAX: i64 = 64 << 10;
 const LEGACY_SYNC_PATH_DEVICE: &str = "";
 const LEGACY_SYNC_PATH_HP: &str = ".local/history";
 
-fn collect_sub_hps<'a>(
-    path_segments: &[&'a str],
-    sites_subtree: &'a shvproto::Map,
+fn collect_sub_hps(
+    path_segments: &[&str],
+    sites_subtree: &shvproto::Map,
 ) -> BTreeMap<String, SubHpInfo>
 {
     if !path_segments.is_empty() {
@@ -206,7 +221,7 @@ pub(crate) async fn load_sites(
                                     site_info.sub_hp = path.clone();
                                 }
                             }
-                            (sites_info, sub_hps)
+                            (Arc::new(sites_info), Arc::new(sub_hps))
                         }) {
                             Ok(res) => res,
                             Err(err) => match err.error() {
@@ -234,8 +249,9 @@ pub(crate) async fn load_sites(
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
-                    *app_state.sub_hps.0.write().await = sub_hps;
-                    *app_state.sites.0.write().await = sites_info;
+                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
+                    app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncLogs)
+                        .unwrap_or_else(|e| panic!("Cannot send SyncCommand: {e}"));
                 },
                 None => break,
             }
