@@ -27,6 +27,7 @@ impl HpConfig {
 
 struct State {
     sites: sites::Sites,
+    sub_hps: sites::SubHps,
     config: HpConfig,
 }
 
@@ -39,6 +40,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
 
     let app_state = AppState::new(State {
         sites: sites::Sites(Default::default()),
+        sub_hps: sites::SubHps(Default::default()),
         config: hp_config.clone(),
     });
 

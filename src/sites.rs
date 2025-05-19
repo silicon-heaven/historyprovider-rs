@@ -2,24 +2,26 @@ use std::collections::BTreeMap;
 
 use futures::StreamExt;
 use shvclient::client::CallRpcMethodErrorKind;
+use shvclient::clientnode::find_longest_path_prefix;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use tokio::sync::RwLock;
 
 use crate::{ClientCommandSender, State};
 
-pub struct Sites(pub(crate) RwLock<BTreeMap<String, Site>>);
+pub(crate) struct Sites(pub(crate) RwLock<BTreeMap<String, SiteInfo>>);
 
 #[derive(Debug, PartialEq)]
-pub struct Site {
-    pub name: String,
-    pub site_type: String,
+pub(crate) struct SiteInfo {
+    pub(crate) name: String,
+    pub(crate) site_type: String,
+    pub(crate) sub_hp: String,
 }
 
 fn collect_sites<'a>(
     path_segments: &[&'a str],
     sites_subtree: &'a shvproto::Map,
-) -> BTreeMap<String, Site>
+) -> BTreeMap<String, SiteInfo>
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
         // Using the `type` node to detect sites.
@@ -35,13 +37,14 @@ fn collect_sites<'a>(
                 |site_type|
                     BTreeMap::from([(
                         path_prefix.join("/"),
-                        Site {
+                        SiteInfo {
                             name: sites_subtree
                                 .get("name")
                                 .map(RpcValue::as_str)
                                 .unwrap_or_default()
                                 .into(),
                             site_type: site_type.to_string(),
+                            sub_hp: Default::default(),
                         },
                     )])
             );
@@ -58,28 +61,35 @@ fn collect_sites<'a>(
         .collect()
 }
 
+pub(crate) struct SubHps(pub(crate) RwLock<BTreeMap<String, SubHpInfo>>);
+
 #[derive(Debug)]
-pub(crate) enum SubHp {
+pub(crate) enum SubHpInfo {
     Normal {
         // SHV path of the log files relative to the sub HP node
         sync_path: String,
+        download_chunk_size: i64,
     },
     Legacy {
         // SHV path of the legacy HP relative to the sub HP node
-        hp_path: String,
+        getlog_path: String,
     },
     PushLog,
 }
 
 const DEFAULT_SYNC_PATH_DEVICE: &str = ".app/history";
 const DEFAULT_SYNC_PATH_HP: &str = ".local/history/_shvjournal";
+const DOWNLOAD_CHUNK_SIZE_MAX: i64 = 64 << 10;
+
+// FIXME: We only synchronize by getLog from devices, never from
+// intermediate legacy HP because of flaws in getLog design.
 const LEGACY_SYNC_PATH_DEVICE: &str = "";
 const LEGACY_SYNC_PATH_HP: &str = ".local/history";
 
 fn collect_sub_hps<'a>(
     path_segments: &[&'a str],
     sites_subtree: &'a shvproto::Map,
-) -> BTreeMap<String, SubHp>
+) -> BTreeMap<String, SubHpInfo>
 {
     if !path_segments.is_empty() {
         let sub_hp = sites_subtree
@@ -93,14 +103,14 @@ fn collect_sub_hps<'a>(
                         let is_device = meta.contains_key("type");
                         let hp = hp.as_map();
                         if hp.get("pushLog").is_some_and(RpcValue::as_bool) {
-                            SubHp::PushLog
+                            SubHpInfo::PushLog
                         } else if meta.contains_key("HP") {
-                            SubHp::Legacy {
-                                hp_path: if is_device { LEGACY_SYNC_PATH_DEVICE }
+                            SubHpInfo::Legacy {
+                                getlog_path: if is_device { LEGACY_SYNC_PATH_DEVICE }
                                          else { LEGACY_SYNC_PATH_HP }.to_string(),
                             }
                         } else {
-                            SubHp::Normal {
+                            SubHpInfo::Normal {
                                 sync_path: hp
                                     .get("syncPath")
                                     .map(RpcValue::as_str)
@@ -108,7 +118,11 @@ fn collect_sub_hps<'a>(
                                         if is_device { DEFAULT_SYNC_PATH_DEVICE }
                                         else { DEFAULT_SYNC_PATH_HP }
                                     )
-                                    .to_string()
+                                    .to_string(),
+                                download_chunk_size: hp
+                                    .get("readLogChunkLimit")
+                                    .map(|v| v.as_int().min(DOWNLOAD_CHUNK_SIZE_MAX))
+                                    .unwrap_or(DOWNLOAD_CHUNK_SIZE_MAX),
                             }
                         }
                     })
@@ -132,7 +146,7 @@ fn collect_sub_hps<'a>(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::sites::Site;
+    use crate::sites::SiteInfo;
 
     #[test]
     fn collect_sites() {
@@ -151,7 +165,11 @@ mod tests {
         );
         assert_eq!(
             sites, [
-            ("site".to_string(), Site { name: "test1".to_string(), site_type: "DepotG3".to_string() })
+            ("site".to_string(), SiteInfo {
+                name: "test1".to_string(),
+                site_type: "DepotG3".to_string(),
+                sub_hp: Default::default(),
+            })
         ]
         .into_iter()
         .collect::<BTreeMap<_,_>>());
@@ -177,8 +195,20 @@ pub(crate) async fn load_sites(
                         .await;
 
                     let (sites_info, sub_hps) = match sites
-                        .map(|sites: shvproto::Map| (collect_sites(&[], &sites), collect_sub_hps(&[], &sites))) {
-                            Ok(sites_info) => sites_info,
+                        .map(|sites: shvproto::Map| {
+                            let sub_hps = collect_sub_hps(&[], &sites);
+                            let mut sites_info = collect_sites(&[], &sites);
+                            for (path, site_info) in &mut sites_info {
+                                if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
+                                    site_info.sub_hp = prefix.into();
+                                } else {
+                                    log::error!("Cannot find sub HP for site {path}");
+                                    site_info.sub_hp = path.clone();
+                                }
+                            }
+                            (sites_info, sub_hps)
+                        }) {
+                            Ok(res) => res,
                             Err(err) => match err.error() {
                                 CallRpcMethodErrorKind::ConnectionClosed => {
                                     log::warn!("Connection closed while getting sites info");
@@ -200,10 +230,11 @@ pub(crate) async fn load_sites(
 
                     log::info!("Loaded sub HPs:\n{}", sub_hps
                         .iter()
-                        .map(|(path, site)| format!(" {path}: {site:?}"))
+                        .map(|(path, hp)| format!(" {path}: {hp:?}"))
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
+                    *app_state.sub_hps.0.write().await = sub_hps;
                     *app_state.sites.0.write().await = sites_info;
                 },
                 None => break,
