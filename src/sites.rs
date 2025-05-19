@@ -23,27 +23,35 @@ fn collect_sites<'a>(
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
         // Using the `type` node to detect sites.
-        return match sites_subtree.get("type").map(|v| &v.value) {
-            Some(shvproto::Value::String(site_type)) => {
-                [(
-                    path_prefix.join("/"),
-                    Site {
-                        name: sites_subtree.get("name").map(RpcValue::as_str).unwrap_or_default().into(),
-                        site_type: site_type.to_string(),
-                    },
-                )]
-                    .into_iter()
-                    .collect()
-            },
-            _ => Default::default()
-        }
+        return sites_subtree
+            .get("type")
+            .and_then(|v| match &v.value {
+                shvproto::Value::String(site_type) => Some(site_type),
+                _ => None,
+            }
+            )
+            .map_or_else(
+                BTreeMap::new,
+                |site_type|
+                    BTreeMap::from([(
+                        path_prefix.join("/"),
+                        Site {
+                            name: sites_subtree
+                                .get("name")
+                                .map(RpcValue::as_str)
+                                .unwrap_or_default()
+                                .into(),
+                            site_type: site_type.to_string(),
+                        },
+                    )])
+            );
     }
 
     sites_subtree
         .iter()
         .flat_map(|(key, val)|
             collect_sites(
-                &path_segments.iter().copied().chain([key.as_str()]).collect::<Vec<_>>(),
+                &path_segments.iter().copied().chain(std::iter::once(key.as_str())).collect::<Vec<_>>(),
                 val.as_map(),
             )
         )
@@ -51,21 +59,22 @@ fn collect_sites<'a>(
 }
 
 #[derive(Debug)]
-enum HpType {
-    Normal,
-    Legacy,
+pub(crate) enum SubHp {
+    Normal {
+        // SHV path of the log files relative to the sub HP node
+        sync_path: String,
+    },
+    Legacy {
+        // SHV path of the legacy HP relative to the sub HP node
+        hp_path: String,
+    },
     PushLog,
-}
-
-#[derive(Debug)]
-pub(crate) struct SubHp {
-    // SHV path of the log files within the sub HP
-    sync_path: String,
-    hp_type: HpType,
 }
 
 const DEFAULT_SYNC_PATH_DEVICE: &str = ".app/history";
 const DEFAULT_SYNC_PATH_HP: &str = ".local/history/_shvjournal";
+const LEGACY_SYNC_PATH_DEVICE: &str = "";
+const LEGACY_SYNC_PATH_HP: &str = ".local/history";
 
 fn collect_sub_hps<'a>(
     path_segments: &[&'a str],
@@ -81,27 +90,27 @@ fn collect_sub_hps<'a>(
                     .get("HP")
                     .or_else(|| meta.get("HP3"))
                     .map(|hp| {
-                        let hp = hp.as_map();
-                        let hp_type = if hp.get("pushLog").is_some_and(RpcValue::as_bool) {
-                            HpType::PushLog
-                        } else if meta.contains_key("HP") {
-                            HpType::Legacy
-                        } else {
-                            HpType::Normal
-                        };
                         let is_device = meta.contains_key("type");
-                        let sync_path = hp
-                            .get("syncPath")
-                            .map(RpcValue::as_str)
-                            .unwrap_or_else(||
-                                if is_device { DEFAULT_SYNC_PATH_DEVICE }
-                                else { DEFAULT_SYNC_PATH_HP }
-                            )
-                            .to_string();
-                        SubHp {
-                            sync_path,
-                            hp_type,
-                                }
+                        let hp = hp.as_map();
+                        if hp.get("pushLog").is_some_and(RpcValue::as_bool) {
+                            SubHp::PushLog
+                        } else if meta.contains_key("HP") {
+                            SubHp::Legacy {
+                                hp_path: if is_device { LEGACY_SYNC_PATH_DEVICE }
+                                         else { LEGACY_SYNC_PATH_HP }.to_string(),
+                            }
+                        } else {
+                            SubHp::Normal {
+                                sync_path: hp
+                                    .get("syncPath")
+                                    .map(RpcValue::as_str)
+                                    .unwrap_or_else(||
+                                        if is_device { DEFAULT_SYNC_PATH_DEVICE }
+                                        else { DEFAULT_SYNC_PATH_HP }
+                                    )
+                                    .to_string()
+                            }
+                        }
                     })
             });
         if let Some(v) = sub_hp {
@@ -112,7 +121,7 @@ fn collect_sub_hps<'a>(
         .iter()
         .flat_map(|(key, val)|
             collect_sub_hps(
-                &path_segments.iter().copied().chain([key.as_str()]).collect::<Vec<_>>(),
+                &path_segments.iter().copied().chain(std::iter::once(key.as_str())).collect::<Vec<_>>(),
                 val.as_map(),
             )
         )
@@ -184,14 +193,14 @@ pub(crate) async fn load_sites(
 
                     log::info!("Loaded sites:\n{}", sites_info
                         .iter()
-                        .map(|(path, site)| format!("{path}: {site:?}"))
+                        .map(|(path, site)| format!(" {path}: {site:?}"))
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
 
                     log::info!("Loaded sub HPs:\n{}", sub_hps
                         .iter()
-                        .map(|(path, site)| format!("{path}: {site:?}"))
+                        .map(|(path, site)| format!(" {path}: {site:?}"))
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
