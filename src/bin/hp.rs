@@ -1,5 +1,3 @@
-
-
 use clap::Parser;
 use historyprovider::HpConfig;
 use log::*;

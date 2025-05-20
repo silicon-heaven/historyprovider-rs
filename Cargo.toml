@@ -24,6 +24,7 @@ tokio-util = { version = "0.7.15", features = ["io"] }
 async-compression = { version = "0.4.23", features = ["gzip", "tokio"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
+tokio-stream = { version = "0.1.17", features = ["fs"] }
 
 # [patch."https://github.com/silicon-heaven/libshvclient-rs"]
 # shvclient = { path = "../libshvclient-rs" }

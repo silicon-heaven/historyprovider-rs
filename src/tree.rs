@@ -1,6 +1,5 @@
-
 use async_compression::tokio::write::GzipEncoder;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use sha1::Digest;
 use shvclient::client::MetaMethods;
 use shvclient::clientnode::{children_on_path, ConstantNode, METH_LS};
@@ -9,8 +8,8 @@ use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
-use tokio::fs::DirEntry;
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
+use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 
 use crate::{ClientCommandSender, State};
@@ -92,24 +91,6 @@ fn rpc_error_filesystem(err: std::io::Error) -> RpcError {
         RpcErrorCode::MethodCallException,
         format!("Filesystem error: {err}")
     )
-}
-
-async fn get_dir_entries<T, F>(
-    path: impl AsRef<str>,
-    mut transform: F,
-) -> Result<Vec<T>, tokio::io::Error>
-where
-    F: AsyncFnMut(DirEntry) -> Option<T>,
-    T: Send + 'static,
-{
-    let mut read_dir = tokio::fs::read_dir(path.as_ref()).await?;
-    let mut res = Vec::new();
-    while let Some(entry) = read_dir.next_entry().await? {
-        if let Some(v) = transform(entry).await {
-            res.push(v);
-        }
-    }
-    Ok(res)
 }
 
 fn path_contains_parent_dir_references(path: impl AsRef<str>) -> bool {
@@ -358,35 +339,55 @@ async fn shvjournal_request_handler(
         .await
         .map_err(rpc_error_filesystem)?;
 
+    let get_dir_entries = async |path| {
+        Ok(ReadDirStream::new(
+                tokio::fs::read_dir(path)
+                .await
+                .map_err(rpc_error_filesystem)?)
+        )
+    };
+
     if path_meta.is_dir() {
         match method {
             METH_LS => {
-                get_dir_entries(path,
-                    async |entry| {
-                        entry.file_name().to_str().map(String::from)
-                    })
+                get_dir_entries(path)
+                    .await?
+                    .try_filter_map(
+                        async |entry| {
+                            Ok(entry.file_name().to_str().map(String::from))
+                        }
+                    )
+                    .try_collect::<Vec<_>>()
                     .await
-                    .map(|mut res| { res.sort(); res })
                     .map_err(rpc_error_filesystem)
-                    .map(RpcValue::from)
+                    .map(|mut res| { res.sort(); res.into()})
             }
             METH_LS_FILES => {
-                get_dir_entries(path,
-                    async |entry| {
-                        let meta = entry
-                            .metadata()
-                            .await
-                            .inspect_err(|e| log::error!("Cannot read metadata of file `{}`: {}", entry.path().to_string_lossy(), e))
-                            .ok()?;
-                        let name = entry.file_name().to_str().map(String::from)?;
-                        let ftype = if meta.is_dir() { 'd' } else if meta.is_file() { 'f' } else { return None };
-                        let size = meta.len() as i64;
-                        Some(LsFilesEntry { name, ftype, size })
-                    })
+                get_dir_entries(path)
+                    .await?
+                    .try_filter_map(
+                        async |entry| {
+                            let res = async {
+                                let meta = entry
+                                    .metadata()
+                                    .await
+                                    .inspect_err(|e| log::error!("Cannot read metadata of file `{}`: {}", entry.path().to_string_lossy(), e))
+                                    .ok()?;
+                                let name = entry.file_name().to_str().map(String::from)?;
+                                let ftype = if meta.is_dir() { 'd' } else if meta.is_file() { 'f' } else { return None };
+                                let size = meta.len() as i64;
+                                Some(LsFilesEntry { name, ftype, size })
+                            }.await;
+                            Ok(res)
+                        }
+                    )
+                    .try_collect::<Vec<_>>()
                     .await
-                    .map(|mut res| { res.sort_by(|a, b| a.name.cmp(&b.name)); res })
                     .map_err(rpc_error_filesystem)
-                    .map(RpcValue::from)
+                    .map(|mut res| {
+                        res.sort_by(|a, b| a.name.cmp(&b.name));
+                        res.into()
+                    })
             }
             _ => Err(rpc_error_unknown_method(method)),
         }
