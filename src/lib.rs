@@ -48,7 +48,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
             shvclient::RequestHandler::stateful(tree::request_handler)
         )
         .with_app_state(app_state.clone())
-        .run_with_init(&client_config, |client_cmd_tx, client_evt_rx| {
+        .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
             tokio::spawn(sites::load_sites(client_cmd_tx, client_evt_rx, app_state));
         })
         .await
