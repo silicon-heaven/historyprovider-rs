@@ -247,7 +247,7 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
                 // },
                 ]))
     } else {
-        Some(MetaMethods::from(&[]))
+        None
     }
 }
 
