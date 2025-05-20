@@ -418,8 +418,7 @@ async fn shvjournal_request_handler(
                     .try_into()
                     .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
                 let offset = read_params.offset.unwrap_or(0);
-                let size = read_params.size.unwrap_or(0);
-                let res = read_file(path, offset, size)
+                let res = read_file(path, offset, read_params.size)
                     .await
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
@@ -435,8 +434,7 @@ async fn shvjournal_request_handler(
                     .try_into()
                     .map_err(|msg| RpcError::new(RpcErrorCode::InvalidParam, msg))?;
                 let offset = read_params.offset.unwrap_or(0);
-                let size = read_params.size.unwrap_or(0);
-                let (res, bytes_read) = compress_file(path, offset, size)
+                let (res, bytes_read) = compress_file(path, offset, read_params.size)
                     .await
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
@@ -494,23 +492,23 @@ impl TryFrom<&RpcValue> for ReadParams {
 async fn with_file_reader<F, Fut, R>(
     path: impl AsRef<str>,
     offset: u64,
-    size: u64,
+    size: Option<u64>,
     process: F,
 ) -> tokio::io::Result<R>
 where
     F: FnOnce(Box<dyn AsyncBufRead + Unpin + Send>) -> Fut + Send,
     Fut: Future<Output = tokio::io::Result<R>> + Send,
 {
-    const MAX_READ_SIZE: u64 = 10 * (1 << 20);
+    const MAX_READ_SIZE: u64 = 1 << 20;
     let mut file = tokio::fs::File::open(path.as_ref()).await?;
     file.seek(std::io::SeekFrom::Start(offset)).await?;
     let file_size = file.metadata().await?.len();
-    let size = if size == 0 { file_size } else { size }.min(file_size).min(MAX_READ_SIZE);
+    let size = size.unwrap_or(file_size).min(file_size).min(MAX_READ_SIZE);
     let reader = BufReader::new(file).take(size);
     process(Box::new(reader)).await
 }
 
-async fn read_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::Result<Vec<u8>> {
+async fn read_file(path: impl AsRef<str>, offset: u64, size: Option<u64>) -> tokio::io::Result<Vec<u8>> {
     with_file_reader(path, offset, size, |mut reader| async move {
         let mut res = Vec::new();
         reader.read_to_end(&mut res).await?;
@@ -518,7 +516,7 @@ async fn read_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::
     }).await
 }
 
-async fn compress_file(path: impl AsRef<str>, offset: u64, size: u64) -> tokio::io::Result<(Vec<u8>, u64)> {
+async fn compress_file(path: impl AsRef<str>, offset: u64, size: Option<u64>) -> tokio::io::Result<(Vec<u8>, u64)> {
     let _l = ScopedLog::new(format!("compress: {}", path.as_ref()));
     with_file_reader(path, offset, size, |mut reader| async move {
         let mut res = Vec::new();
