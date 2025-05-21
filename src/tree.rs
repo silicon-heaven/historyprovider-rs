@@ -34,7 +34,7 @@ const METH_RELOAD_SITES: &str = "reloadSites";
 // File nodes methods
 const METH_HASH: &str = "hash";
 const METH_SIZE: &str = "size";
-const METH_READ: &str = "read";
+pub(crate) const METH_READ: &str = "read";
 const METH_READ_COMPRESSED: &str = "readCompressed";
 // const METH_WRITE: &str = "write";
 // const METH_DELETE: &str = "delete";
