@@ -1,0 +1,30 @@
+[package]
+name = "historyprovider"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "hp"
+
+[dependencies]
+tokio = { version = "1.44.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.3" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.3" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.7", features = ["tokio"] }
+futures = "0.3.31"
+log = "0.4.26"
+clap = { version = "4.5.31", features = ["derive"] }
+# simple_logger = { version = "5.0.0", features = ["stderr"] }
+simple_logger = { version = "5.0.0" }
+url = "2.5.4"
+duration-str = "0.17"
+sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
+hex = "0.4.3"
+tokio-util = { version = "0.7.15", features = ["io"] }
+async-compression = { version = "0.4.23", features = ["gzip", "tokio"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_yaml_ng = "0.10.0"
+tokio-stream = { version = "0.1.17", features = ["fs"] }
+
+# [patch."https://github.com/silicon-heaven/libshvclient-rs"]
+# shvclient = { path = "../libshvclient-rs" }
