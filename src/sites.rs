@@ -24,15 +24,6 @@ pub(crate) struct SiteInfo {
     pub(crate) sub_hp: String,
 }
 
-pub(crate) fn is_device(site_meta: &shvproto::Map) -> bool {
-    site_meta
-        .get("type")
-        .is_some_and(|v| match &v.value {
-            shvproto::Value::String(site_type) if site_type.as_str() != "ShvAgent" => true,
-            _ => false,
-        })
-}
-
 fn collect_sites(
     path_segments: &[&str],
     sites_subtree: &shvproto::Map,
