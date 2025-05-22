@@ -1327,8 +1327,8 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "3.5.0"
-source = "git+https://github.com/silicon-heaven/libshvrpc-rs?branch=master#5add0ed1925dd9f8f1691d8aee094fbc2e5e1d38"
+version = "3.6.0"
+source = "git+https://github.com/silicon-heaven/libshvrpc-rs?branch=master#3cfc9c436db83cd6d4e61c6d356b6a35877f9452"
 dependencies = [
  "async-trait",
  "crc",

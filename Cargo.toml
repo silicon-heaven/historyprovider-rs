@@ -9,7 +9,7 @@ name = "hp"
 [dependencies]
 tokio = { version = "1.44.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.3" }
-shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.3" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.6" }
 shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.7", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.26"
@@ -28,3 +28,10 @@ tokio-stream = { version = "0.1.17", features = ["fs"] }
 
 # [patch."https://github.com/silicon-heaven/libshvclient-rs"]
 # shvclient = { path = "../libshvclient-rs" }
+#
+# [patch."https://github.com/silicon-heaven/libshvproto-rs"]
+# shvproto = { path = "../libshvproto-rs" }
+#
+# [patch."https://github.com/silicon-heaven/libshvrpc-rs"]
+# shvrpc = { path = "../libshvrpc-rs" }
+#

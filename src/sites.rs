@@ -85,7 +85,7 @@ pub(crate) enum SubHpInfo {
 
 const DEFAULT_SYNC_PATH_DEVICE: &str = ".app/history";
 const DEFAULT_SYNC_PATH_HP: &str = ".local/history/_shvjournal";
-const DOWNLOAD_CHUNK_SIZE_MAX: i64 = 64 << 10;
+const DOWNLOAD_CHUNK_SIZE_MAX: i64 = 256 << 10;
 
 // FIXME: We only synchronize by getLog from devices, never from
 // intermediate legacy HP because of flaws in getLog design.
