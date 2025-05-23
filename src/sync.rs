@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::StreamExt;
+use shvclient::clientnode::METH_DIR;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::join_path;
@@ -117,6 +118,10 @@ async fn sync_site(
         .collect::<Vec<_>>()
         .await;
 
+    // Prepare sync directory
+    // TODO
+
+    // Sync from the remote to the sync directory
     for (file_name, sync_offset, file_size) in files_to_sync {
         sync_file(
             client_cmd_tx.clone(),
@@ -129,6 +134,10 @@ async fn sync_site(
         .await
         .map_err(to_string)?;
     }
+
+    // Move synced files from the sync directory to the journal directory
+    // and trim the provisional log
+    // TODO
 
     Ok(())
 }
@@ -161,17 +170,27 @@ async fn sync_file(
         .await
         .map_err(to_string)?;
 
+    enum ReadApi { List, Map }
+    let read_api = client_cmd_tx
+        .call_rpc_method(file_path_remote, METH_DIR, Some("sha1".into()))
+        .await
+        .map(|v: RpcValue| if v.is_imap() { ReadApi::List } else { ReadApi::Map })
+        .map_err(|e| format!("Cannot get read param API for {file_path_remote}: {e}"))?;
+
     let mut sync_offset = sync_offset;
     let mut remaining_bytes = file_size - sync_offset;
     while sync_offset < file_size {
         let sync_size = remaining_bytes.max(0).min(download_chunk_size);
 
-        log::info!("  downloading chunk, offset: {}, size: {}", sync_offset, sync_size);
+        // log::info!("  downloading chunk, offset: {}, size: {}", sync_offset, sync_size);
 
-        let param = shvproto::make_map!(
-            "offset" => sync_offset,
-            "size" => sync_size,
-        ).into();
+        let param = match read_api {
+            ReadApi::List => shvproto::make_list!(sync_offset, sync_size).into(),
+            ReadApi::Map => shvproto::make_map!(
+                "offset" => sync_offset,
+                "size" => sync_size,
+            ).into(),
+        };
 
         let chunk: shvproto::Blob = client_cmd_tx
             .call_rpc_method(file_path_remote, METH_READ, Some(param))
