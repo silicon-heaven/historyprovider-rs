@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::StreamExt;
@@ -7,6 +8,7 @@ use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::join_path;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Semaphore;
 
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
@@ -205,7 +207,8 @@ async fn sync_file(
         sync_offset += chunk_len;
         remaining_bytes -= chunk_len;
 
-        log::info!("   - fetched: {}, remaining: {} ({:.2}%),",
+        log::info!(" {}  - fetched: {}, remaining: {} ({:.2}%),",
+            file_path_remote,
             chunk_len,
             remaining_bytes,
             (sync_offset as f64 / file_size as f64) * 100.0,
@@ -215,6 +218,7 @@ async fn sync_file(
     Ok(())
 }
 
+const MAX_SYNC_TASKS_DEFAULT: usize = 8;
 
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
@@ -228,21 +232,37 @@ pub(crate) async fn sync_task(
         match cmd {
             SyncCommand::SyncLogs => {
                 log::info!("Sync logs start");
+                let max_sync_tasks = app_state.config.max_sync_tasks.unwrap_or(MAX_SYNC_TASKS_DEFAULT);
+                let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
+                let mut sync_tasks = vec![];
                 let sync_start = tokio::time::Instant::now();
                 let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
                 for (site_path, site_info) in sites_info.iter() {
                     let sub_hp = sub_hps
                         .get(&site_info.sub_hp)
                         .unwrap_or_else(|| panic!("Sub HP for site {site_path} should be set"));
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
                     match sub_hp {
                         SubHpInfo::Normal { sync_path, download_chunk_size } => {
                             let site_suffix = shvrpc::util::strip_prefix_path(site_path, &site_info.sub_hp)
                                 .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
                             let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
                             log::info!("Syncing {site_path}, chunk size: {download_chunk_size}");
-                            sync_site(site_path, remote_journal_path, *download_chunk_size, client_cmd_tx.clone(), app_state.clone())
-                                .await
-                                .unwrap_or_else(|err| log::error!("Error syncing site {site_path}: {err}"));
+                            let client_cmd_tx = client_cmd_tx.clone();
+                            let site_path = site_path.clone();
+                            let download_chunk_size = *download_chunk_size;
+                            let app_state = app_state.clone();
+                            let sync_task = tokio::spawn(async move {
+                                sync_site(&site_path, remote_journal_path, download_chunk_size, client_cmd_tx, app_state)
+                                    .await
+                                    .unwrap_or_else(|err| log::error!("Error syncing site {site_path}: {err}"));
+                                drop(permit);
+                            });
+                                sync_tasks.push(sync_task);
                         }
                         SubHpInfo::Legacy { getlog_path } => {
                             log::info!("Syncing {site_path} via getLog from {getlog_path}");
@@ -253,6 +273,7 @@ pub(crate) async fn sync_task(
                         }
                     }
                 }
+                futures::future::join_all(sync_tasks).await;
                 log::info!("Sync logs done in {} s", sync_start.elapsed().as_secs());
             }
         }

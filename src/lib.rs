@@ -17,6 +17,7 @@ fn default_journal_dir() -> String {
 pub struct HpConfig {
     #[serde(default = "default_journal_dir")]
     journal_dir: String,
+    max_sync_tasks: Option<usize>,
 }
 
 impl HpConfig {
