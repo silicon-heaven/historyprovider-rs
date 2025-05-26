@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::StreamExt;
+use shvclient::client::RpcCall;
 use shvclient::clientnode::METH_DIR;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
@@ -83,8 +84,8 @@ async fn sync_site(
 ) -> Result<(), String>
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
-    let file_list: Vec<LsFilesEntry> = client_cmd_tx
-        .call_rpc_method(remote_journal_path, "lsfiles", None)
+    let file_list: Vec<LsFilesEntry> = RpcCall::new(remote_journal_path, "lsfiles")
+        .exec(&client_cmd_tx)
         .await
         .map_err(to_string)?;
     log::info!("  files: [{}]", file_list.iter().map(LsFilesEntry::to_string).collect::<Vec<_>>().join(","));
@@ -173,8 +174,9 @@ async fn sync_file(
         .map_err(to_string)?;
 
     enum ReadApi { List, Map }
-    let read_api = client_cmd_tx
-        .call_rpc_method(file_path_remote, METH_DIR, Some("sha1".into()))
+    let read_api = RpcCall::new(file_path_remote, METH_DIR)
+        .param("sha1")
+        .exec(&client_cmd_tx)
         .await
         .map(|v: RpcValue| if v.is_imap() { ReadApi::List } else { ReadApi::Map })
         .map_err(|e| format!("Cannot get read param API for {file_path_remote}: {e}"))?;
@@ -186,7 +188,7 @@ async fn sync_file(
 
         // log::info!("  downloading chunk, offset: {}, size: {}", sync_offset, sync_size);
 
-        let param = match read_api {
+        let param: RpcValue = match read_api {
             ReadApi::List => shvproto::make_list!(sync_offset, sync_size).into(),
             ReadApi::Map => shvproto::make_map!(
                 "offset" => sync_offset,
@@ -194,8 +196,9 @@ async fn sync_file(
             ).into(),
         };
 
-        let chunk: shvproto::Blob = client_cmd_tx
-            .call_rpc_method(file_path_remote, METH_READ, Some(param))
+        let chunk: shvproto::Blob = RpcCall::new(file_path_remote, METH_READ)
+            .param(param)
+            .exec(&client_cmd_tx)
             .await
             .map_err(to_string)?;
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use shvclient::client::CallRpcMethodErrorKind;
+use shvclient::client::{CallRpcMethodErrorKind, RpcCall};
 use shvclient::clientnode::find_longest_path_prefix;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
@@ -196,8 +196,8 @@ pub(crate) async fn load_sites(
                 Some(client_event) => if matches!(client_event, shvclient::ClientEvent::Connected(_)) {
                     log::info!("Getting sites info");
 
-                    let sites = client_cmd_tx
-                        .call_rpc_method("sites", "getSites", None)
+                    let sites = RpcCall::new("sites", "getSites")
+                        .exec(&client_cmd_tx)
                         .await;
 
                     let (sites_info, sub_hps) = match sites
