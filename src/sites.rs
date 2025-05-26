@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use shvclient::client::{CallRpcMethodErrorKind, RpcCall};
+use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind, RpcCall};
 use shvclient::clientnode::find_longest_path_prefix;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;

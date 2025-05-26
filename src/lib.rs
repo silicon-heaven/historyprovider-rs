@@ -31,6 +31,7 @@ impl HpConfig {
 
 struct State {
     sites_data: RwLock<sites::SitesData>,
+    sync_info: sync::SyncInfo,
     config: HpConfig,
     sync_cmd_tx: UnboundedSender<sync::SyncCommand>,
 }
@@ -46,6 +47,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
 
     let app_state = AppState::new(State {
         sites_data: RwLock::default(),
+        sync_info: Default::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
     });

@@ -347,7 +347,7 @@ async fn shvjournal_request_handler(
             METH_TOTAL_LOG_SIZE => return Ok("To be implemented".into()),
             METH_LOG_USAGE => return Ok("To be implemented".into()),
             METH_SYNC_LOG => return Ok("To be implemented".into()),
-            METH_SYNC_INFO => return Ok("To be implemented".into()),
+            METH_SYNC_INFO => return Ok((&*app_state.sync_info.sites_sync_info.read().await).to_owned().into()),
             METH_SANITIZE_LOG => return Ok("To be implemented".into()),
             _ => return Err(rpc_error_unknown_method(method)),
         }
