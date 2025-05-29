@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedReceiver;
@@ -30,7 +30,7 @@ impl SyncInfo {
 
     pub(crate) async fn append(&self, site: impl AsRef<str>, msg: impl Into<String>) {
         if let Some(sync_info) = self.sites_sync_info.write().await.get_mut(site.as_ref()) {
-            sync_info.push(format!("{} {}", time::OffsetDateTime::now_utc().format(&Iso8601::DATE_TIME_OFFSET).unwrap_or_else(|e| e.to_string()), msg.into()));
+            sync_info.push(msg.into());
         }
     }
 }
@@ -95,16 +95,8 @@ fn to_string(v: impl ToString) -> String {
     v.to_string()
 }
 
-macro_rules! log_sync {
-    ($app_state:expr, $site:expr, $msg:expr) => {
-        log::info!("{}: {}", $site, $msg);
-        $app_state.sync_info.append($site, $msg).await;
-    };
-}
-
 trait SyncLogger: Clone {
-    async fn reset(&self);
-    async fn log(&self, msg: impl AsRef<str>);
+    async fn log(&self, level: log::Level, msg: impl AsRef<str>);
 }
 
 #[derive(Clone)]
@@ -113,13 +105,32 @@ struct SyncSiteLogger {
     app_state: AppState<State>,
 }
 
-impl SyncLogger for SyncSiteLogger {
-    async fn reset(&self) {
-        self.app_state.sync_info.reset(&self.site).await;
+impl SyncSiteLogger {
+    async fn new(site: impl Into<String>, app_state: AppState<State>) -> Self {
+        let site = site.into();
+        app_state.sync_info.reset(site.clone()).await;
+        Self {
+            site,
+            app_state,
+        }
     }
+}
 
-    async fn log(&self, msg: impl AsRef<str>) {
-        log_sync!(self.app_state, &self.site, msg.as_ref());
+impl SyncLogger for SyncSiteLogger {
+    async fn log(&self, level: log::Level, msg: impl AsRef<str>) {
+        let msg = format!("{} {}",
+            time::OffsetDateTime::now_utc().format(&Iso8601::DATE_TIME_OFFSET).unwrap_or_else(|e| e.to_string()),
+            msg.as_ref()
+        );
+        let log_msg = format!("{}: {}", &self.site, &msg);
+        match level {
+            log::Level::Error => log::error!("{log_msg}"),
+            log::Level::Warn => log::warn!("{log_msg}"),
+            log::Level::Info => log::info!("{log_msg}"),
+            log::Level::Debug => log::debug!("{log_msg}"),
+            log::Level::Trace => log::trace!("{log_msg}"),
+        }
+        self.app_state.sync_info.append(&self.site, &msg).await;
     }
 }
 
@@ -134,12 +145,13 @@ async fn sync_site(
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
     // app_state.sync_info.reset(site_path).await;
-    sync_logger.reset().await;
 
     let local_journal_path = join_path!(&app_state.config.journal_dir, site_path);
     // log_sync!(app_state, site_path, format!("Start syncing from {} to {}, download chunk size: {}", remote_journal_path, local_journal_path, download_chunk_size));
-    sync_logger.log(format!("start syncing from {} to {}, download chunk size: {}", remote_journal_path, local_journal_path, download_chunk_size)).await;
-    tokio::fs::create_dir_all(&local_journal_path).await.map_err(to_string)?;
+    sync_logger.log(log::Level::Info, format!("start syncing from {} to {}, download chunk size: {}", remote_journal_path, local_journal_path, download_chunk_size)).await;
+    tokio::fs::create_dir_all(&local_journal_path)
+        .await
+        .map_err(|e| format!("Cannot create journal directory at {local_journal_path}: {e}"))?;
 
     let file_list: Vec<LsFilesEntry> = RpcCall::new(remote_journal_path, "lsfiles")
         .exec(&client_cmd_tx)
@@ -158,6 +170,7 @@ async fn sync_site(
                     let sync_offset = match local_size.cmp(&remote_file.size) {
                         Ordering::Less => {
                             sync_logger.log(
+                                log::Level::Info,
                                 format!("{}: will sync (remote size: {}, local size: {})",
                                 &remote_file.name,
                                 remote_file.size,
@@ -167,6 +180,7 @@ async fn sync_site(
                         }
                         Ordering::Greater => {
                             sync_logger.log(
+                                log::Level::Info,
                                 format!("{}: will be replaced (remote size: {}, local size: {})",
                                 &remote_file.name,
                                 remote_file.size,
@@ -175,18 +189,30 @@ async fn sync_site(
                             0
                         }
                         Ordering::Equal => {
-                            sync_logger.log(format!("{}: up-to-date", &remote_file.name)).await;
+                            sync_logger.log(log::Level::Info, format!("{}: up-to-date", &remote_file.name)).await;
                             return None;
                         }
                     };
                     Some((remote_file.name.clone(), sync_offset, remote_file.size))
                 }
                 Ok(_not_a_file) => None,
-                Err(_err) => {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     sync_logger.log(
+                        log::Level::Info,
                         format!("{}: will sync (remote size: {}, local size: <not found>)",
                         &remote_file.name,
                         remote_file.size,
+                        )
+                    ).await;
+                    Some((remote_file.name.clone(), 0, remote_file.size))
+                }
+                Err(err) => {
+                    sync_logger.log(
+                        log::Level::Info,
+                        format!("{}: will try to sync (remote size: {}, local size: <I/O error: {}>)",
+                        &remote_file.name,
+                        remote_file.size,
+                        err,
                         )
                     ).await;
                     Some((remote_file.name.clone(), 0, remote_file.size))
@@ -234,8 +260,8 @@ async fn sync_file(
     let file_path_remote = file_path_remote.as_ref();
     let file_path_local = file_path_local.as_ref();
 
-    sync_logger.log(format!(
-            "{}: starting to sync, start offset: {}, file size: {}",
+    sync_logger.log(log::Level::Info,
+        format!("{}: starting to sync, start offset: {}, file size: {}",
             file_path_remote,
             sync_offset,
             file_size,
@@ -247,7 +273,7 @@ async fn sync_file(
         .write(true)
         .open(file_path_local)
         .await
-        .map_err(to_string)?;
+        .map_err(|e| format!("Cannot open {file_path_local}: {e}"))?;
 
     enum ReadApi { List, Map }
     let read_api = RpcCall::new(file_path_remote, METH_DIR)
@@ -280,21 +306,21 @@ async fn sync_file(
 
         local_file.write_all(&chunk)
           .await
-          .map_err(to_string)?;
+          .map_err(|e| format!("Cannot write to {file_path_local}: {e}"))?;
 
         let chunk_len = chunk.len() as i64;
         sync_offset += chunk_len;
         remaining_bytes -= chunk_len;
 
-        sync_logger.log(format!(
-                "{}: got chunk of size: {}, remaining: {} ({:.2})",
+        sync_logger.log(log::Level::Info,
+            format!("{}: got chunk of size: {}, remaining: {} ({:.2})",
                 file_path_remote,
                 chunk_len,
                 remaining_bytes,
                 (sync_offset as f64 / file_size as f64) * 100.0,
         )).await;
     }
-    sync_logger.log(format!("{}: successfully synced", file_path_remote)).await;
+    sync_logger.log(log::Level::Info, format!("{}: successfully synced", file_path_remote)).await;
     Ok(())
 }
 
@@ -336,10 +362,7 @@ pub(crate) async fn sync_task(
                             let download_chunk_size = *download_chunk_size;
                             let app_state = app_state.clone();
                             let sync_task = tokio::spawn(async move {
-                                let sync_logger = SyncSiteLogger {
-                                    site: site_path.clone(),
-                                    app_state: app_state.clone()
-                                };
+                                let sync_logger = SyncSiteLogger::new(&site_path, app_state.clone()).await;
                                 let sync_result = sync_site(
                                     &site_path,
                                     remote_journal_path,
@@ -349,8 +372,9 @@ pub(crate) async fn sync_task(
                                     sync_logger.clone()
                                 ).await;
                                 if let Err(err) = sync_result {
-                                    sync_logger.log(format!("site sync error: {err}")).await;
+                                    sync_logger.log(log::Level::Error, format!("site sync error: {err}")).await;
                                 }
+                                sync_logger.log(log::Level::Info, format!("syncing done")).await;
                                 drop(permit);
                             });
                                 sync_tasks.push(sync_task);
