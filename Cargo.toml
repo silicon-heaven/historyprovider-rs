@@ -9,8 +9,8 @@ name = "hp"
 [dependencies]
 tokio = { version = "1.44.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.3" }
-shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.6" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.8", features = ["tokio"] }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.7" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.9", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.26"
 clap = { version = "4.5.31", features = ["derive"] }
