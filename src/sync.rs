@@ -19,7 +19,7 @@ use crate::{ClientCommandSender, State};
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
-    pub(crate) last_synced_at: RwLock<Option<tokio::time::Instant>>,
+    pub(crate) last_sync_timestamp: RwLock<Option<tokio::time::Instant>>,
     pub(crate) sites_sync_info: RwLock<BTreeMap<String, Vec<String>>>,
 }
 
@@ -338,6 +338,7 @@ pub(crate) async fn sync_task(
         match cmd {
             SyncCommand::SyncLogs => {
                 log::info!("Sync logs start");
+                app_state.sync_info.last_sync_timestamp.write().await.replace(tokio::time::Instant::now());
                 let max_sync_tasks = app_state.config.max_sync_tasks.unwrap_or(MAX_SYNC_TASKS_DEFAULT);
                 let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
                 let mut sync_tasks = vec![];
@@ -374,7 +375,7 @@ pub(crate) async fn sync_task(
                                 if let Err(err) = sync_result {
                                     sync_logger.log(log::Level::Error, format!("site sync error: {err}")).await;
                                 }
-                                sync_logger.log(log::Level::Info, format!("syncing done")).await;
+                                sync_logger.log(log::Level::Info, "syncing done").await;
                                 drop(permit);
                             });
                                 sync_tasks.push(sync_task);
