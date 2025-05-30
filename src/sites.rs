@@ -158,7 +158,7 @@ mod tests {
     fn collect_sites() {
         let sites_tree = shvproto::make_map!(
             "site" => shvproto::make_map!(
-                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1")
+                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1", "HP3" => "{}")
             ),
         );
         let sites = super::collect_sites(&[], &sites_tree);
