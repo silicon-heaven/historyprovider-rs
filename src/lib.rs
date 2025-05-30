@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 mod sites;
 mod tree;
 mod sync;
+mod shvjournal;
 
 fn default_journal_dir() -> String {
     "/tmp/hp-rs/shvjournal".into()
