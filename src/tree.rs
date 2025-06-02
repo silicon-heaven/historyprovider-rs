@@ -34,7 +34,7 @@ const METH_RELOAD_SITES: &str = "reloadSites";
 // File nodes methods
 const METH_HASH: &str = "hash";
 const METH_SIZE: &str = "size";
-const METH_READ: &str = "read";
+pub(crate) const METH_READ: &str = "read";
 const METH_READ_COMPRESSED: &str = "readCompressed";
 // const METH_WRITE: &str = "write";
 // const METH_DELETE: &str = "delete";
@@ -266,7 +266,7 @@ async fn root_request_handler(
                 "_shvjournal".to_string(),
                 "_valuecache".to_string()
             ];
-            nodes.append(&mut children_on_path(&*app_state.sites.0.read().await, ROOT_PATH).unwrap_or_default());
+            nodes.append(&mut children_on_path(&app_state.sites_data.read().await.sites_info, ROOT_PATH).unwrap_or_default());
             Ok(nodes.into())
         }
         _ => Ok("Not implemented".into()),
@@ -301,10 +301,30 @@ impl Drop for ScopedLog {
     }
 }
 
-struct LsFilesEntry {
-    name: String,
-    ftype: char,
-    size: i64,
+pub(crate) enum FileType {
+    File,
+    Directory,
+}
+
+impl std::fmt::Display for FileType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            FileType::File => "f",
+            FileType::Directory => "d",
+        })
+    }
+}
+
+pub(crate) struct LsFilesEntry {
+    pub(crate) name: String,
+    pub(crate) ftype: FileType,
+    pub(crate) size: i64,
+}
+
+impl std::fmt::Display for LsFilesEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{{}, {}, {}}}", self.name, self.ftype, self.size)
+    }
 }
 
 impl From<LsFilesEntry> for RpcValue {
@@ -327,7 +347,7 @@ async fn shvjournal_request_handler(
             METH_TOTAL_LOG_SIZE => return Ok("To be implemented".into()),
             METH_LOG_USAGE => return Ok("To be implemented".into()),
             METH_SYNC_LOG => return Ok("To be implemented".into()),
-            METH_SYNC_INFO => return Ok("To be implemented".into()),
+            METH_SYNC_INFO => return Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned().into()),
             METH_SANITIZE_LOG => return Ok("To be implemented".into()),
             _ => return Err(rpc_error_unknown_method(method)),
         }
@@ -374,7 +394,7 @@ async fn shvjournal_request_handler(
                                     .inspect_err(|e| log::error!("Cannot read metadata of file `{}`: {}", entry.path().to_string_lossy(), e))
                                     .ok()?;
                                 let name = entry.file_name().to_str().map(String::from)?;
-                                let ftype = if meta.is_dir() { 'd' } else if meta.is_file() { 'f' } else { return None };
+                                let ftype = if meta.is_dir() { FileType::Directory } else if meta.is_file() { FileType::File } else { return None };
                                 let size = meta.len() as i64;
                                 Some(LsFilesEntry { name, ftype, size })
                             }.await;
@@ -534,7 +554,7 @@ async fn history_request_handler(
 ) -> RpcRequestResult {
     let method = rq.method().unwrap_or_default();
     let path = rq.shv_path().unwrap_or_default();
-    let children = children_on_path(&*app_state.sites.0.read().await, path)
+    let children = children_on_path(&app_state.sites_data.read().await.sites_info, path)
         .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
 
     match method {
@@ -606,7 +626,7 @@ pub(crate) async fn methods_getter(
                     // reloadSites (wr) -> Bool
         ])),
         NodeType::History => {
-            let children = children_on_path(&*app_state.sites.0.read().await, path)?;
+            let children = children_on_path(&app_state.sites_data.read().await.sites_info, path)?;
             if children.is_empty() {
                 // `path` is a site path
                 Some(MetaMethods::from(&[&META_METHOD_GET_LOG]))
