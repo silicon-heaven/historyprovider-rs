@@ -378,7 +378,7 @@ pub(crate) async fn sync_task(
                                 sync_logger.log(log::Level::Info, "syncing done").await;
                                 drop(permit);
                             });
-                                sync_tasks.push(sync_task);
+                            sync_tasks.push(sync_task);
                         }
                         SubHpInfo::Legacy { getlog_path } => {
                             log::info!("Syncing {site_path} via getLog from {getlog_path}");
