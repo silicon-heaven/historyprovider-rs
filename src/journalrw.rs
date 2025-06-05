@@ -1,8 +1,10 @@
 
 use futures::{AsyncWrite, AsyncWriteExt, Stream};
 use futures::io::{AsyncBufRead, AsyncBufReadExt, BufWriter, Lines};
+use shvclient::clientnode::{METH_GET, SIG_CHNG};
 use shvproto::RpcValue;
 use shvrpc::metamethod::AccessLevel;
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::error::Error;
@@ -115,6 +117,263 @@ where
         };
         self.writer.write_all(line.as_bytes()).await?;
         self.writer.flush().await
+    }
+}
+
+
+// Reader of a result of SHV v2 `getLog`
+
+pub struct Log2Reader {
+    log: std::vec::IntoIter<RpcValue>,
+    header: Log2Header,
+}
+
+impl Log2Reader {
+    pub fn new(log: RpcValue) -> Result<Self, Box<dyn Error>> {
+        let shvproto::Value::List(list) = log.value else {
+            return Err("Wrong log format - not a list".into());
+        };
+        Ok(Self {
+            log: list.into_iter(),
+            header: Log2Header::from_meta(*log.meta.unwrap_or_default())?,
+        })
+    }
+}
+
+impl Iterator for Log2Reader {
+    type Item = Result<JournalEntry, Box<dyn Error>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.log.next().map(|entry| rpc_value_to_log_entry(&entry, &self.header))
+    }
+}
+
+const NO_SHORT_TIME: i32 = -1;
+
+fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<JournalEntry, Box<dyn Error>> {
+    let make_err = |msg| Err(format!("{msg}: {}", entry.to_cpon()).into());
+    let shvproto::Value::List(row) = &entry.value else {
+        return make_err("Log entry is not a list");
+        // return Err(format!("Log entry is not a list: {}", entry.to_cpon()).into());
+    };
+    let [timestamp, path, value, short_time, domain, value_flags, user_id] = row.as_slice() else {
+        return make_err("Wrong number of columns in log entry");
+    };
+    let timestamp = match &timestamp.value {
+        shvproto::Value::DateTime(date_time) => *date_time,
+        _ => return make_err(&format!("Wrong `timestamp` `{}` of journal entry", timestamp.to_cpon())),
+    };
+    let path = match &path.value {
+        shvproto::Value::Int(idx) => header
+            .paths_dict
+            .get(&(*idx as i32))
+            .ok_or_else(|| format!("Wrong path reference {idx} of journal entry: {}", entry.to_cpon()))?,
+        shvproto::Value::String(path) => path,
+        _ => return make_err(&format!("Wrong path `{}` of journal entry", path.to_cpon())),
+    }.to_string();
+    let short_time = match short_time.value {
+        shvproto::Value::Int(val) if val as i32 >= 0 => val as i32,
+        _ => NO_SHORT_TIME,
+    };
+    let signal = match &domain.value {
+        shvproto::Value::String(domain) if domain.is_empty() || domain.as_str() == "C" => SIG_CHNG,
+        shvproto::Value::String(domain) => domain.as_str(),
+        _ => SIG_CHNG,
+    }.to_string();
+    let value_flags = match &value_flags.value {
+        shvproto::Value::Int(val) => *val,
+        _ => return make_err(&format!("Wrong `valueFlags` {} of journal entry", value_flags.to_cpon())),
+    };
+    let user_id = match &user_id.value {
+        shvproto::Value::String(user_id) => user_id.to_string(),
+        _ => return make_err(&format!("Wrong `userId` `{}` of journal entry", user_id.to_cpon())),
+    };
+    Ok(JournalEntry {
+        epoch_msec: timestamp.epoch_msec(),
+        path,
+        signal,
+        source: METH_GET.into(),
+        value: value.clone(),
+        access_level: AccessLevel::Read as i32,
+        short_time,
+        user_id,
+        repeat: if value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0 { true } else { false },
+        provisional: if value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0 { true } else { false },
+    })
+}
+
+struct GetLog2Params {
+    since: Option<shvproto::DateTime>,
+    until: Option<shvproto::DateTime>,
+    path_pattern: Option<String>,
+    with_paths_dict: bool,
+    with_snapshot: bool,
+    record_count_limit: i64,
+}
+
+const RECORD_COUNT_LIMIT_DEFAULT: i64 = 10000;
+
+impl GetLog2Params {
+    fn new() -> Self {
+        Self {
+            since: None,
+            until: None,
+            path_pattern: None,
+            with_paths_dict: true,
+            with_snapshot: false,
+            record_count_limit: RECORD_COUNT_LIMIT_DEFAULT,
+        }
+    }
+}
+
+impl From<GetLog2Params> for RpcValue {
+    fn from(value: GetLog2Params) -> Self {
+        let mut map = shvproto::Map::new();
+        if let Some(since) = value.since {
+            map.insert("since".into(), since.into());
+        }
+        if let Some(until) = value.until {
+            map.insert("until".into(), until.into());
+        }
+        if let Some(path_pattern) = value.path_pattern {
+            map.insert("pathPattern".into(), path_pattern.into());
+        }
+        map.insert("withPathsDict".into(), value.with_paths_dict.into());
+        map.insert("withSnapshot".into(), value.with_snapshot.into());
+        map.insert("recordCountLimit".into(), value.record_count_limit.into());
+        map.into()
+    }
+}
+
+impl TryFrom<&RpcValue> for GetLog2Params {
+    type Error = String;
+
+    fn try_from(value: &RpcValue) -> Result<Self, Self::Error> {
+        let shvproto::Value::Map(map) = &value.value else {
+            return Err(format!("getLog params has wrong type, expected Map, got {}", value.type_name()));
+        };
+        let since = match map.get("since") {
+            Some(since) => Some(since.to_datetime().ok_or_else(|| "Invalid `since` value type".to_string())?),
+            None => None,
+        };
+        let until = match map.get("until") {
+            Some(until) => Some(until.to_datetime().ok_or_else(|| "Invalid `until` value type".to_string())?),
+            None => None,
+        };
+        let path_pattern = match map.get("pathPattern").map(|v| &v.value) {
+            Some(shvproto::Value::String(path_pattern)) => Some(path_pattern.to_string()),
+            Some(_) => return Err("Invalid `pathPattern` type".into()),
+            None => None,
+        };
+        let with_paths_dict = match map.get("withPathsDict").map(|v| &v.value) {
+            Some(shvproto::Value::Bool(val)) => *val,
+            Some(_) => return Err("Invalid `withPathsDict` type".into()),
+            None => true,
+        };
+        let with_snapshot = match map.get("withSnapshot").map(|v| &v.value) {
+            Some(shvproto::Value::Bool(val)) => *val,
+            Some(_) => return Err("Invalid `withSnapshot` type".into()),
+            None => false,
+        };
+        let record_count_limit = match map.get("recordCountLimit").map(|v| &v.value) {
+            Some(shvproto::Value::Int(val)) => *val,
+            Some(_) => return Err("Invalid `recordCountLimit` type".into()),
+            None => RECORD_COUNT_LIMIT_DEFAULT,
+        };
+        Ok(Self { since, until, path_pattern, with_paths_dict, with_snapshot, record_count_limit })
+    }
+}
+
+struct Log2Header {
+    record_count: i64,
+    record_count_limit: i64,
+    record_count_limit_hit: bool,
+    date_time: shvproto::DateTime,
+    since: shvproto::DateTime,
+    until: shvproto::DateTime,
+    with_paths_dict: bool,
+    with_snapshot: bool,
+    paths_dict: BTreeMap<i32, String>,
+    log_params: GetLog2Params,
+    log_version: i64,
+}
+
+impl Log2Header {
+    fn from_meta(meta: shvproto::MetaMap) -> Result<Self, Box<dyn Error>> {
+        let record_count = match meta.get("recordCount").map(|v| &v.value) {
+            Some(shvproto::Value::Int(record_count)) => *record_count,
+            Some(_) => return Err("Invalid `recordCount` type".into()),
+            None => 0,
+        };
+        let record_count_limit = match meta.get("recordCountLimit").map(|v| &v.value) {
+            Some(shvproto::Value::Int(record_count_limit)) => *record_count_limit,
+            Some(_) => return Err("Invalid `recordCountLimit` type".into()),
+            None => 0,
+        };
+        let record_count_limit_hit = match meta.get("recordCountLimitHit").map(|v| &v.value) {
+            Some(shvproto::Value::Bool(record_count_limit_hit)) => *record_count_limit_hit,
+            Some(_) => return Err("Invalid `recordCountLimitHit` type".into()),
+            None => false,
+        };
+        let date_time = match meta.get("dateTime").map(|v| &v.value) {
+            Some(shvproto::Value::DateTime(date_time)) => *date_time,
+            Some(_) => return Err("Invalid `dateTime` type".into()),
+            None => return Err("Missing `dateTime` key".into()),
+        };
+        let since = match meta.get("since").map(|v| &v.value) {
+            Some(shvproto::Value::DateTime(since)) => *since,
+            Some(_) => return Err("Invalid `since` type".into()),
+            None => return Err("Missing `since` key".into()),
+        };
+        let until = match meta.get("until").map(|v| &v.value) {
+            Some(shvproto::Value::DateTime(until)) => *until,
+            Some(_) => return Err("Invalid `until` type".into()),
+            None => return Err("Missing `until` key".into()),
+        };
+        let with_paths_dict = match meta.get("withPathsDict").map(|v| &v.value) {
+            Some(shvproto::Value::Bool(val)) => *val,
+            Some(_) => return Err("Invalid `withPathsDict` type".into()),
+            None => true,
+        };
+        let with_snapshot = match meta.get("withSnapshot").map(|v| &v.value) {
+            Some(shvproto::Value::Bool(val)) => *val,
+            Some(_) => return Err("Invalid `withSnapshot` type".into()),
+            None => false,
+        };
+        let paths_dict: BTreeMap<i32, String> = match meta.get("pathsDict").map(|v| &v.value) {
+            Some(shvproto::Value::IMap(val)) => val
+                .iter()
+                .map(|(i, v)| v
+                    .try_into()
+                    .map(|s| (*i, s)))
+                .collect::<Result<BTreeMap<_, _>,_>>()
+                .map_err(|e| format!("Corrupted paths dictionary: {e}"))?,
+            Some(_) => return Err("Invalid `pathsDict` type".into()),
+            None => Default::default(),
+        };
+        let log_params = match meta.get("logParams") {
+            Some(val) => GetLog2Params::try_from(val)?,
+            None => GetLog2Params::try_from(&shvproto::Map::new().into())?,
+        };
+
+        let log_version = match meta.get("logVersion").map(|v| &v.value) {
+            Some(shvproto::Value::Int(val)) => *val,
+            Some(_) => return Err("Invalid `logVersion` type".into()),
+            None => 2,
+        };
+        Ok(Self {
+            record_count,
+            record_count_limit,
+            record_count_limit_hit,
+            date_time,
+            since,
+            until,
+            with_paths_dict,
+            with_snapshot,
+            paths_dict,
+            log_params,
+            log_version,
+        })
     }
 }
 
