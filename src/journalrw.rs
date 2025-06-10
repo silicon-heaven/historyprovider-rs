@@ -389,15 +389,16 @@ impl Log2Header {
 
 #[cfg(test)]
 mod tests {
-    use futures::io::{BufReader, BufWriter, Cursor};
+    use futures::io::{BufReader, Cursor};
     use futures::StreamExt;
     use shvclient::clientnode::{METH_GET, SIG_CHNG};
+    use shvproto::{CponReader, Reader};
     use shvrpc::metamethod::AccessLevel;
     use tokio::fs::File;
-    use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+    use tokio_util::compat::TokioAsyncReadCompatExt;
 
     use crate::journalentry::JournalEntry;
-    use crate::journalrw::{JournalReaderLog2, JournalWriterLog2};
+    use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, Log2Reader};
 
     #[tokio::test]
     async fn read_file_journal() {
@@ -453,4 +454,22 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn get_log_2() {
+        let mut file = std::fs::File::open("log2.cpon").unwrap();
+        let mut reader = CponReader::new(&mut file);
+        let reader = Log2Reader::new(reader.read().unwrap()).unwrap();
+        let epoch_ms_now = shvproto::DateTime::now().epoch_msec();
+        let res = reader
+            .map(|item|
+                item.map(|mut entry| {
+                    if entry.epoch_msec == 0 {
+                        entry.epoch_msec = epoch_ms_now
+                    }
+                    entry
+                })
+            )
+            .collect::<Result<Vec<_>,_>>().unwrap();
+        println!("{res:?}");
+    }
 }
