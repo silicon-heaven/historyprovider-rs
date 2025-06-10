@@ -91,11 +91,19 @@ where
 {
     pub fn new(writer: W) -> Self {
         Self {
-            writer: BufWriter::new(writer)
+            writer,
         }
     }
 
-    pub async fn append(&mut self, msec: i64, orig_time: i64, entry: &JournalEntry) -> Result<(), std::io::Error> {
+    pub async fn append(&mut self, entry: &JournalEntry)  -> Result<(), std::io::Error> {
+        let mut msec = entry.epoch_msec;
+        if msec == 0 {
+            msec = shvproto::DateTime::now().epoch_msec();
+        }
+        self.append_with_time(msec, msec, entry).await
+    }
+
+    pub async fn append_with_time(&mut self, msec: i64, orig_time: i64, entry: &JournalEntry) -> Result<(), std::io::Error> {
         let line = {
             let mut fields = vec![];
             fields.push(shvproto::DateTime::from_epoch_msec(msec).to_iso_string());
