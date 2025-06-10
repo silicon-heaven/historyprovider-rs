@@ -37,10 +37,10 @@ fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error>> 
     Ok(JournalEntry {
         epoch_msec,
         path,
-        signal: domain.unwrap_or("chng").into(),
-        source: "get".into(),
+        signal: domain.unwrap_or(SIG_CHNG).into(),
+        source: METH_GET.into(),
         value,
-        access_level: AccessLevel::Read as i32,
+        access_level: AccessLevel::Read as _,
         short_time,
         user_id,
         repeat: value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
@@ -82,7 +82,7 @@ where
 }
 
 pub struct JournalWriterLog2<W> {
-    writer: BufWriter<W>,
+    writer: W,
 }
 
 impl<W> JournalWriterLog2<W>
@@ -104,7 +104,7 @@ where
             fields.push(entry.value.to_cpon());
             fields.push(if entry.short_time >= 0 { entry.short_time.to_string() } else { "".into() });
             fields.push(entry.signal.clone());
-            let mut value_flags = 0;
+            let mut value_flags = 0u32;
             if !entry.repeat {
                 value_flags |= 1 << VALUE_FLAG_SPONTANEOUS_BIT;
             }
@@ -181,7 +181,8 @@ fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<Journ
         _ => SIG_CHNG,
     }.to_string();
     let value_flags = match &value_flags.value {
-        shvproto::Value::Int(val) => *val,
+        shvproto::Value::UInt(val) => *val,
+        shvproto::Value::Int(val) => *val as u64,
         _ => return make_err(&format!("Wrong `valueFlags` {} of journal entry", value_flags.to_cpon())),
     };
     let user_id = match &user_id.value {
@@ -194,7 +195,7 @@ fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<Journ
         signal,
         source: METH_GET.into(),
         value: value.clone(),
-        access_level: AccessLevel::Read as i32,
+        access_level: AccessLevel::Read as _,
         short_time,
         user_id,
         repeat: if value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0 { true } else { false },
