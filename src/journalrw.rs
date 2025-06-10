@@ -388,12 +388,15 @@ impl Log2Header {
 
 #[cfg(test)]
 mod tests {
-    use futures::io::BufReader;
+    use futures::io::{BufReader, BufWriter, Cursor};
     use futures::StreamExt;
+    use shvclient::clientnode::{METH_GET, SIG_CHNG};
+    use shvrpc::metamethod::AccessLevel;
     use tokio::fs::File;
-    use tokio_util::compat::TokioAsyncReadCompatExt;
+    use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-    use crate::journalrw::JournalReaderLog2;
+    use crate::journalentry::JournalEntry;
+    use crate::journalrw::{JournalReaderLog2, JournalWriterLog2};
 
     #[tokio::test]
     async fn read_file_journal() {
@@ -403,4 +406,50 @@ mod tests {
             println!("{:?}", result.unwrap());
         }
     }
+
+    #[tokio::test]
+    async fn journal_write_and_read() {
+        let entries = [
+            JournalEntry {
+                epoch_msec: shvproto::DateTime::now().epoch_msec(),
+                path: "test/path".into(),
+                signal: SIG_CHNG.into(),
+                source: METH_GET.into(),
+                value: 42.into(),
+                access_level: AccessLevel::Read as _, // Field is not used in SHV2
+                short_time: 0,
+                user_id: "user".into(),
+                repeat: false,
+                provisional: false,
+            },
+            JournalEntry {
+                epoch_msec: shvproto::DateTime::now().epoch_msec(),
+                path: "test/path2".into(),
+                signal: SIG_CHNG.into(),
+                source: METH_GET.into(),
+                value: shvproto::make_map!("a" => 1, "b" => 2).into(),
+                access_level: AccessLevel::Read as _, // Field is not used in SHV2
+                short_time: 123,
+                user_id: "user".into(),
+                repeat: true,
+                provisional: true,
+            },
+            ];
+        let mut writer = JournalWriterLog2::new(Cursor::new(Vec::new()));
+        for entry in &entries {
+            writer.append(entry).await.unwrap();
+        }
+
+        let data = writer.writer.into_inner();
+        let reader = JournalReaderLog2::new(Cursor::new(data));
+        let mut enumerated_reader = reader.enumerate();
+        while let Some((ix, result)) = enumerated_reader.next().await {
+            let entry = &entries[ix];
+            let entry2 = result.unwrap();
+            println!("{:?}", entry);
+            println!("{:?}", entry2);
+            assert!(entry == &entry2);
+        }
+    }
+
 }
