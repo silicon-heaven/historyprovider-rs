@@ -9,7 +9,7 @@ pub struct JournalEntry {
     pub value: RpcValue,
     pub access_level: i32,
     pub short_time: i32,
-    pub user_id: String,
+    pub user_id: Option<String>,
     pub repeat: bool,
     pub provisional: bool,
 }

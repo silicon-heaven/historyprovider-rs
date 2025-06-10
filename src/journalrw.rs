@@ -32,7 +32,7 @@ fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error>> 
     let short_time = parts_iter.next().unwrap_or_default().parse().unwrap_or(-1);
     let domain = parts_iter.next();
     let value_flags = parts_iter.next().unwrap_or_default().parse().unwrap_or(0);
-    let user_id = parts_iter.next().unwrap_or_default().into();
+    let user_id = parts_iter.next().and_then(|u| if u.is_empty() { None } else { Some(u.to_string()) });
 
     Ok(JournalEntry {
         epoch_msec,
@@ -120,7 +120,7 @@ where
                 value_flags |= 1 << VALUE_FLAG_PROVISIONAL_BIT;
             }
             fields.push(value_flags.to_string());
-            fields.push(entry.user_id.clone());
+            fields.push(entry.user_id.clone().unwrap_or_default());
             fields.join(JOURNAL_ENTRIES_SEPARATOR) + "\n"
         };
         self.writer.write_all(line.as_bytes()).await?;
@@ -180,7 +180,7 @@ fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<Journ
         _ => return make_err(&format!("Wrong path `{}` of journal entry", path.to_cpon())),
     }.to_string();
     let short_time = match short_time.value {
-        shvproto::Value::Int(val) if val as i32 >= 0 => val as i32,
+        shvproto::Value::Int(val) if val as i32 >= 0 => val as _,
         _ => NO_SHORT_TIME,
     };
     let signal = match &domain.value {
@@ -194,7 +194,8 @@ fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<Journ
         _ => return make_err(&format!("Wrong `valueFlags` {} of journal entry", value_flags.to_cpon())),
     };
     let user_id = match &user_id.value {
-        shvproto::Value::String(user_id) => user_id.to_string(),
+        shvproto::Value::String(user_id) => Some(user_id.to_string()),
+        shvproto::Value::Null => None,
         _ => return make_err(&format!("Wrong `userId` `{}` of journal entry", user_id.to_cpon())),
     };
     Ok(JournalEntry {
@@ -418,7 +419,7 @@ mod tests {
                 value: 42.into(),
                 access_level: AccessLevel::Read as _, // Field is not used in SHV2
                 short_time: 0,
-                user_id: "user".into(),
+                user_id: Some("user".into()),
                 repeat: false,
                 provisional: false,
             },
@@ -430,7 +431,7 @@ mod tests {
                 value: shvproto::make_map!("a" => 1, "b" => 2).into(),
                 access_level: AccessLevel::Read as _, // Field is not used in SHV2
                 short_time: 123,
-                user_id: "user".into(),
+                user_id: None,
                 repeat: true,
                 provisional: true,
             },
