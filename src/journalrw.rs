@@ -1,6 +1,6 @@
 
 use futures::{AsyncWrite, AsyncWriteExt, Stream};
-use futures::io::{AsyncBufRead, AsyncBufReadExt, BufWriter, Lines};
+use futures::io::{AsyncBufRead, AsyncBufReadExt, Lines};
 use shvclient::clientnode::{METH_GET, SIG_CHNG};
 use shvproto::RpcValue;
 use shvrpc::metamethod::AccessLevel;
@@ -133,7 +133,7 @@ where
 
 pub struct Log2Reader {
     log: std::vec::IntoIter<RpcValue>,
-    header: Log2Header,
+    pub(crate) header: Log2Header,
 }
 
 impl Log2Reader {
@@ -227,19 +227,20 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
     })
 }
 
-struct GetLog2Params {
-    since: Option<shvproto::DateTime>,
-    until: Option<shvproto::DateTime>,
-    path_pattern: Option<String>,
-    with_paths_dict: bool,
-    with_snapshot: bool,
-    record_count_limit: i64,
+#[derive(Clone, Debug)]
+pub(crate) struct GetLog2Params {
+    pub(crate) since: Option<shvproto::DateTime>,
+    pub(crate) until: Option<shvproto::DateTime>,
+    pub(crate) path_pattern: Option<String>,
+    pub(crate) with_paths_dict: bool,
+    pub(crate) with_snapshot: bool,
+    pub(crate) record_count_limit: i64,
 }
 
 const RECORD_COUNT_LIMIT_DEFAULT: i64 = 10000;
 
 impl GetLog2Params {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             since: None,
             until: None,
@@ -309,18 +310,19 @@ impl TryFrom<&RpcValue> for GetLog2Params {
     }
 }
 
-struct Log2Header {
-    record_count: i64,
-    record_count_limit: i64,
-    record_count_limit_hit: bool,
-    date_time: shvproto::DateTime,
-    since: shvproto::DateTime,
-    until: shvproto::DateTime,
-    with_paths_dict: bool,
-    with_snapshot: bool,
-    paths_dict: BTreeMap<i32, String>,
-    log_params: GetLog2Params,
-    log_version: i64,
+#[derive(Clone, Debug)]
+pub(crate) struct Log2Header {
+    pub(crate) record_count: i64,
+    pub(crate) record_count_limit: i64,
+    pub(crate) record_count_limit_hit: bool,
+    pub(crate) date_time: shvproto::DateTime,
+    pub(crate) since: shvproto::DateTime,
+    pub(crate) until: shvproto::DateTime,
+    pub(crate) with_paths_dict: bool,
+    pub(crate) with_snapshot: bool,
+    pub(crate) paths_dict: BTreeMap<i32, String>,
+    pub(crate) log_params: GetLog2Params,
+    pub(crate) log_version: i64,
 }
 
 impl Log2Header {
