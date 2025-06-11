@@ -152,25 +152,26 @@ impl Iterator for Log2Reader {
     type Item = Result<JournalEntry, Box<dyn Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.log.next().map(|entry| rpc_value_to_log_entry(&entry, &self.header))
+        self.log.next().map(|entry| rpc_value_to_journal_entry(&entry, &self.header))
     }
 }
 
 const NO_SHORT_TIME: i32 = -1;
 
-fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<JournalEntry, Box<dyn Error>> {
+fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<JournalEntry, Box<dyn Error>> {
     let make_err = |msg| Err(format!("{msg}: {}", entry.to_cpon()).into());
     let shvproto::Value::List(row) = &entry.value else {
         return make_err("Log entry is not a list");
-        // return Err(format!("Log entry is not a list: {}", entry.to_cpon()).into());
     };
-    let [timestamp, path, value, short_time, domain, value_flags, user_id] = row.as_slice() else {
-        return make_err("Wrong number of columns in log entry");
-    };
+    let mut row = row.as_slice().into_iter();
+
+    let timestamp = row.next().unwrap_or_default();
     let timestamp = match &timestamp.value {
         shvproto::Value::DateTime(date_time) => *date_time,
         _ => return make_err(&format!("Wrong `timestamp` `{}` of journal entry", timestamp.to_cpon())),
     };
+
+    let path = row.next().unwrap_or_default();
     let path = match &path.value {
         shvproto::Value::Int(idx) => header
             .paths_dict
@@ -179,25 +180,39 @@ fn rpc_value_to_log_entry(entry: &RpcValue, header: &Log2Header) -> Result<Journ
         shvproto::Value::String(path) => path,
         _ => return make_err(&format!("Wrong path `{}` of journal entry", path.to_cpon())),
     }.to_string();
+
+    let value = row.next().unwrap_or_default();
+
+    let short_time = row.next().unwrap_or_default();
     let short_time = match short_time.value {
         shvproto::Value::Int(val) if val as i32 >= 0 => val as _,
         _ => NO_SHORT_TIME,
     };
+
+    let domain = row.next().unwrap_or_default();
     let signal = match &domain.value {
         shvproto::Value::String(domain) if domain.is_empty() || domain.as_str() == "C" => SIG_CHNG,
         shvproto::Value::String(domain) => domain.as_str(),
         _ => SIG_CHNG,
     }.to_string();
-    let value_flags = match &value_flags.value {
-        shvproto::Value::UInt(val) => *val,
-        shvproto::Value::Int(val) => *val as u64,
-        _ => return make_err(&format!("Wrong `valueFlags` {} of journal entry", value_flags.to_cpon())),
+
+    let value_flags = row.next();
+    let value_flags = match value_flags {
+        Some(value_flags) => match &value_flags.value {
+            shvproto::Value::UInt(val) => *val,
+            shvproto::Value::Int(val) => *val as u64,
+            _ => return make_err(&format!("Wrong `valueFlags` {} of journal entry", value_flags.to_cpon())),
+        },
+        None => 0,
     };
+
+    let user_id = row.next().unwrap_or_default();
     let user_id = match &user_id.value {
         shvproto::Value::String(user_id) => Some(user_id.to_string()),
         shvproto::Value::Null => None,
         _ => return make_err(&format!("Wrong `userId` `{}` of journal entry", user_id.to_cpon())),
     };
+
     Ok(JournalEntry {
         epoch_msec: timestamp.epoch_msec(),
         path,
