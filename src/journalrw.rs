@@ -329,42 +329,45 @@ impl Log2Header {
     fn from_meta(meta: shvproto::MetaMap) -> Result<Self, Box<dyn Error>> {
         let record_count = match meta.get("recordCount").map(|v| &v.value) {
             Some(shvproto::Value::Int(record_count)) => *record_count,
-            Some(_) => return Err("Invalid `recordCount` type".into()),
+            Some(v) => return Err(format!("Invalid `recordCount` type: {}", v.type_name()).into()),
             None => 0,
         };
         let record_count_limit = match meta.get("recordCountLimit").map(|v| &v.value) {
             Some(shvproto::Value::Int(record_count_limit)) => *record_count_limit,
-            Some(_) => return Err("Invalid `recordCountLimit` type".into()),
+            Some(v) => return Err(format!("Invalid `recordCountLimit` type: {}", v.type_name()).into()),
             None => 0,
         };
         let record_count_limit_hit = match meta.get("recordCountLimitHit").map(|v| &v.value) {
             Some(shvproto::Value::Bool(record_count_limit_hit)) => *record_count_limit_hit,
-            Some(_) => return Err("Invalid `recordCountLimitHit` type".into()),
+            Some(v) => return Err(format!("Invalid `recordCountLimitHit` type: {}", v.type_name()).into()),
             None => false,
         };
         let date_time = match meta.get("dateTime").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(date_time)) => *date_time,
-            Some(_) => return Err("Invalid `dateTime` type".into()),
+            Some(shvproto::Value::Null) => shvproto::DateTime::now(),
+            Some(v) => return Err(format!("Invalid `dateTime` type: {}", v.type_name()).into()),
             None => return Err("Missing `dateTime` key".into()),
         };
         let since = match meta.get("since").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(since)) => *since,
-            Some(_) => return Err("Invalid `since` type".into()),
+            Some(shvproto::Value::Null) => shvproto::DateTime::now(),
+            Some(v) => return Err(format!("Invalid `since` type: {}", v.type_name()).into()),
             None => return Err("Missing `since` key".into()),
         };
         let until = match meta.get("until").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(until)) => *until,
-            Some(_) => return Err("Invalid `until` type".into()),
+            Some(shvproto::Value::Null) => shvproto::DateTime::now(),
+            Some(v) => return Err(format!("Invalid `until` type: {}", v.type_name()).into()),
             None => return Err("Missing `until` key".into()),
         };
         let with_paths_dict = match meta.get("withPathsDict").map(|v| &v.value) {
             Some(shvproto::Value::Bool(val)) => *val,
-            Some(_) => return Err("Invalid `withPathsDict` type".into()),
+            Some(v) => return Err(format!("Invalid `withPathsDict` type: {}", v.type_name()).into()),
             None => true,
         };
         let with_snapshot = match meta.get("withSnapshot").map(|v| &v.value) {
             Some(shvproto::Value::Bool(val)) => *val,
-            Some(_) => return Err("Invalid `withSnapshot` type".into()),
+            Some(v) => return Err(format!("Invalid `withSnapshot` type: {}", v.type_name()).into()),
             None => false,
         };
         let paths_dict: BTreeMap<i32, String> = match meta.get("pathsDict").map(|v| &v.value) {
@@ -375,7 +378,7 @@ impl Log2Header {
                     .map(|s| (*i, s)))
                 .collect::<Result<BTreeMap<_, _>,_>>()
                 .map_err(|e| format!("Corrupted paths dictionary: {e}"))?,
-            Some(_) => return Err("Invalid `pathsDict` type".into()),
+            Some(v) => return Err(format!("Invalid `pathsDict` type: {}", v.type_name()).into()),
             None => Default::default(),
         };
         let log_params = match meta.get("logParams") {
@@ -385,7 +388,7 @@ impl Log2Header {
 
         let log_version = match meta.get("logVersion").map(|v| &v.value) {
             Some(shvproto::Value::Int(val)) => *val,
-            Some(_) => return Err("Invalid `logVersion` type".into()),
+            Some(v) => return Err(format!("Invalid `logVersion` type: {}", v.type_name()).into()),
             None => 2,
         };
         Ok(Self {
