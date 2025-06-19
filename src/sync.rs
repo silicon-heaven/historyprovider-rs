@@ -472,7 +472,7 @@ async fn sync_site_legacy(
         sync_logger.log(log::Level::Info, format!("Write {} journal entries to {}", log_entries.len(), journal_file_path.to_string_lossy()));
         let journal_file = tokio::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
             .open(&journal_file_path)
             .await
             .map_err(|err| format!("Cannot open journal file {} for writing: {}", journal_file_path.to_string_lossy(), err))?;
