@@ -528,7 +528,7 @@ async fn sync_site_legacy(
 
         log_file_entries.append(&mut log_entries);
 
-        getlog_params.since = Some(shvproto::DateTime::from_epoch_msec(last_entry_ms + 1));
+        getlog_params.since = Some(shvproto::DateTime::from_epoch_msec(last_entry_ms));
 
         if log_file_entries.len() > LOG_FILE_ENTRIES_LEN_LIMIT {
             write_journal(log_file_path
