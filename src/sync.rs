@@ -411,23 +411,50 @@ async fn sync_site_legacy(
         }
     };
 
+    const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100000;
     const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
     const RECORD_COUNT_LIMIT: i64 = 10000;
 
-    let mut getlog_params = match &newest_log {
+    fn msec_to_log2_filename(msec: i64) -> String {
+        shvproto::DateTime::from_epoch_msec(msec)
+            .to_chrono_datetime()
+            .format("%Y-%m-%dT%H:%M:%S.log2")
+            .to_string()
+    }
+
+    let (mut getlog_params, mut log_file_path, mut log_file_entries) = match newest_log {
         Some((newest_log_file, newest_log_entries)) => {
-            sync_logger.log(
-                log::Level::Info,
-                format!("sync will append to {}", newest_log_file.to_string_lossy())
-            );
             let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
-            GetLog2Params {
-                since: Some(shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1)),
-                until: None,
-                path_pattern: None,
-                with_paths_dict: true,
-                with_snapshot: false,
-                record_count_limit: RECORD_COUNT_LIMIT,
+            let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
+            if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
+                // Start with a new file if it already contains too many records
+                sync_logger.log(
+                    log::Level::Info,
+                    format!("sync will create a new file since {}", since.to_iso_string())
+                );
+                let params = GetLog2Params {
+                    since: Some(since),
+                    until: None,
+                    path_pattern: None,
+                    with_paths_dict: true,
+                    with_snapshot: true,
+                    record_count_limit: RECORD_COUNT_LIMIT,
+                };
+                (params, None, Vec::new())
+            } else {
+                sync_logger.log(
+                    log::Level::Info,
+                    format!("sync will append to {}", newest_log_file.to_string_lossy())
+                );
+                let params = GetLog2Params {
+                    since: Some(since),
+                    until: None,
+                    path_pattern: None,
+                    with_paths_dict: true,
+                    with_snapshot: false,
+                    record_count_limit: RECORD_COUNT_LIMIT,
+                };
+                (params, Some(newest_log_file), newest_log_entries)
             }
         },
         None => {
@@ -436,23 +463,17 @@ async fn sync_site_legacy(
                 log::Level::Info,
                 format!("sync to a new journal directory since {}", since.to_iso_string())
             );
-            GetLog2Params {
+            let params = GetLog2Params {
                 since: Some(since),
                 until: None,
                 path_pattern: None,
                 with_paths_dict: true,
                 with_snapshot: true,
                 record_count_limit: RECORD_COUNT_LIMIT,
-            }
+            };
+            (params, None, Vec::new())
         }
     };
-
-
-    let (mut log_file_path, mut log_file_entries) = newest_log
-        .map_or_else(
-            || (None, Vec::new()),
-            |(file_path, newest_log_entries)| (Some(file_path), newest_log_entries)
-        );
 
     enum JournalPath {
         Dir(PathBuf),
@@ -464,7 +485,7 @@ async fn sync_site_legacy(
         };
         let journal_file_path = match journal_path {
             JournalPath::Dir(mut path) => {
-                path.push(shvproto::DateTime::from_epoch_msec(first_entry_msec).to_chrono_datetime().format("%Y-%m-%dT%H:%M:%S.log2").to_string());
+                path.push(msec_to_log2_filename(first_entry_msec));
                 path
             }
             JournalPath::File(path) => path,
@@ -484,8 +505,6 @@ async fn sync_site_legacy(
         }
         Ok(())
     }
-
-    const LOG_FILE_ENTRIES_LEN_LIMIT: usize = 100000;
 
     loop {
         sync_logger.log(
@@ -530,7 +549,7 @@ async fn sync_site_legacy(
 
         getlog_params.since = Some(shvproto::DateTime::from_epoch_msec(last_entry_ms));
 
-        if log_file_entries.len() > LOG_FILE_ENTRIES_LEN_LIMIT {
+        if log_file_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
             write_journal(log_file_path
                 .map_or_else(|| JournalPath::Dir(PathBuf::from(&local_journal_path)), |file_path| JournalPath::File(file_path)),
                 &log_file_entries,
