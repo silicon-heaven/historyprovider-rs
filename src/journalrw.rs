@@ -310,6 +310,49 @@ impl TryFrom<&RpcValue> for GetLog2Params {
     }
 }
 
+pub(crate) fn matches_path_pattern(path: impl AsRef<str>, pattern: impl AsRef<str>) -> bool {
+    let path_parts: Vec<&str> = path.as_ref().split('/').collect();
+    let pattern_parts: Vec<&str> = pattern.as_ref().split('/').collect();
+
+    let (mut path_ix, mut patt_ix) = (0, 0);
+    let (mut last_starstar_patt_ix, mut last_starstar_path_ix) = (None, 0);
+
+    while path_ix < path_parts.len() {
+        match pattern_parts.get(patt_ix).copied() {
+            Some("**") => {
+                last_starstar_patt_ix = Some(patt_ix);
+                last_starstar_path_ix = path_ix;
+                patt_ix += 1;
+            }
+            Some("*") => {
+                path_ix += 1;
+                patt_ix += 1;
+            }
+            Some(literal) if literal == path_parts[path_ix] => {
+                path_ix += 1;
+                patt_ix += 1;
+            }
+            _ => {
+                if let Some(starstart_patt_ix) = last_starstar_patt_ix {
+                    // Backtrack to the last occurence of "**"
+                    last_starstar_path_ix += 1;
+                    path_ix = last_starstar_path_ix;
+                    patt_ix = starstart_patt_ix + 1;
+                } else {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Match "**" at the end of the pattern
+    while let Some("**") = pattern_parts.get(patt_ix).copied() {
+        patt_ix += 1;
+    }
+
+    patt_ix == pattern_parts.len()
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Log2Header {
     pub(crate) record_count: i64,
@@ -418,7 +461,7 @@ mod tests {
     use tokio_util::compat::TokioAsyncReadCompatExt;
 
     use crate::journalentry::JournalEntry;
-    use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, Log2Reader};
+    use crate::journalrw::{matches_path_pattern, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 
     #[tokio::test]
     async fn read_file_journal() {
@@ -491,5 +534,14 @@ mod tests {
             )
             .collect::<Result<Vec<_>,_>>().unwrap();
         println!("{res:?}");
+    }
+
+    #[test]
+    fn path_pattern_match() {
+        assert!(matches_path_pattern("foo/bar/x/bar/baz", "foo/**/bar/baz"));
+        assert!(matches_path_pattern("foo/a/b/c/bar/baz", "foo/**/bar/baz"));
+        assert!(matches_path_pattern("foo/bar/baz", "foo/**/bar/baz"));
+        assert!(!matches_path_pattern("foo/bar/x/baz", "foo/**/bar/baz"));
+        assert!(!matches_path_pattern("foo/bar/x/bar", "foo/**/bar/baz"));
     }
 }
