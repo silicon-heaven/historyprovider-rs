@@ -120,7 +120,9 @@ struct SyncSiteLogger {
 impl SyncSiteLogger {
     fn new(site: impl Into<String>, logger_tx: UnboundedSender<LogEvent>) -> Self {
         let site = site.into();
-        logger_tx.unbounded_send(LogEvent::Reset { site: site.clone() });
+        logger_tx
+            .unbounded_send(LogEvent::Reset { site: site.clone() })
+            .unwrap_or_else(|e| log::error!("Couldn't send Reset log event throught the channel: {e}"));
         Self {
             site,
             logger_tx,
@@ -142,7 +144,9 @@ impl SyncLogger for SyncSiteLogger {
             log::Level::Debug => log::debug!("{log_msg}"),
             log::Level::Trace => log::trace!("{log_msg}"),
         }
-        self.logger_tx.unbounded_send(LogEvent::Append { site: self.site.clone(), message: log_msg });
+        self.logger_tx
+            .unbounded_send(LogEvent::Append { site: self.site.clone(), message: log_msg })
+            .unwrap_or_else(|e| log::error!("Couldn't send a message throught the channel: {e}"));
     }
 }
 
