@@ -10,6 +10,8 @@ mod tree;
 mod sync;
 mod journalentry;
 mod journalrw;
+mod provisionallog;
+mod util;
 
 fn default_journal_dir() -> String {
     "/tmp/hp-rs/shvjournal".into()
@@ -38,7 +40,8 @@ struct State {
     sync_cmd_tx: UnboundedSender<sync::SyncCommand>,
 }
 
-pub(crate) type ClientCommandSender = shvclient::ClientCommandSender<State>;
+type ClientCommandSender = shvclient::ClientCommandSender<State>;
+type Subscriber = shvclient::client::Subscriber<State>;
 
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
     info!("Setting up journal dir: {}", &hp_config.journal_dir);
