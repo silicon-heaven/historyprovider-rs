@@ -22,6 +22,7 @@ use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
+use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, State};
 
 #[derive(Default)]
@@ -343,28 +344,6 @@ async fn sync_file(
     Ok(())
 }
 
-async fn get_files(dir_path: impl AsRef<Path>, file_filter_fn: impl Fn(&DirEntry) -> bool) -> Result<Vec<DirEntry>, String> {
-    let dir_path = dir_path.as_ref();
-    let journal_dir = ReadDirStream::new(tokio::fs::read_dir(dir_path)
-        .await
-        .map_err(|e|
-            format!("Cannot read journal directory at {}: {}", dir_path.to_string_lossy(), e)
-        )?
-    );
-    journal_dir.try_filter_map(async |entry| {
-        Ok(entry
-            .metadata()
-            .await?
-            .is_file()
-            .then(|| file_filter_fn(&entry).then_some(entry))
-            .flatten()
-        )
-    })
-    .try_collect::<Vec<_>>()
-    .await
-    .map_err(|e| format!("Cannot read content of the journal directory {}: {}", dir_path.to_string_lossy(), e))
-}
-
 async fn sync_site_legacy(
     site_path: impl AsRef<str>,
     getlog_path: impl AsRef<str>,
@@ -384,7 +363,6 @@ async fn sync_site_legacy(
         .map_err(|e| format!("Cannot create journal directory at {}: {e}", local_journal_path.to_string_lossy()))?;
 
     // Get the newest file if any
-    let is_log2_file = |entry: &DirEntry| entry.file_name().to_str().is_some_and(|file_name| file_name.ends_with(".log2"));
     let mut log_files = get_files(&local_journal_path, is_log2_file).await?;
     log_files.sort_by_key(|entry| entry.file_name());
 
