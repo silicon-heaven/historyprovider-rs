@@ -172,14 +172,18 @@ pub(crate) async fn provisional_log_task(
                     let res = match tokio::fs::File::open(&provisional_log_path).await {
                         Ok(file) => {
                             let mut reader = JournalReaderLog2::new(BufReader::new(file.compat())).enumerate();
-                            let mut res = Vec::new();
-                            while let Some((entry_no, journal_entry_res)) = reader.next().await {
-                                match journal_entry_res {
-                                    Ok(journal_entry) => res.push(journal_entry),
-                                    Err(err) => warn!("Invalid journal entry no. {entry_no} in provisional log at {log_path}: {err}", log_path = provisional_log_path.to_string_lossy()),
-                                }
-                            }
-                            res
+                            reader
+                                .filter_map(|(entry_no, entry_res)| {
+                                    let entry = entry_res.inspect_err(|err|
+                                        warn!("Invalid journal entry no. {entry_no} in provisional log at {log_path}: {err}",
+                                            log_path = provisional_log_path.to_string_lossy()
+                                        )
+                                    )
+                                    .ok();
+                                    async { entry }
+                                })
+                                .collect::<Vec<_>>()
+                                .await
                         }
                         Err(err) => {
                             if err.kind() != std::io::ErrorKind::NotFound {
