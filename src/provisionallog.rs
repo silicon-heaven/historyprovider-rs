@@ -7,7 +7,9 @@ use futures::{select, StreamExt};
 use log::{debug, error, info, warn};
 use shvclient::client::ShvApiVersion;
 use shvclient::{AppState, ClientEventsReceiver};
-use shvrpc::join_path;
+use shvproto::{DateTime, RpcValue};
+use shvrpc::{join_path, RpcMessageMetaTags};
+use shvrpc::rpcframe::RpcFrame;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::journalentry::JournalEntry;
@@ -201,5 +203,48 @@ pub(crate) async fn provisional_log_task(
             }
             complete => break,
         }
+    }
+}
+
+struct DataChange {
+    value: RpcValue,
+    date_time: DateTime,
+    short_time: Option<i64>,
+    value_flags: Option<u64>,
+}
+
+impl From<&RpcValue> for DataChange {
+    fn from(value: &RpcValue) -> Self {
+        todo!()
+    }
+}
+
+impl DataChange {
+    fn is_spontaneous(&self) -> bool {
+    }
+
+    fn is_provisional(&self) -> bool {
+    }
+
+    fn epoch_msec(&self) -> u64 {
+    }
+}
+
+async fn process_notification(rpc_frame: &RpcFrame) -> Result<JournalEntry, String>
+{
+    let msg = rpc_frame.to_rpcmesage().map_err(|e| e.to_string())?;
+    let signal = msg.method().unwrap_or_default().to_string();
+    let path = msg.shv_path().unwrap_or_default().to_string();
+    JournalEntry {
+        epoch_msec: shvproto::DateTime::now().epoch_msec(),
+        path,
+        signal,
+        source: todo!(),
+        value: todo!(),
+        access_level: todo!(),
+        short_time: todo!(),
+        user_id: todo!(),
+        repeat: todo!(),
+        provisional: todo!(),
     }
 }
