@@ -370,6 +370,7 @@ pub(crate) struct Log2Header {
 
 impl Log2Header {
     fn from_meta(meta: shvproto::MetaMap) -> Result<Self, Box<dyn Error>> {
+        let current_datetime = shvproto::DateTime::now();
         let record_count = match meta.get("recordCount").map(|v| &v.value) {
             Some(shvproto::Value::Int(record_count)) => *record_count,
             Some(v) => return Err(format!("Invalid `recordCount` type: {}", v.type_name()).into()),
@@ -387,21 +388,18 @@ impl Log2Header {
         };
         let date_time = match meta.get("dateTime").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(date_time)) => *date_time,
-            Some(shvproto::Value::Null) => shvproto::DateTime::now(),
+            Some(shvproto::Value::Null) | None => current_datetime,
             Some(v) => return Err(format!("Invalid `dateTime` type: {}", v.type_name()).into()),
-            None => return Err("Missing `dateTime` key".into()),
         };
         let since = match meta.get("since").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(since)) => *since,
-            Some(shvproto::Value::Null) => shvproto::DateTime::now(),
+            Some(shvproto::Value::Null) | None => current_datetime,
             Some(v) => return Err(format!("Invalid `since` type: {}", v.type_name()).into()),
-            None => return Err("Missing `since` key".into()),
         };
         let until = match meta.get("until").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(until)) => *until,
-            Some(shvproto::Value::Null) => shvproto::DateTime::now(),
+            Some(shvproto::Value::Null) | None => current_datetime,
             Some(v) => return Err(format!("Invalid `until` type: {}", v.type_name()).into()),
-            None => return Err("Missing `until` key".into()),
         };
         let with_paths_dict = match meta.get("withPathsDict").map(|v| &v.value) {
             Some(shvproto::Value::Bool(val)) => *val,
