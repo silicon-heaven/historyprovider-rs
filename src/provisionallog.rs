@@ -73,14 +73,16 @@ pub(crate) async fn provisional_log_task(
                     );
                 }
                 ProvisionalLogCommand::TrimLog { site } => {
-                    info!("Trim provisional log start");
+                    info!("Trim provisional log start, site: {site}");
                     // Get the latest entry from the site log and remove all entries up to that
                     // entry from the provisional log
                     let provisional_log_path = Path::new(&app_state.config.journal_dir).join(&site).join("provisionallog");
                     let provisional_log_file = match tokio::fs::File::open(&provisional_log_path).await {
                         Ok(file) => file,
                         Err(err) => {
-                            if err.kind() != std::io::ErrorKind::NotFound {
+                            if err.kind() == std::io::ErrorKind::NotFound {
+                                info!("Trim provisional log done, no provisional log file for the site");
+                            } else {
                                 error!("Cannot trim provisional log. Cannot open file {file_path}: {err}", file_path = provisional_log_path.to_string_lossy());
                             }
                             continue;
@@ -98,13 +100,18 @@ pub(crate) async fn provisional_log_task(
                         log_files.sort_by_key(|entry| entry.file_name());
                         match log_files.last() {
                             Some(newest_log_file) => newest_log_file.path(),
-                            None => continue,
+                            None => {
+                                info!("Trim provisional log done, no synced files");
+                                continue
+                            }
                         }
                     };
                     let newest_log_file = match tokio::fs::File::open(&newest_log_path).await {
                         Ok(file) => file,
                         Err(err) => {
-                            if err.kind() != std::io::ErrorKind::NotFound {
+                            if err.kind() == std::io::ErrorKind::NotFound {
+                                info!("Trim provisional log done, no synced files");
+                            } else {
                                 error!("Cannot trim provisional log. Cannot open file {file_path}: {err}",
                                     file_path = newest_log_path.to_string_lossy()
                                 );
@@ -116,7 +123,7 @@ pub(crate) async fn provisional_log_task(
                     // Get the latest entry from the latest log
                     let reader = JournalReaderLog2::new(BufReader::new(newest_log_file.compat()));
                     let Some(latest_entry) = reader.fold(None, |_, entry| async { entry.ok() }).await else {
-                        info!("Trim provisional log done - not any synced file");
+                        info!("Trim provisional log done, no journal entries in synced files");
                         continue;
                     };
 
