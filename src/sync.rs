@@ -397,13 +397,17 @@ async fn sync_site_legacy(
                     .map_err(|err| format!("Cannot open journal file {}: {}", newest_file_path.to_string_lossy(), err))?;
                 let entries = JournalReaderLog2::new(BufReader::new(file.compat()));
                 let entries = entries
-                    .filter_map(|x| {
-                        let x = x
-                            .map_err(to_string)
+                    .filter_map(|entry| {
+                        let entry = entry
                             .inspect_err(|err|
-                                sync_logger.log(log::Level::Warn, format!("Skipping wrong journal entry in {}: {}", newest_file_path.to_string_lossy(), err))
-                            );
-                        async { x.ok() }
+                                sync_logger.log(
+                                    log::Level::Warn,
+                                    format!("Skipping wrong journal entry in {}: {err}",
+                                        newest_file_path.to_string_lossy())
+                                )
+                            )
+                            .ok();
+                        async { entry }
                     })
                     .collect::<Vec<_>>()
                     .await;
