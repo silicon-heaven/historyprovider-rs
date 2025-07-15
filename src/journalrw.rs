@@ -103,25 +103,25 @@ where
     }
 
     pub async fn append_with_time(&mut self, msec: i64, orig_time: i64, entry: &JournalEntry) -> Result<(), std::io::Error> {
-        let line = {
-            let mut fields = vec![];
-            fields.push(shvproto::DateTime::from_epoch_msec(msec).to_iso_string());
-            fields.push(if orig_time == msec { "".into() } else { shvproto::DateTime::from_epoch_msec(orig_time).to_iso_string() });
-            fields.push(entry.path.clone());
-            fields.push(entry.value.to_cpon());
-            fields.push(if entry.short_time >= 0 { entry.short_time.to_string() } else { "".into() });
-            fields.push(entry.signal.clone());
-            let mut value_flags = 0u32;
-            if !entry.repeat {
-                value_flags |= 1 << VALUE_FLAG_SPONTANEOUS_BIT;
-            }
-            if entry.provisional {
-                value_flags |= 1 << VALUE_FLAG_PROVISIONAL_BIT;
-            }
-            fields.push(value_flags.to_string());
-            fields.push(entry.user_id.clone().unwrap_or_default());
-            fields.join(JOURNAL_ENTRIES_SEPARATOR) + "\n"
-        };
+        let line = [
+            shvproto::DateTime::from_epoch_msec(msec).to_iso_string(),
+            if orig_time == msec { "".into() } else { shvproto::DateTime::from_epoch_msec(orig_time).to_iso_string() },
+            entry.path.clone(),
+            entry.value.to_cpon(),
+            if entry.short_time >= 0 { entry.short_time.to_string() } else { "".into() },
+            entry.signal.clone(),
+            {
+                let mut value_flags = 0u32;
+                if !entry.repeat {
+                    value_flags |= 1 << VALUE_FLAG_SPONTANEOUS_BIT;
+                }
+                if entry.provisional {
+                    value_flags |= 1 << VALUE_FLAG_PROVISIONAL_BIT;
+                }
+                value_flags.to_string()
+            },
+            entry.user_id.clone().unwrap_or_default(),
+        ].join(JOURNAL_ENTRIES_SEPARATOR) + "\n";
         self.writer.write_all(line.as_bytes()).await?;
         self.writer.flush().await
     }
