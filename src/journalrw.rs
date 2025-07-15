@@ -1,4 +1,3 @@
-
 use futures::{AsyncWrite, AsyncWriteExt, Stream};
 use futures::io::{AsyncBufRead, AsyncBufReadExt, Lines};
 use shvclient::clientnode::{METH_GET, SIG_CHNG};
@@ -239,8 +238,8 @@ pub(crate) struct GetLog2Params {
 
 const RECORD_COUNT_LIMIT_DEFAULT: i64 = 10000;
 
-impl GetLog2Params {
-    pub(crate) fn new() -> Self {
+impl Default for GetLog2Params {
+    fn default() -> Self {
         Self {
             since: None,
             until: None,
@@ -310,6 +309,7 @@ impl TryFrom<&RpcValue> for GetLog2Params {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn matches_path_pattern(path: impl AsRef<str>, pattern: impl AsRef<str>) -> bool {
     let path_parts: Vec<&str> = path.as_ref().split('/').collect();
     let pattern_parts: Vec<&str> = pattern.as_ref().split('/').collect();
@@ -353,6 +353,7 @@ pub(crate) fn matches_path_pattern(path: impl AsRef<str>, pattern: impl AsRef<st
     patt_ix == pattern_parts.len()
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct Log2Header {
     pub(crate) record_count: i64,
