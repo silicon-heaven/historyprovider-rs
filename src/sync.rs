@@ -1,18 +1,25 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures::channel::mpsc::UnboundedReceiver;
-use futures::StreamExt;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::io::{BufReader, BufWriter};
+use futures::{StreamExt, TryStreamExt};
 use shvclient::client::RpcCall;
 use shvclient::clientnode::METH_DIR;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::join_path;
 use time::format_description::well_known::Iso8601;
+use tokio::fs::DirEntry;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
+use tokio_stream::wrappers::ReadDirStream;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
+use crate::journalentry::JournalEntry;
+use crate::journalrw::{GetLog2Params, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::{ClientCommandSender, State};
@@ -96,28 +103,35 @@ fn to_string(v: impl ToString) -> String {
 }
 
 trait SyncLogger: Clone {
-    async fn log(&self, level: log::Level, msg: impl AsRef<str>);
+    fn log(&self, level: log::Level, msg: impl AsRef<str>);
+}
+
+enum LogEvent {
+    Reset { site: String },
+    Append { site: String, message: String },
 }
 
 #[derive(Clone)]
 struct SyncSiteLogger {
     site: String,
-    app_state: AppState<State>,
+    logger_tx: UnboundedSender<LogEvent>,
 }
 
 impl SyncSiteLogger {
-    async fn new(site: impl Into<String>, app_state: AppState<State>) -> Self {
+    fn new(site: impl Into<String>, logger_tx: UnboundedSender<LogEvent>) -> Self {
         let site = site.into();
-        app_state.sync_info.reset(site.clone()).await;
+        logger_tx
+            .unbounded_send(LogEvent::Reset { site: site.clone() })
+            .unwrap_or_else(|e| log::error!("Couldn't send Reset log event throught the channel: {e}"));
         Self {
             site,
-            app_state,
+            logger_tx,
         }
     }
 }
 
 impl SyncLogger for SyncSiteLogger {
-    async fn log(&self, level: log::Level, msg: impl AsRef<str>) {
+    fn log(&self, level: log::Level, msg: impl AsRef<str>) {
         let msg = format!("{} {}",
             time::OffsetDateTime::now_utc().format(&Iso8601::DATE_TIME_OFFSET).unwrap_or_else(|e| e.to_string()),
             msg.as_ref()
@@ -130,7 +144,9 @@ impl SyncLogger for SyncSiteLogger {
             log::Level::Debug => log::debug!("{log_msg}"),
             log::Level::Trace => log::trace!("{log_msg}"),
         }
-        self.app_state.sync_info.append(&self.site, &msg).await;
+        self.logger_tx
+            .unbounded_send(LogEvent::Append { site: self.site.clone(), message: log_msg })
+            .unwrap_or_else(|e| log::error!("Couldn't send a message throught the channel: {e}"));
     }
 }
 
@@ -144,26 +160,29 @@ async fn sync_site(
 ) -> Result<(), String>
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
-    // app_state.sync_info.reset(site_path).await;
-
-    let local_journal_path = join_path!(&app_state.config.journal_dir, site_path);
-    // log_sync!(app_state, site_path, format!("Start syncing from {} to {}, download chunk size: {}", remote_journal_path, local_journal_path, download_chunk_size));
-    sync_logger.log(log::Level::Info, format!("start syncing from {} to {}, download chunk size: {}", remote_journal_path, local_journal_path, download_chunk_size)).await;
+    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    sync_logger.log(
+        log::Level::Info,
+        format!("start syncing from {} to {}, download chunk size: {}",
+            remote_journal_path,
+            local_journal_path.to_string_lossy(),
+            download_chunk_size
+        )
+    );
     tokio::fs::create_dir_all(&local_journal_path)
         .await
-        .map_err(|e| format!("Cannot create journal directory at {local_journal_path}: {e}"))?;
+        .map_err(|e| format!("Cannot create journal directory at {}: {e}", local_journal_path.to_string_lossy()))?;
 
     let file_list: Vec<LsFilesEntry> = RpcCall::new(remote_journal_path, "lsfiles")
         .exec(&client_cmd_tx)
         .await
         .map_err(to_string)?;
-    log::trace!("  files: [{}]", file_list.iter().map(LsFilesEntry::to_string).collect::<Vec<_>>().join(","));
 
     let files_to_sync = futures::stream::iter(
             file_list.iter().filter(|f| matches!(f.ftype, FileType::File) && f.name.ends_with(".log2"))
         )
         .filter_map(|remote_file| async {
-            let local_file_path = join_path!(&local_journal_path, &remote_file.name);
+            let local_file_path = local_journal_path.join(&remote_file.name);
             match tokio::fs::metadata(&local_file_path).await {
                 Ok(local_file) if local_file.is_file() => {
                     let local_size = local_file.len() as i64;
@@ -175,7 +194,7 @@ async fn sync_site(
                                 &remote_file.name,
                                 remote_file.size,
                                 local_size)
-                            ).await;
+                            );
                             local_size
                         }
                         Ordering::Greater => {
@@ -185,11 +204,11 @@ async fn sync_site(
                                 &remote_file.name,
                                 remote_file.size,
                                 local_size)
-                            ).await;
+                            );
                             0
                         }
                         Ordering::Equal => {
-                            sync_logger.log(log::Level::Info, format!("{}: up-to-date", &remote_file.name)).await;
+                            sync_logger.log(log::Level::Info, format!("{}: up-to-date", &remote_file.name));
                             return None;
                         }
                     };
@@ -203,7 +222,7 @@ async fn sync_site(
                         &remote_file.name,
                         remote_file.size,
                         )
-                    ).await;
+                    );
                     Some((remote_file.name.clone(), 0, remote_file.size))
                 }
                 Err(err) => {
@@ -214,7 +233,7 @@ async fn sync_site(
                         remote_file.size,
                         err,
                         )
-                    ).await;
+                    );
                     Some((remote_file.name.clone(), 0, remote_file.size))
                 }
             }
@@ -230,7 +249,7 @@ async fn sync_site(
         sync_file(
             client_cmd_tx.clone(),
             join_path!(remote_journal_path, &file_name),
-            join_path!(local_journal_path, &file_name),
+            local_journal_path.join(&file_name),
             download_chunk_size,
             sync_offset,
             file_size,
@@ -250,7 +269,7 @@ async fn sync_site(
 async fn sync_file(
     client_cmd_tx: ClientCommandSender,
     file_path_remote: impl AsRef<str>,
-    file_path_local: impl AsRef<str>,
+    file_path_local: impl AsRef<Path>,
     download_chunk_size: i64,
     sync_offset: i64,
     file_size: i64,
@@ -265,7 +284,7 @@ async fn sync_file(
             file_path_remote,
             sync_offset,
             file_size,
-    )).await;
+    ));
 
     let mut local_file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -273,7 +292,7 @@ async fn sync_file(
         .write(true)
         .open(file_path_local)
         .await
-        .map_err(|e| format!("Cannot open {file_path_local}: {e}"))?;
+        .map_err(|e| format!("Cannot open {}: {e}", file_path_local.to_string_lossy()))?;
 
     enum ReadApi { List, Map }
     let read_api = RpcCall::new(file_path_remote, METH_DIR)
@@ -306,7 +325,7 @@ async fn sync_file(
 
         local_file.write_all(&chunk)
           .await
-          .map_err(|e| format!("Cannot write to {file_path_local}: {e}"))?;
+          .map_err(|e| format!("Cannot write to {}: {e}", file_path_local.to_string_lossy()))?;
 
         let chunk_len = chunk.len() as i64;
         sync_offset += chunk_len;
@@ -318,9 +337,247 @@ async fn sync_file(
                 chunk_len,
                 remaining_bytes,
                 (sync_offset as f64 / file_size as f64) * 100.0,
-        )).await;
+        ));
     }
-    sync_logger.log(log::Level::Info, format!("{}: successfully synced", file_path_remote)).await;
+    sync_logger.log(log::Level::Info, format!("{}: successfully synced", file_path_remote));
+    Ok(())
+}
+
+async fn get_files(dir_path: impl AsRef<Path>, file_filter_fn: impl Fn(&DirEntry) -> bool) -> Result<Vec<DirEntry>, String> {
+    let dir_path = dir_path.as_ref();
+    let journal_dir = ReadDirStream::new(tokio::fs::read_dir(dir_path)
+        .await
+        .map_err(|e|
+            format!("Cannot read journal directory at {}: {}", dir_path.to_string_lossy(), e)
+        )?
+    );
+    journal_dir.try_filter_map(async |entry| {
+        Ok(entry
+            .metadata()
+            .await?
+            .is_file()
+            .then(|| file_filter_fn(&entry).then_some(entry))
+            .flatten()
+        )
+    })
+    .try_collect::<Vec<_>>()
+    .await
+    .map_err(|e| format!("Cannot read content of the journal directory {}: {}", dir_path.to_string_lossy(), e))
+}
+
+async fn sync_site_legacy(
+    site_path: impl AsRef<str>,
+    getlog_path: impl AsRef<str>,
+    client_cmd_tx: ClientCommandSender,
+    app_state: AppState<State>,
+    sync_logger: impl SyncLogger,
+) -> Result<(), String>
+{
+    let (site_path, getlog_path) = (site_path.as_ref(), getlog_path.as_ref());
+    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    sync_logger.log(
+        log::Level::Info,
+        format!("start syncing from {} to {} via getLog", getlog_path, local_journal_path.to_string_lossy())
+    );
+    tokio::fs::create_dir_all(&local_journal_path)
+        .await
+        .map_err(|e| format!("Cannot create journal directory at {}: {e}", local_journal_path.to_string_lossy()))?;
+
+    // Get the newest file if any
+    let is_log2_file = |entry: &DirEntry| entry.file_name().to_str().is_some_and(|file_name| file_name.ends_with(".log2"));
+    let mut log_files = get_files(&local_journal_path, is_log2_file).await?;
+    log_files.sort_by_key(|entry| entry.file_name());
+
+    let newest_log = loop {
+        match log_files.last() {
+            Some(newest_file) => {
+                let newest_file_path = newest_file.path();
+                let file = tokio::fs::File::open(std::path::Path::new(&newest_file_path))
+                    .await
+                    .map_err(|err| format!("Cannot open journal file {}: {}", newest_file_path.to_string_lossy(), err))?;
+                let entries = JournalReaderLog2::new(BufReader::new(file.compat()));
+                let entries = entries
+                    .filter_map(|entry| {
+                        let entry = entry
+                            .inspect_err(|err|
+                                sync_logger.log(
+                                    log::Level::Warn,
+                                    format!("Skipping wrong journal entry in {}: {err}",
+                                        newest_file_path.to_string_lossy())
+                                )
+                            )
+                            .ok();
+                        async { entry }
+                    })
+                    .collect::<Vec<_>>()
+                    .await;
+                if !entries.is_empty() {
+                    break Some((newest_file_path, entries));
+                }
+                // Remove the file if it doesn't contain any valid entries
+                tokio::fs::remove_file(&newest_file_path)
+                    .await
+                    .map_err(|err| format!("Cannot remove empty journal file {}: {}", newest_file_path.to_string_lossy(), err))?;
+            }
+            None => break None,
+        }
+    };
+
+    const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100000;
+    const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
+    const RECORD_COUNT_LIMIT: i64 = 10000;
+
+    fn msec_to_log2_filename(msec: i64) -> String {
+        shvproto::DateTime::from_epoch_msec(msec)
+            .to_chrono_datetime()
+            .format("%Y-%m-%dT%H:%M:%S.log2")
+            .to_string()
+    }
+
+    let (mut getlog_params, mut log_file_path, mut log_file_entries) = match newest_log {
+        Some((newest_log_file, newest_log_entries)) => {
+            let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
+            let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
+            if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
+                // Start with a new file if it already contains too many records
+                sync_logger.log(
+                    log::Level::Info,
+                    format!("sync will create a new file since {}", since.to_iso_string())
+                );
+                let params = GetLog2Params {
+                    since: Some(since),
+                    until: None,
+                    path_pattern: None,
+                    with_paths_dict: true,
+                    with_snapshot: true,
+                    record_count_limit: RECORD_COUNT_LIMIT,
+                };
+                (params, None, Vec::new())
+            } else {
+                sync_logger.log(
+                    log::Level::Info,
+                    format!("sync will append to {}", newest_log_file.to_string_lossy())
+                );
+                let params = GetLog2Params {
+                    since: Some(since),
+                    until: None,
+                    path_pattern: None,
+                    with_paths_dict: true,
+                    with_snapshot: false,
+                    record_count_limit: RECORD_COUNT_LIMIT,
+                };
+                (params, Some(newest_log_file), newest_log_entries)
+            }
+        },
+        None => {
+            let since = shvproto::DateTime::now().add_days(-GETLOG_SINCE_DAYS_DEFAULT);
+            sync_logger.log(
+                log::Level::Info,
+                format!("sync to a new journal directory since {}", since.to_iso_string())
+            );
+            let params = GetLog2Params {
+                since: Some(since),
+                until: None,
+                path_pattern: None,
+                with_paths_dict: true,
+                with_snapshot: true,
+                record_count_limit: RECORD_COUNT_LIMIT,
+            };
+            (params, None, Vec::new())
+        }
+    };
+
+    enum JournalPath {
+        Dir(PathBuf),
+        File(PathBuf),
+    }
+    async fn write_journal(journal_path: JournalPath, log_entries: &Vec<JournalEntry>, sync_logger: &impl SyncLogger) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(first_entry_msec) = log_entries.first().map(|entry| entry.epoch_msec) else {
+            return Ok(());
+        };
+        let journal_file_path = match journal_path {
+            JournalPath::Dir(mut path) => {
+                path.push(msec_to_log2_filename(first_entry_msec));
+                path
+            }
+            JournalPath::File(path) => path,
+        };
+        sync_logger.log(log::Level::Info, format!("Write {} journal entries to {}", log_entries.len(), journal_file_path.to_string_lossy()));
+        let journal_file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&journal_file_path)
+            .await
+            .map_err(|err| format!("Cannot open journal file {} for writing: {}", journal_file_path.to_string_lossy(), err))?;
+        let mut writer = JournalWriterLog2::new(BufWriter::new(journal_file.compat()));
+        for entry in log_entries {
+            writer.append(entry)
+                .await
+                .map_err(|err| format!("Cannot append to journal file {}: {}", journal_file_path.to_string_lossy(), err))?;
+        }
+        Ok(())
+    }
+
+    loop {
+        sync_logger.log(
+            log::Level::Info,
+            format!("Calling getLog, target: {}, since: {:?}, snapshot: {}",
+                local_journal_path.to_string_lossy(),
+                getlog_params.since.map(|dt| dt.to_iso_string()), getlog_params.with_snapshot)
+        );
+        let log: RpcValue = RpcCall::new(getlog_path, "getLog")
+            .param(getlog_params.clone())
+            .timeout(std::time::Duration::from_secs(60))
+            .exec(&client_cmd_tx)
+            .await
+            .map_err(to_string)?;
+
+        let log_rd = Log2Reader::new(log).map_err(to_string)?;
+        let mut log_entries = log_rd.filter_map(Result::ok).collect::<Vec<_>>();
+
+        let last_entry_ms = log_entries
+            .last()
+            .map(|entry| entry.epoch_msec)
+            .and_then(|last_entry_ms| {
+                // Skip all entries from the last ms, and get them on the next getLog call
+                log_entries.retain(|entry| entry.epoch_msec != last_entry_ms);
+                (!log_entries.is_empty()).then_some(last_entry_ms)
+            });
+
+
+        let Some(last_entry_ms) = last_entry_ms else {
+            write_journal(log_file_path
+                .map_or_else(
+                    || JournalPath::Dir(local_journal_path.clone()),
+                    |file_path| JournalPath::File(file_path)
+                ),
+                &log_file_entries,
+                &sync_logger)
+                .await
+                .map_err(to_string)?;
+            // No more data, the sync is finished
+            break;
+        };
+
+        log_file_entries.append(&mut log_entries);
+
+        getlog_params.since = Some(shvproto::DateTime::from_epoch_msec(last_entry_ms));
+
+        if log_file_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
+            write_journal(log_file_path
+                .map_or_else(|| JournalPath::Dir(local_journal_path.clone()), |file_path| JournalPath::File(file_path)),
+                &log_file_entries,
+                &sync_logger)
+                .await
+                .map_err(to_string)?;
+            // Start a new file
+            log_file_entries.clear();
+            log_file_path = None;
+            getlog_params.with_snapshot = true;
+        } else {
+            getlog_params.with_snapshot = false;
+        }
+    }
     Ok(())
 }
 
@@ -333,6 +590,21 @@ pub(crate) async fn sync_task(
     mut sync_cmd_rx: UnboundedReceiver<SyncCommand>,
 )
 {
+
+    let (logger_tx, mut logger_rx) = futures::channel::mpsc::unbounded();
+    let logger_task = tokio::task::spawn({
+        let app_state = app_state.clone();
+        async move {
+            while let Some(log_event) = logger_rx.next().await {
+                match log_event {
+                    LogEvent::Reset { site } =>
+                        app_state.sync_info.reset(site).await,
+                    LogEvent::Append { site, message } =>
+                        app_state.sync_info.append(site, message).await,
+                }
+            }
+        }
+    });
 
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {
@@ -353,19 +625,20 @@ pub(crate) async fn sync_task(
                         .acquire_owned()
                         .await
                         .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
+                    let client_cmd_tx = client_cmd_tx.clone();
+                    let site_path = site_path.clone();
+                    let app_state = app_state.clone();
+                    let logger_tx = logger_tx.clone();
                     match sub_hp {
                         SubHpInfo::Normal { sync_path, download_chunk_size } => {
-                            let site_suffix = shvrpc::util::strip_prefix_path(site_path, &site_info.sub_hp)
+                            let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
                                 .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
                             let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
-                            let client_cmd_tx = client_cmd_tx.clone();
-                            let site_path = site_path.clone();
                             let download_chunk_size = *download_chunk_size;
-                            let app_state = app_state.clone();
                             let sync_task = tokio::spawn(async move {
-                                let sync_logger = SyncSiteLogger::new(&site_path, app_state.clone()).await;
+                                let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                                 let sync_result = sync_site(
-                                    &site_path,
+                                    site_path,
                                     remote_journal_path,
                                     download_chunk_size,
                                     client_cmd_tx,
@@ -373,16 +646,33 @@ pub(crate) async fn sync_task(
                                     sync_logger.clone()
                                 ).await;
                                 if let Err(err) = sync_result {
-                                    sync_logger.log(log::Level::Error, format!("site sync error: {err}")).await;
+                                    sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
                                 }
-                                sync_logger.log(log::Level::Info, "syncing done").await;
+                                sync_logger.log(log::Level::Info, "syncing done");
                                 drop(permit);
                             });
                             sync_tasks.push(sync_task);
                         }
                         SubHpInfo::Legacy { getlog_path } => {
-                            log::info!("Syncing {site_path} via getLog from {getlog_path}");
-                            // TODO
+                            let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
+                                .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
+                            let remote_getlog_path = join_path!("shv", &site_info.sub_hp, getlog_path, site_suffix);
+                            let sync_task = tokio::spawn(async move {
+                                let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
+                                let sync_result = sync_site_legacy(
+                                    site_path,
+                                    remote_getlog_path,
+                                    client_cmd_tx,
+                                    app_state,
+                                    sync_logger.clone()
+                                ).await;
+                                if let Err(err) = sync_result {
+                                    sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
+                                }
+                                sync_logger.log(log::Level::Info, "syncing done");
+                                drop(permit);
+                            });
+                            sync_tasks.push(sync_task);
                         }
                         SubHpInfo::PushLog => {
                             // TODO
@@ -394,4 +684,5 @@ pub(crate) async fn sync_task(
             }
         }
     }
+    logger_task.abort();
 }

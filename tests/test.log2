@@ -1,0 +1,11 @@
+2025-04-28T11:51:14.300Z		system/plcDisconnected	false		chng	1
+2025-04-28T11:51:14.300Z		system/status	2u		chng	1
+2025-04-28T11:51:14.300Z		system/info/tempCPU	48		chng	1
+2025-04-28T11:51:14.300Z		system/PLCmodules/errorPLCModuleAddress	""		chng	1
+2025-04-28T11:51:14.300Z		system/superiorSystem/status	2u		chng	1
+2025-04-28T11:51:14.300Z		devices/track/Track01/vehicleCount	0		chng	1
+2025-04-28T11:51:14.300Z		devices/zone/Zone/gate/G01/status	0u		chng	1
+2025-04-28T11:51:14.300Z		devices/zone/Zone/gate/G01/requestMemory	"timeCreated,vehicleId,route,lineNumber,requestId\n"		chng	1
+2025-04-28T11:51:14.300Z		devices/signal/MATRIX01/data	"[{\"text\":\"1\"},{\"text\":\"2\"},{\"text\":\"3\",\"color\":\"#ff0\"}]"		chng	1
+2025-04-28T11:51:14.300Z		devices/gpio/GPIO01/inputs	0u		chng	1
+2025-04-28T11:51:19.200Z		system/status	3u		chng	2
