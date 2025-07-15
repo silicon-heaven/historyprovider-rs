@@ -464,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_file_journal() {
-        let file = File::open("test.log2").await.unwrap();
+        let file = File::open("tests/test.log2").await.unwrap();
         let mut reader = JournalReaderLog2::new(BufReader::new(file.compat()));
         while let Some(result) = reader.next().await {
             println!("{:?}", result.unwrap());
@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_log_2() {
-        let mut file = std::fs::File::open("log2.cpon").unwrap();
+        let mut file = std::fs::File::open("tests/log2.cpon").unwrap();
         let mut reader = CponReader::new(&mut file);
         let reader = Log2Reader::new(reader.read().unwrap()).unwrap();
         let epoch_ms_now = shvproto::DateTime::now().epoch_msec();
