@@ -27,7 +27,7 @@ fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error>> 
 
     let _up_time = parts_iter.next();
     let path = parts_iter.next().ok_or_else(|| format!("Missing path on line: {line}"))?.to_string();
-    let value = RpcValue::from_cpon(parts_iter.next().unwrap_or_default())?;
+    let value = RpcValue::from_cpon(parts_iter.next().ok_or_else(|| format!("Missing value on line: {line}"))?)?;
     let short_time = parts_iter.next().unwrap_or_default().parse().unwrap_or(-1);
     let domain = parts_iter.next();
     let value_flags = parts_iter.next().unwrap_or_default().parse().unwrap_or(0);
