@@ -462,6 +462,8 @@ mod tests {
     use crate::journalentry::JournalEntry;
     use crate::journalrw::{matches_path_pattern, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 
+    use super::parse_journal_entry_log2;
+
     #[tokio::test]
     async fn read_file_journal() {
         let file = File::open("tests/test.log2").await.unwrap();
@@ -542,5 +544,44 @@ mod tests {
         assert!(matches_path_pattern("foo/bar/baz", "foo/**/bar/baz"));
         assert!(!matches_path_pattern("foo/bar/x/baz", "foo/**/bar/baz"));
         assert!(!matches_path_pattern("foo/bar/x/bar", "foo/**/bar/baz"));
+    }
+
+    #[test]
+    fn parse_journal_entry_log2_variants() {
+        // All fields present
+        assert_eq!(parse_journal_entry_log2(
+                "2025-04-28T11:51:14.300Z		system/status	2u		chng	1").unwrap(),
+                JournalEntry {
+                    epoch_msec: shvproto::DateTime::from_iso_str("2025-04-28T11:51:14.300Z").unwrap().epoch_msec(),
+                    path: "system/status".into(),
+                    signal: "chng".into(),
+                    source: "get".into(),
+                    value: 2u64.into(),
+                    access_level: AccessLevel::Read as i32,
+                    short_time: -1,
+                    user_id: None,
+                    repeat: true,
+                    provisional: false,
+                }
+        );
+        // Optional fields missing
+        assert_eq!(parse_journal_entry_log2(
+                "2025-04-28T11:51:14.300Z		system/status	2u").unwrap(),
+                JournalEntry {
+                    epoch_msec: shvproto::DateTime::from_iso_str("2025-04-28T11:51:14.300Z").unwrap().epoch_msec(),
+                    path: "system/status".into(),
+                    signal: "chng".into(),
+                    source: "get".into(),
+                    value: 2u64.into(),
+                    access_level: AccessLevel::Read as i32,
+                    short_time: -1,
+                    user_id: None,
+                    repeat: true,
+                    provisional: false,
+                }
+        );
+        // Mandatory field missing
+        let line = "2025-04-28T11:51:14.300Z		system/status";
+        assert_eq!(parse_journal_entry_log2(line).unwrap_err().to_string(), format!("Missing value on line: {line}"));
     }
 }
