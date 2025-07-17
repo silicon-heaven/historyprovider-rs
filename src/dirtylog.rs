@@ -243,7 +243,8 @@ pub(crate) async fn dirty_log_task(
                 let entry = JournalEntry {
                     epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
                     path: property_path.to_string(),
-                    signal, source: Default::default(),
+                    signal,
+                    source: Default::default(),
                     value: data_change.value,
                     access_level: AccessLevel::Read as _,
                     short_time: data_change.short_time.unwrap_or(-1),
