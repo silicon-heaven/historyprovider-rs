@@ -27,9 +27,9 @@ pub struct HpConfig {
 impl HpConfig {
     pub fn load(config_file: impl AsRef<std::path::Path>) -> Result<Self, String> {
         let config = std::fs::read_to_string(config_file)
-            .map_err(|e| format!("Config file read error: {}", e))?;
+            .map_err(|e| format!("Config file read error: {e}"))?;
         serde_yaml_ng::from_str(&config)
-            .map_err(|e| format!("Config file format error: {}", e))
+            .map_err(|e| format!("Config file format error: {e}"))
     }
 }
 

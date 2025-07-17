@@ -76,7 +76,7 @@ pub(crate) async fn provisional_log_task(
 
                     debug!("Device subscriptions:\n{}", subscribers.iter()
                         .map(Subscriber::path_signal)
-                        .map(|(path, signal)| format!("{}:{}", path, signal))
+                        .map(|(path, signal)| format!("{path}:{signal}"))
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
@@ -240,7 +240,7 @@ pub(crate) async fn provisional_log_task(
                 let mut writer = JournalWriterLog2::new(provisional_log_file.compat());
                 let data_change = DataChange::from(param.clone());
                 let entry = JournalEntry {
-                    epoch_msec: data_change.date_time.unwrap_or_else(|| DateTime::now()).epoch_msec(),
+                    epoch_msec: data_change.date_time.unwrap_or_else(DateTime::now).epoch_msec(),
                     path: property_path.to_string(),
                     signal, source: Default::default(),
                     value: data_change.value,
