@@ -5,12 +5,15 @@ use shvclient::AppState;
 use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;
 
+use self::provisionallog::provisional_log_task;
+
 mod sites;
 mod tree;
 mod sync;
 mod journalentry;
 mod journalrw;
 mod provisionallog;
+mod datachange;
 mod util;
 
 fn default_journal_dir() -> String {
@@ -49,6 +52,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
 
     let (sync_cmd_tx, sync_cmd_rx) = unbounded();
+    let (provisionallog_cmd_tx, provisionallog_cmd_rx) = unbounded();
 
     let app_state = AppState::new(State {
         sites_data: RwLock::default(),
@@ -65,7 +69,8 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         .with_app_state(app_state.clone())
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
             tokio::spawn(sites::load_sites(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
-            tokio::spawn(sync::sync_task(client_cmd_tx, client_evt_rx, app_state, sync_cmd_rx));
+            tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
+            tokio::spawn(provisional_log_task(client_cmd_tx, client_evt_rx, app_state, provisionallog_cmd_rx));
         })
         .await
 }
