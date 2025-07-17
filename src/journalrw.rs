@@ -12,8 +12,8 @@ use crate::journalentry::JournalEntry;
 
 const JOURNAL_ENTRIES_SEPARATOR: &str = "\t";
 
-const VALUE_FLAG_SPONTANEOUS_BIT: i32 = 1;
-const VALUE_FLAG_PROVISIONAL_BIT: i32 = 2;
+pub(crate) const VALUE_FLAG_SPONTANEOUS_BIT: i32 = 1;
+pub(crate) const VALUE_FLAG_PROVISIONAL_BIT: i32 = 2;
 
 fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error>> {
     let parts: Vec<&str> = line.split(JOURNAL_ENTRIES_SEPARATOR).collect();
