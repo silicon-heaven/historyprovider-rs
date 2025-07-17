@@ -8,7 +8,7 @@ use futures::{select, StreamExt};
 use log::{debug, error, info, warn};
 use shvclient::client::ShvApiVersion;
 use shvclient::{AppState, ClientEventsReceiver};
-use shvproto::{DateTime, RpcValue};
+use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
 use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -22,23 +22,23 @@ use crate::{ClientCommandSender, State, Subscriber};
 use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
 const SIG_CMDLOG: &str = "cmdlog";
 
-pub(crate) enum ProvisionalLogCommand {
+pub(crate) enum DirtyLogCommand {
     // On the client connect
-    SubscribeNotifications(ShvApiVersion),
-    TrimLog {
+    Subscribe(ShvApiVersion),
+    Trim {
         site: String
     },
-    GetLog {
+    Get {
         site: String,
         response_tx: UnboundedSender<Vec<JournalEntry>>,
     }
 }
 
-pub(crate) async fn provisional_log_task(
+pub(crate) async fn dirty_log_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,
-    mut cmd_rx: UnboundedReceiver<ProvisionalLogCommand>,
+    mut cmd_rx: UnboundedReceiver<DirtyLogCommand>,
 )
 {
     // TODO:
@@ -55,7 +55,7 @@ pub(crate) async fn provisional_log_task(
     loop {
         select! {
             command = cmd_rx.select_next_some() => match command {
-                ProvisionalLogCommand::SubscribeNotifications(shv_api_version) => {
+                DirtyLogCommand::Subscribe(shv_api_version) => {
                     info!("Subscribing signals on the devices");
                     site_paths = app_state
                         .sites_data
@@ -82,18 +82,18 @@ pub(crate) async fn provisional_log_task(
                         .join("\n")
                     );
                 }
-                ProvisionalLogCommand::TrimLog { site } => {
-                    info!("Trim provisional log start, site: {site}");
+                DirtyLogCommand::Trim { site } => {
+                    info!("Trim dirty log start, site: {site}");
                     // Get the latest entry from the site log and remove all entries up to that
-                    // entry from the provisional log
-                    let provisional_log_path = Path::new(&app_state.config.journal_dir).join(&site).join("provisionallog");
-                    let provisional_log_file = match tokio::fs::File::open(&provisional_log_path).await {
+                    // entry from the dirty log
+                    let dirty_log_path = Path::new(&app_state.config.journal_dir).join(&site).join("dirtylog");
+                    let dirty_log_file = match tokio::fs::File::open(&dirty_log_path).await {
                         Ok(file) => file,
                         Err(err) => {
                             if err.kind() == std::io::ErrorKind::NotFound {
-                                info!("Trim provisional log done, no provisional log file for the site");
+                                info!("Trim dirty log done, no dirty log file for the site");
                             } else {
-                                error!("Cannot trim provisional log. Cannot open file {file_path}: {err}", file_path = provisional_log_path.to_string_lossy());
+                                error!("Cannot trim dirty log. Cannot open file {file_path}: {err}", file_path = dirty_log_path.to_string_lossy());
                             }
                             continue;
                         }
@@ -103,7 +103,7 @@ pub(crate) async fn provisional_log_task(
                         let mut log_files = match get_files(&Path::new(&app_state.config.journal_dir).join(&site), is_log2_file).await {
                             Ok(files) => files,
                             Err(err) => {
-                                error!("Cannot trim provisional log. Cannot read journal dir entries: {err}");
+                                error!("Cannot trim dirty log. Cannot read journal dir entries: {err}");
                                 continue;
                             }
                         };
@@ -111,7 +111,7 @@ pub(crate) async fn provisional_log_task(
                         match log_files.last() {
                             Some(newest_log_file) => newest_log_file.path(),
                             None => {
-                                info!("Trim provisional log done, no synced files");
+                                info!("Trim dirty log done, no synced files");
                                 continue
                             }
                         }
@@ -120,9 +120,9 @@ pub(crate) async fn provisional_log_task(
                         Ok(file) => file,
                         Err(err) => {
                             if err.kind() == std::io::ErrorKind::NotFound {
-                                info!("Trim provisional log done, no synced files");
+                                info!("Trim dirty log done, no synced files");
                             } else {
-                                error!("Cannot trim provisional log. Cannot open file {file_path}: {err}",
+                                error!("Cannot trim dirty log. Cannot open file {file_path}: {err}",
                                     file_path = newest_log_path.to_string_lossy()
                                 );
                             }
@@ -133,12 +133,12 @@ pub(crate) async fn provisional_log_task(
                     // Get the latest entry from the latest log
                     let reader = JournalReaderLog2::new(BufReader::new(newest_log_file.compat()));
                     let Some(latest_entry) = reader.fold(None, |_, entry| { let entry = entry.ok(); async { entry }}).await else {
-                        info!("Trim provisional log done, no journal entries in synced files");
+                        info!("Trim dirty log done, no journal entries in synced files");
                         continue;
                     };
 
-                    // Remove all entries older than the latest entry from the provisional log
-                    let reader = JournalReaderLog2::new(BufReader::new(provisional_log_file.compat()));
+                    // Remove all entries older than the latest entry from the dirty log
+                    let reader = JournalReaderLog2::new(BufReader::new(dirty_log_file.compat()));
                     let trimmed_log = reader.filter_map(|entry| {
                         let passed_entry = entry
                             .as_ref()
@@ -150,43 +150,43 @@ pub(crate) async fn provisional_log_task(
                     .collect::<Vec<_>>()
                     .await;
 
-                    // Write the provisional log
-                    let provisional_log_file = match tokio::fs::OpenOptions::new()
+                    // Write the dirty log
+                    let dirty_log_file = match tokio::fs::OpenOptions::new()
                         .write(true)
-                        .open(&provisional_log_path)
+                        .open(&dirty_log_path)
                         .await {
                             Ok(file) => file,
                             Err(err) => {
-                                error!("Cannot trim provisional log. Cannot open file {file_path} for write: {err}",
-                                    file_path = provisional_log_path.to_string_lossy()
+                                error!("Cannot trim dirty log. Cannot open file {file_path} for write: {err}",
+                                    file_path = dirty_log_path.to_string_lossy()
                                 );
                                 continue;
                             }
                         };
-                    let mut writer = JournalWriterLog2::new(provisional_log_file.compat());
+                    let mut writer = JournalWriterLog2::new(dirty_log_file.compat());
                     for entry in &trimmed_log {
                         writer.append(entry)
                             .await
                             .unwrap_or_else(|err|
-                                error!("Cannot write a journal entry to provisional log {log_file}: {err}",
-                                    log_file = provisional_log_path.to_string_lossy()
+                                error!("Cannot write a journal entry to dirty log {log_file}: {err}",
+                                    log_file = dirty_log_path.to_string_lossy()
                                 )
                             );
                     }
-                    info!("Trim provisional log done");
+                    info!("Trim dirty log done");
 
                 }
-                ProvisionalLogCommand::GetLog { site, response_tx } => {
-                    // Load the provisional log and return it in the response channel
-                    let provisional_log_path =  Path::new(&app_state.config.journal_dir).join(site).join("provisionallog");
-                    let res = match tokio::fs::File::open(&provisional_log_path).await {
+                DirtyLogCommand::Get { site, response_tx } => {
+                    // Load the dirty log and return it in the response channel
+                    let dirty_log_path =  Path::new(&app_state.config.journal_dir).join(site).join("dirtylog");
+                    let res = match tokio::fs::File::open(&dirty_log_path).await {
                         Ok(file) => {
                             let reader = JournalReaderLog2::new(BufReader::new(file.compat())).enumerate();
                             reader
                                 .filter_map(|(entry_no, entry_res)| {
                                     let entry = entry_res.inspect_err(|err|
-                                        warn!("Invalid journal entry no. {entry_no} in provisional log at {log_path}: {err}",
-                                            log_path = provisional_log_path.to_string_lossy()
+                                        warn!("Invalid journal entry no. {entry_no} in dirty log at {log_path}: {err}",
+                                            log_path = dirty_log_path.to_string_lossy()
                                         )
                                     )
                                     .ok();
@@ -197,14 +197,14 @@ pub(crate) async fn provisional_log_task(
                         }
                         Err(err) => {
                             if err.kind() != std::io::ErrorKind::NotFound {
-                                error!("Cannot open {log_path}: {err}", log_path = provisional_log_path.to_string_lossy());
+                                error!("Cannot open {log_path}: {err}", log_path = dirty_log_path.to_string_lossy());
                             }
                             Vec::new()
                         }
                     };
                     response_tx.unbounded_send(res).unwrap_or_default();
                 }
-},
+            },
             notification = subscribers.select_next_some() => {
                 // Parse the notification
                 let msg = match notification.to_rpcmesage() {
@@ -224,24 +224,24 @@ pub(crate) async fn provisional_log_task(
                 let Some((site_path, property_path)) = find_longest_path_prefix(&*site_paths, stripped_path) else {
                     continue;
                 };
-                // Append to the site's provisional log
-                let provisional_log_path = Path::new(&app_state.config.journal_dir).join(site_path).join("provisionallog");
-                let provisional_log_file = match tokio::fs::OpenOptions::new()
+                // Append to the site's dirty log
+                let dirty_log_path = Path::new(&app_state.config.journal_dir).join(site_path).join("dirtylog");
+                let dirty_log_file = match tokio::fs::OpenOptions::new()
                     .append(true)
-                    .open(&provisional_log_path)
+                    .open(&dirty_log_path)
                     .await {
                         Ok(file) => file,
                         Err(err) => {
-                            error!("Cannot append a notification to provisional log. Cannot open file {file_path} for write: {err}",
-                                file_path = provisional_log_path.to_string_lossy()
+                            error!("Cannot append a notification to dirty log. Cannot open file {file_path} for write: {err}",
+                                file_path = dirty_log_path.to_string_lossy()
                             );
                             continue;
                         }
                     };
-                let mut writer = JournalWriterLog2::new(provisional_log_file.compat());
+                let mut writer = JournalWriterLog2::new(dirty_log_file.compat());
                 let data_change = DataChange::from(param.clone());
                 let entry = JournalEntry {
-                    epoch_msec: data_change.date_time.unwrap_or_else(DateTime::now).epoch_msec(),
+                    epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
                     path: property_path.to_string(),
                     signal, source: Default::default(),
                     value: data_change.value,
@@ -254,8 +254,8 @@ pub(crate) async fn provisional_log_task(
                 writer.append(&entry)
                     .await
                     .unwrap_or_else(|err|
-                        error!("Cannot append a notification to provisional log {log_file}: {err}",
-                            log_file = provisional_log_path.to_string_lossy()
+                        error!("Cannot append a notification to dirty log {log_file}: {err}",
+                            log_file = dirty_log_path.to_string_lossy()
                         )
                     );
                 }
