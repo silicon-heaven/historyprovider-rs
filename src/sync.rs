@@ -5,23 +5,22 @@ use std::sync::Arc;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::io::{BufReader, BufWriter};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use shvclient::client::RpcCall;
 use shvclient::clientnode::METH_DIR;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::join_path;
 use time::format_description::well_known::Iso8601;
-use tokio::fs::DirEntry;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
-use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
+use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, State};
 
 #[derive(Default)]
@@ -280,10 +279,7 @@ async fn sync_file(
     let file_path_local = file_path_local.as_ref();
 
     sync_logger.log(log::Level::Info,
-        format!("{}: starting to sync, start offset: {}, file size: {}",
-            file_path_remote,
-            sync_offset,
-            file_size,
+        format!("{file_path_remote}: starting to sync, start offset: {sync_offset}, file size: {file_size}",
     ));
 
     let mut local_file = tokio::fs::OpenOptions::new()
@@ -339,30 +335,8 @@ async fn sync_file(
                 (sync_offset as f64 / file_size as f64) * 100.0,
         ));
     }
-    sync_logger.log(log::Level::Info, format!("{}: successfully synced", file_path_remote));
+    sync_logger.log(log::Level::Info, format!("{file_path_remote}: successfully synced"));
     Ok(())
-}
-
-async fn get_files(dir_path: impl AsRef<Path>, file_filter_fn: impl Fn(&DirEntry) -> bool) -> Result<Vec<DirEntry>, String> {
-    let dir_path = dir_path.as_ref();
-    let journal_dir = ReadDirStream::new(tokio::fs::read_dir(dir_path)
-        .await
-        .map_err(|e|
-            format!("Cannot read journal directory at {}: {}", dir_path.to_string_lossy(), e)
-        )?
-    );
-    journal_dir.try_filter_map(async |entry| {
-        Ok(entry
-            .metadata()
-            .await?
-            .is_file()
-            .then(|| file_filter_fn(&entry).then_some(entry))
-            .flatten()
-        )
-    })
-    .try_collect::<Vec<_>>()
-    .await
-    .map_err(|e| format!("Cannot read content of the journal directory {}: {}", dir_path.to_string_lossy(), e))
 }
 
 async fn sync_site_legacy(
@@ -384,7 +358,6 @@ async fn sync_site_legacy(
         .map_err(|e| format!("Cannot create journal directory at {}: {e}", local_journal_path.to_string_lossy()))?;
 
     // Get the newest file if any
-    let is_log2_file = |entry: &DirEntry| entry.file_name().to_str().is_some_and(|file_name| file_name.ends_with(".log2"));
     let mut log_files = get_files(&local_journal_path, is_log2_file).await?;
     log_files.sort_by_key(|entry| entry.file_name());
 
@@ -504,8 +477,9 @@ async fn sync_site_legacy(
         };
         sync_logger.log(log::Level::Info, format!("Write {} journal entries to {}", log_entries.len(), journal_file_path.to_string_lossy()));
         let journal_file = tokio::fs::OpenOptions::new()
-            .create(true)
             .write(true)
+            .truncate(true)
+            .create(true)
             .open(&journal_file_path)
             .await
             .map_err(|err| format!("Cannot open journal file {} for writing: {}", journal_file_path.to_string_lossy(), err))?;
@@ -549,7 +523,7 @@ async fn sync_site_legacy(
             write_journal(log_file_path
                 .map_or_else(
                     || JournalPath::Dir(local_journal_path.clone()),
-                    |file_path| JournalPath::File(file_path)
+                    JournalPath::File
                 ),
                 &log_file_entries,
                 &sync_logger)
@@ -565,7 +539,7 @@ async fn sync_site_legacy(
 
         if log_file_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
             write_journal(log_file_path
-                .map_or_else(|| JournalPath::Dir(local_journal_path.clone()), |file_path| JournalPath::File(file_path)),
+                .map_or_else(|| JournalPath::Dir(local_journal_path.clone()), JournalPath::File),
                 &log_file_entries,
                 &sync_logger)
                 .await

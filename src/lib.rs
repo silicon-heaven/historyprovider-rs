@@ -10,6 +10,9 @@ mod tree;
 mod sync;
 mod journalentry;
 mod journalrw;
+mod dirtylog;
+mod datachange;
+mod util;
 
 fn default_journal_dir() -> String {
     "/tmp/hp-rs/shvjournal".into()
@@ -25,9 +28,9 @@ pub struct HpConfig {
 impl HpConfig {
     pub fn load(config_file: impl AsRef<std::path::Path>) -> Result<Self, String> {
         let config = std::fs::read_to_string(config_file)
-            .map_err(|e| format!("Config file read error: {}", e))?;
+            .map_err(|e| format!("Config file read error: {e}"))?;
         serde_yaml_ng::from_str(&config)
-            .map_err(|e| format!("Config file format error: {}", e))
+            .map_err(|e| format!("Config file format error: {e}"))
     }
 }
 
@@ -38,7 +41,8 @@ struct State {
     sync_cmd_tx: UnboundedSender<sync::SyncCommand>,
 }
 
-pub(crate) type ClientCommandSender = shvclient::ClientCommandSender<State>;
+type ClientCommandSender = shvclient::ClientCommandSender<State>;
+type Subscriber = shvclient::client::Subscriber<State>;
 
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
     info!("Setting up journal dir: {}", &hp_config.journal_dir);
@@ -46,6 +50,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
 
     let (sync_cmd_tx, sync_cmd_rx) = unbounded();
+    let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded();
 
     let app_state = AppState::new(State {
         sites_data: RwLock::default(),
@@ -62,7 +67,8 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         .with_app_state(app_state.clone())
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
             tokio::spawn(sites::load_sites(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
-            tokio::spawn(sync::sync_task(client_cmd_tx, client_evt_rx, app_state, sync_cmd_rx));
+            tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
+            tokio::spawn(dirtylog::dirty_log_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
         })
         .await
 }

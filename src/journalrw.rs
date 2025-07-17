@@ -12,8 +12,8 @@ use crate::journalentry::JournalEntry;
 
 const JOURNAL_ENTRIES_SEPARATOR: &str = "\t";
 
-const VALUE_FLAG_SPONTANEOUS_BIT: i32 = 1;
-const VALUE_FLAG_PROVISIONAL_BIT: i32 = 2;
+pub(crate) const VALUE_FLAG_SPONTANEOUS_BIT: i32 = 1;
+pub(crate) const VALUE_FLAG_PROVISIONAL_BIT: i32 = 2;
 
 fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error>> {
     let parts: Vec<&str> = line.split(JOURNAL_ENTRIES_SEPARATOR).collect();
@@ -162,7 +162,7 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
     let shvproto::Value::List(row) = &entry.value else {
         return make_err("Log entry is not a list");
     };
-    let mut row = row.as_slice().into_iter();
+    let mut row = row.as_slice().iter();
 
     let timestamp = row.next().unwrap_or_default();
     let timestamp = match &timestamp.value {
@@ -221,8 +221,8 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
         access_level: AccessLevel::Read as _,
         short_time,
         user_id,
-        repeat: if value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0 { true } else { false },
-        provisional: if value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0 { true } else { false },
+        repeat: value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
+        provisional: value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
     })
 }
 
@@ -512,8 +512,8 @@ mod tests {
         while let Some((ix, result)) = enumerated_reader.next().await {
             let entry = &entries[ix];
             let entry2 = result.unwrap();
-            println!("{:?}", entry);
-            println!("{:?}", entry2);
+            println!("{entry:?}");
+            println!("{entry2:?}");
             assert!(entry == &entry2);
         }
     }

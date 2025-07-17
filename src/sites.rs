@@ -148,40 +148,6 @@ fn collect_sub_hps(
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use crate::sites::SiteInfo;
-
-    #[test]
-    fn collect_sites() {
-        let sites_tree = shvproto::make_map!(
-            "site" => shvproto::make_map!(
-                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1", "HP3" => "{}")
-            ),
-        );
-        let sites = super::collect_sites(&[], &sites_tree);
-        println!("{sites_tree:#?}");
-        println!("sites: {}", sites
-            .iter()
-            .map(|(path, site)| format!("{path}: {site:?}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-        );
-        assert_eq!(
-            sites, [
-            ("site".to_string(), SiteInfo {
-                name: "test1".to_string(),
-                site_type: "DepotG3".to_string(),
-                sub_hp: Default::default(),
-            })
-        ]
-        .into_iter()
-        .collect::<BTreeMap<_,_>>());
-    }
-}
-
 pub(crate) async fn load_sites(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
@@ -247,6 +213,40 @@ pub(crate) async fn load_sites(
                 None => break,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::sites::SiteInfo;
+
+    #[test]
+    fn collect_sites() {
+        let sites_tree = shvproto::make_map!(
+            "site" => shvproto::make_map!(
+                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1", "HP3" => "{}")
+            ),
+        );
+        let sites = super::collect_sites(&[], &sites_tree);
+        println!("{sites_tree:#?}");
+        println!("sites: {}", sites
+            .iter()
+            .map(|(path, site)| format!("{path}: {site:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
+        assert_eq!(
+            sites, [
+            ("site".to_string(), SiteInfo {
+                name: "test1".to_string(),
+                site_type: "DepotG3".to_string(),
+                sub_hp: Default::default(),
+            })
+        ]
+        .into_iter()
+        .collect::<BTreeMap<_,_>>());
     }
 }
 
