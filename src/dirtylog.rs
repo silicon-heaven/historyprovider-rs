@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::{select, StreamExt};
@@ -30,7 +31,7 @@ pub(crate) enum DirtyLogCommand {
     },
     Get {
         site: String,
-        response_tx: UnboundedSender<Vec<JournalEntry>>,
+        response_tx: OneshotSender<Vec<JournalEntry>>,
     }
 }
 
@@ -202,7 +203,7 @@ pub(crate) async fn dirty_log_task(
                             Vec::new()
                         }
                     };
-                    response_tx.unbounded_send(res).unwrap_or_default();
+                    response_tx.send(res).unwrap_or_default();
                 }
             },
             notification = subscribers.select_next_some() => {

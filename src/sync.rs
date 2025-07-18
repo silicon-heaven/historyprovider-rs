@@ -17,7 +17,7 @@ use tokio::sync::{RwLock, Semaphore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::journalentry::JournalEntry;
-use crate::journalrw::{GetLog2Params, JournalReaderLog2, JournalWriterLog2, Log2Reader};
+use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{get_files, is_log2_file};
@@ -419,7 +419,7 @@ async fn sync_site_legacy(
                     format!("sync will create a new file since {}", since.to_iso_string())
                 );
                 let params = GetLog2Params {
-                    since: Some(since),
+                    since: GetLog2Since::DateTime(since),
                     until: None,
                     path_pattern: None,
                     with_paths_dict: true,
@@ -433,7 +433,7 @@ async fn sync_site_legacy(
                     format!("sync will append to {}", newest_log_file.to_string_lossy())
                 );
                 let params = GetLog2Params {
-                    since: Some(since),
+                    since: GetLog2Since::DateTime(since),
                     until: None,
                     path_pattern: None,
                     with_paths_dict: true,
@@ -450,7 +450,7 @@ async fn sync_site_legacy(
                 format!("sync to a new journal directory since {}", since.to_iso_string())
             );
             let params = GetLog2Params {
-                since: Some(since),
+                since: GetLog2Since::DateTime(since),
                 until: None,
                 path_pattern: None,
                 with_paths_dict: true,
@@ -496,9 +496,9 @@ async fn sync_site_legacy(
     loop {
         sync_logger.log(
             log::Level::Info,
-            format!("Calling getLog, target: {}, since: {:?}, snapshot: {}",
+            format!("Calling getLog, target: {}, since: {}, snapshot: {}",
                 local_journal_path.to_string_lossy(),
-                getlog_params.since.map(|dt| dt.to_iso_string()), getlog_params.with_snapshot)
+                getlog_params.since, getlog_params.with_snapshot)
         );
         let log: RpcValue = RpcCall::new(getlog_path, "getLog")
             .param(getlog_params.clone())
@@ -536,7 +536,7 @@ async fn sync_site_legacy(
 
         log_file_entries.append(&mut log_entries);
 
-        getlog_params.since = Some(shvproto::DateTime::from_epoch_msec(last_entry_ms));
+        getlog_params.since = GetLog2Since::DateTime(shvproto::DateTime::from_epoch_msec(last_entry_ms));
 
         if log_file_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
             write_journal(log_file_path
