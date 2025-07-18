@@ -1,13 +1,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
+use log::warn;
 use shvclient::client::{CallRpcMethodErrorKind, RpcCall};
 use shvclient::clientnode::find_longest_path_prefix;
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
+use shvrpc::{join_path, RpcMessageMetaTags};
 
-use crate::{ClientCommandSender, State};
+use crate::util::{subscribe, subscription_prefix_path};
+use crate::{ClientCommandSender, State, Subscriber};
 
 
 #[derive(Clone,Default)]
@@ -155,11 +159,12 @@ pub(crate) async fn load_sites(
 )
 {
     let mut client_evt_rx = client_evt_rx.fuse();
+    let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
 
     loop {
         tokio::select! {
             client_event = client_evt_rx.next() => match client_event {
-                Some(client_event) => if matches!(client_event, shvclient::ClientEvent::Connected(_)) {
+                Some(client_event) => if let shvclient::ClientEvent::Connected(shv_api_version) = client_event {
                     log::info!("Getting sites info");
 
                     let sites = RpcCall::new("sites", "getSites")
@@ -206,11 +211,51 @@ pub(crate) async fn load_sites(
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
+
+                    // Subscribe mntchng
+                    mntchng_subscribers = sites_info
+                        .keys()
+                        .map(|path| {
+                            subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
+                        })
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<SelectAll<_>>()
+                        .await;
+
                     *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
-                    app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncLogs)
-                        .unwrap_or_else(|e| panic!("Cannot send SyncCommand: {e}"));
+                    app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncAll)
+                        .unwrap_or_else(|e| panic!("Cannot send SyncAll: {e}"));
+                    app_state.dirtylog_cmd_tx.unbounded_send(crate::dirtylog::DirtyLogCommand::Subscribe(shv_api_version))
+                        .unwrap_or_else(|e| panic!("Cannot send dirtylog Subscribe command: {e}"));
                 },
                 None => break,
+            },
+            mntchng_frame = mntchng_subscribers.select_next_some() => {
+                let msg = match mntchng_frame.to_rpcmesage() {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        warn!("Ignoring wrong RpcFrame: {err}");
+                        continue;
+                    }
+                };
+                let signal = msg.method().unwrap_or_default().to_string();
+                if signal != "mntchng" {
+                    continue;
+                }
+                if !msg.param().map_or_else(|| false, RpcValue::as_bool) {
+                    // Site unmounted
+                    continue;
+                }
+                let path = msg.shv_path().unwrap_or_default().to_string();
+
+                let Some(stripped_path) = path.strip_prefix("shv/") else {
+                    continue;
+                };
+                let Some((site_path, _)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
+                    continue;
+                };
+                app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncSite(site_path.into()))
+                    .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
         }
     }

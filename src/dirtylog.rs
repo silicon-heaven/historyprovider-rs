@@ -64,8 +64,8 @@ pub(crate) async fn dirty_log_task(
                         .sites_info
                         .clone();
                     subscribers = site_paths
-                        .iter()
-                        .flat_map(|(path, _)| {
+                        .keys()
+                        .flat_map(|path| {
                             let shv_path = join_path!("shv", path);
                             let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
                             let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);

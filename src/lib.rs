@@ -39,6 +39,7 @@ struct State {
     sync_info: sync::SyncInfo,
     config: HpConfig,
     sync_cmd_tx: UnboundedSender<sync::SyncCommand>,
+    dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
 }
 
 type ClientCommandSender = shvclient::ClientCommandSender<State>;
@@ -57,6 +58,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         sync_info: Default::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
+        dirtylog_cmd_tx,
     });
 
     shvclient::Client::new()
