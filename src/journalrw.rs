@@ -152,13 +152,13 @@ impl Iterator for Log2Reader {
     type Item = Result<JournalEntry, Box<dyn Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.log.next().map(|entry| rpc_value_to_journal_entry(&entry, &self.header))
+        self.log.next().map(|entry| rpcvalue_to_journal_entry(&entry, &self.header.paths_dict))
     }
 }
 
 const NO_SHORT_TIME: i32 = -1;
 
-fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<JournalEntry, Box<dyn Error>> {
+fn rpcvalue_to_journal_entry(entry: &RpcValue, paths_dict: &BTreeMap<i32, String>) -> Result<JournalEntry, Box<dyn Error>> {
     let make_err = |msg| Err(format!("{msg}: {}", entry.to_cpon()).into());
     let shvproto::Value::List(row) = &entry.value else {
         return make_err("Log entry is not a list");
@@ -173,8 +173,7 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
 
     let path = row.next().unwrap_or_default();
     let path = match &path.value {
-        shvproto::Value::Int(idx) => header
-            .paths_dict
+        shvproto::Value::Int(idx) => paths_dict
             .get(&(*idx as i32))
             .ok_or_else(|| format!("Wrong path reference {idx} of journal entry: {}", entry.to_cpon()))?,
         shvproto::Value::String(path) => path,
@@ -227,7 +226,7 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
     })
 }
 
-pub(crate) fn journal_entry_to_rpc_value(
+pub(crate) fn journal_entry_to_rpcvalue(
     entry: &JournalEntry,
     path_cache: &mut Option<BTreeMap<String, i32>>,
 ) -> RpcValue {
@@ -261,7 +260,7 @@ pub(crate) fn journal_entry_to_rpc_value(
     };
 
     shvproto::make_list!(
-        entry.epoch_msec,
+        shvproto::DateTime::from_epoch_msec(entry.epoch_msec),
         path_value,
         entry.value.clone(),
         entry.short_time,
@@ -271,7 +270,29 @@ pub(crate) fn journal_entry_to_rpc_value(
     ).into()
 }
 
+pub(crate) fn journal_entries_to_rpcvalue<'a>(
+    entries: impl IntoIterator<Item = &'a JournalEntry>,
+    with_paths_dict: bool
+) -> (RpcValue, BTreeMap<i32, String>)
+{
+    let mut path_cache = with_paths_dict.then(BTreeMap::new);
+    let result: RpcValue = entries
+        .into_iter()
+        .map(|entry| journal_entry_to_rpcvalue(entry, &mut path_cache))
+        .collect::<Vec<_>>()
+        .into();
+
+    let paths_dict = path_cache
+        .map_or_else(Default::default, |cache| cache
+            .into_iter()
+            .map(|(k,v)| (v, k))
+            .collect()
+        );
+    (result, paths_dict)
+}
+
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) enum GetLog2Since {
     DateTime(shvproto::DateTime),
     LastEntry,
@@ -290,6 +311,7 @@ impl Display for GetLog2Since {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct GetLog2Params {
     pub(crate) since: GetLog2Since,
     pub(crate) until: Option<shvproto::DateTime>,
@@ -427,6 +449,7 @@ pub(crate) fn matches_path_pattern(path: impl AsRef<str>, pattern: impl AsRef<st
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct Log2Header {
     pub(crate) record_count: i64,
     pub(crate) record_count_limit: i64,

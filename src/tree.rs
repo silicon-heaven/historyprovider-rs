@@ -23,7 +23,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
-use crate::journalrw::{journal_entry_to_rpc_value, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
+use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
 use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, State};
 
@@ -769,20 +769,10 @@ async fn getlog_impl(journal_readers: impl IntoIterator<Item = JournalEntryStrea
             }
     };
 
-    let mut path_cache = params.with_paths_dict.then(BTreeMap::new);
-    let mut result: RpcValue = snapshot_entries
-        .iter()
-        .chain(result_entries.into_iter())
-        .map(|entry| journal_entry_to_rpc_value(entry, &mut path_cache))
-        .collect::<Vec<_>>()
-        .into();
-
-    let paths_dict = path_cache
-        .map_or_else(Default::default, |cache| cache
-            .into_iter()
-            .map(|(k,v)| (v, k))
-            .collect()
-        );
+    let (mut result, paths_dict) = journal_entries_to_rpcvalue(
+        snapshot_entries.iter().chain(result_entries.into_iter()),
+        params.with_paths_dict
+    );
     let log_header = Log2Header {
         record_count: record_count as _,
         record_count_limit,
