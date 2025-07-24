@@ -577,7 +577,7 @@ mod tests {
     use crate::journalentry::JournalEntry;
     use crate::journalrw::{matches_path_pattern, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 
-    use super::parse_journal_entry_log2;
+    use super::{journal_entries_to_rpcvalue, parse_journal_entry_log2, Log2Header, NO_SHORT_TIME, RECORD_COUNT_LIMIT_DEFAULT};
 
     #[tokio::test]
     async fn read_file_journal() {
@@ -650,6 +650,53 @@ mod tests {
             )
             .collect::<Result<Vec<_>,_>>().unwrap();
         println!("{res:?}");
+    }
+
+    fn make_journal_entry(epoch_msec: i64, path: &str, value: impl Into<shvproto::RpcValue>, repeat: bool, provisional: bool, signal: &str) -> JournalEntry {
+        JournalEntry {
+            epoch_msec,
+            path: path.to_string(),
+            signal: signal.to_string(),
+            source: "get".to_string(),
+            value: value.into(),
+            access_level: AccessLevel::Read as _,
+            short_time: NO_SHORT_TIME,
+            user_id: Some("testuser".to_string()),
+            repeat,
+            provisional,
+        }
+    }
+
+    #[test]
+    fn log2_journal_to_from_rpcvalue() {
+        let entries = [
+            make_journal_entry(1000, "foo", 123, true, false, SIG_CHNG),
+            make_journal_entry(2000, "bar", false, true, false, SIG_CHNG),
+            make_journal_entry(3000, "x/y/z", false, true, false, SIG_CHNG),
+            make_journal_entry(4000, "bar", "asdf", false, false, SIG_CHNG),
+            make_journal_entry(5000, "baz", 0, false, false, SIG_CHNG),
+            make_journal_entry(5000, "foo", 10, false, true, SIG_CHNG),
+        ];
+        {
+            let (mut rv, paths_dict) = journal_entries_to_rpcvalue(&entries, false);
+            let header = Log2Header {
+                record_count: entries.len() as _,
+                record_count_limit: RECORD_COUNT_LIMIT_DEFAULT,
+                record_count_limit_hit: false,
+                date_time: shvproto::DateTime::from_epoch_msec(1000),
+                since: shvproto::DateTime::from_epoch_msec(entries.first().unwrap().epoch_msec),
+                until: shvproto::DateTime::from_epoch_msec(entries.last().unwrap().epoch_msec),
+                with_paths_dict: false,
+                with_snapshot: false,
+                paths_dict,
+                log_params: super::GetLog2Params::default(),
+                log_version: 2,
+            };
+            rv.meta = Some(Box::new(header.clone().into()));
+            let reader = Log2Reader::new(rv).unwrap();
+            assert_eq!(reader.header, header);
+            assert_eq!(reader.collect::<Result<Vec<_>,_>>().unwrap(), entries);
+        }
     }
 
     #[test]
