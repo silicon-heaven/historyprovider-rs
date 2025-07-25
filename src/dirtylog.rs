@@ -251,7 +251,7 @@ pub(crate) async fn dirty_log_task(
                     short_time: data_change.short_time.unwrap_or(-1),
                     user_id: Default::default(),
                     repeat: data_change.value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
-                    provisional: data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
+                    provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
                 };
                 writer.append(&entry)
                     .await
