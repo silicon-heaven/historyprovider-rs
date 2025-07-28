@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_compression::tokio::write::GzipEncoder;
 use futures::io::BufReader;
@@ -577,17 +578,6 @@ async fn getlog_handler(
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
     log_files.sort_by_key(|entry| entry.file_name());
 
-    let (dirtylog_tx, dirtylog_rx) = futures::channel::oneshot::channel();
-    app_state.dirtylog_cmd_tx
-        .unbounded_send(DirtyLogCommand::Get {
-            site: site_path.into(),
-            response_tx: dirtylog_tx,
-        })
-        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
-    let dirtylog = dirtylog_rx
-        .await
-        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
-
     let file_start_index = {
         if log_files.is_empty() {
             0
@@ -627,124 +617,179 @@ async fn getlog_handler(
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, err))?;
 
-    let dirtylog_reader = futures::stream::iter(dirtylog).map(Ok);
 
-    // Needed to mitigate error[E0308]: mismatched types. Method `chain` produces Chain<A, B>,
-    // where Rust considers A and B as different types even though they are the same if Chain is
-    // passed directly to a function accepting an Iterator.
-    fn chained<T>(first: impl IntoIterator<Item = T>, second: impl IntoIterator<Item = T>) -> impl Iterator<Item = T> {
-        first.into_iter().chain(second.into_iter())
-    }
+    let (dirtylog_tx, dirtylog_rx) = futures::channel::oneshot::channel();
+    app_state.dirtylog_cmd_tx
+        .unbounded_send(DirtyLogCommand::Get {
+            site: site_path.into(),
+            response_tx: dirtylog_tx,
+        })
+        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
+    let dirtylog = dirtylog_rx
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
 
-    let all_readers = chained(
-        file_readers.into_iter().map(|s| Box::pin(s) as _),
-        [Box::pin(dirtylog_reader) as _]
-    );
-
-    Ok(getlog_impl(all_readers, &params).await)
+    Ok(getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, &params).await)
 }
 
 type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
-async fn getlog_impl(journal_readers: impl IntoIterator<Item = JournalEntryStream>, params: &GetLog2Params) -> RpcValue {
-    let journal_entries = tokio_stream::iter(journal_readers)
-        .flat_map(|stream| {
-            stream.filter_map(|res| async {
-                match res {
-                    Ok(entry) => Some(entry),
-                    Err(err) => {
-                        error!("Skipping corrupted journal entry: {err}");
-                        None
+async fn getlog_impl(
+    journal_readers: impl IntoIterator<Item = JournalEntryStream>,
+    dirty_log: impl IntoIterator<Item = JournalEntry>,
+    params: &GetLog2Params
+) -> RpcValue
+{
+    const RECORD_COUNT_LIMIT_MAX: i64 = 100_000;
+
+    enum Since {
+        Msec(i64),
+        Last,
+    }
+
+    fn is_snapshot_entry(entry: &JournalEntry, since: &Since) -> bool {
+        match since {
+            Since::Msec(since_msec) => entry.epoch_msec <= *since_msec,
+            Since::Last => true,
+        }
+    }
+
+    struct Context<'a> {
+        params: &'a GetLog2Params,
+        since: Option<Since>,
+        snapshot: BTreeMap<String, Arc<JournalEntry>>,
+        entries: Vec<Arc<JournalEntry>>,
+        record_count: usize,
+        record_count_limit: usize,
+        record_count_limit_hit: bool,
+        last_entry: Option<Arc<JournalEntry>>,
+        first_unmatched_entry_msec: Option<i64>,
+        until_ms: i64,
+    }
+
+    fn process_journal_entry(
+        entry: JournalEntry,
+        context: &mut Context,
+    ) -> bool {
+        if context
+            .params
+            .path_pattern
+                .as_ref()
+                .is_some_and(|p| !matches_path_pattern(&entry.path, p))
+        {
+            return true;
+        }
+
+        let entry = Arc::new(entry);
+
+        let since_val = context.since.get_or_insert_with(|| determine_since(&entry, &context.params.since));
+        let is_snapshot_entry = is_snapshot_entry(&entry, since_val);
+
+        if is_snapshot_entry {
+            context.snapshot.insert(entry.path.clone(), Arc::clone(&entry));
+        } else if entry.epoch_msec >= context.until_ms {
+            context.first_unmatched_entry_msec = Some(entry.epoch_msec);
+            return false;
+        }
+
+        if !is_snapshot_entry {
+            let total = context.snapshot.len() + context.record_count + 1;
+            if total > context.record_count_limit {
+                context.record_count_limit_hit = true;
+
+                // Record all consecutive entries with the same timestamp
+                if context.last_entry.as_ref().is_some_and(|last_entry| last_entry.epoch_msec != entry.epoch_msec) {
+                    context.first_unmatched_entry_msec = Some(entry.epoch_msec);
+                    return false;
+                }
+            }
+
+            context.entries.push(Arc::clone(&entry));
+            context.record_count += 1;
+        }
+
+        context.last_entry = Some(entry);
+        true
+    }
+
+
+    fn determine_since(entry: &JournalEntry, params_since: &GetLog2Since) -> Since {
+        match params_since {
+            GetLog2Since::DateTime(dt) => Since::Msec(dt.epoch_msec().max(entry.epoch_msec)),
+            GetLog2Since::LastEntry => Since::Last,
+            GetLog2Since::None => Since::Msec(entry.epoch_msec),
+        }
+    }
+
+    let mut context = Context {
+        params,
+        since: None,
+        snapshot: BTreeMap::new(),
+        entries: Vec::new(),
+        record_count: 0,
+        record_count_limit: params.record_count_limit.clamp(0, RECORD_COUNT_LIMIT_MAX) as _,
+        record_count_limit_hit: false,
+        last_entry: None,
+        first_unmatched_entry_msec: None,
+        until_ms: params.until.as_ref().map_or(i64::MAX, shvproto::DateTime::epoch_msec),
+    };
+
+    for mut reader in journal_readers {
+        while let Some(entry_res) = reader.next().await {
+            match entry_res {
+                Ok(entry) => {
+                    if !process_journal_entry(entry, &mut context) {
+                        break;
                     }
                 }
-            })
-        })
-        .collect::<Vec<_>>()
-        .await;
-
-    // If `since` precedes the first entry or is not specified, update it
-    // to the timestamp of the first entry to ensure that the result starts
-    // with a snapshot (unless there is only dirtylog).
-    let since_ms = match &params.since {
-        GetLog2Since::DateTime(param_date_time) => {
-            if let Some(first_entry) = journal_entries.first() && first_entry.epoch_msec > param_date_time.epoch_msec() {
-                first_entry.epoch_msec
-            } else {
-                param_date_time.epoch_msec()
+                Err(err) => error!("Skipping corrupted journal entry: {err}"),
             }
         }
-        GetLog2Since::LastEntry => journal_entries.last().map_or(0, |e| e.epoch_msec),
-        GetLog2Since::None => journal_entries.first().map_or(0,|e| e.epoch_msec),
-    };
-    let until_ms = params.until.as_ref().map_or(i64::MAX, shvproto::DateTime::epoch_msec);
+    }
 
-    const RECORD_COUNT_LIMIT_MAX: i64 = 1_000_000;
-    let record_count_limit = params.record_count_limit.clamp(0, RECORD_COUNT_LIMIT_MAX);
-    let mut record_count_limit_hit  = false;
+    for entry in dirty_log {
+        // Filter out entries that overlap with the entries from the synced files
+        if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
+            continue;
+        }
+
+        if !process_journal_entry(entry, &mut context) {
+            break;
+        }
+    }
+
+    let since_ms = match context.since {
+        Some(Since::Msec(msec)) => msec,
+        Some(Since::Last) => context.last_entry.map_or(0, |entry| entry.epoch_msec),
+        None => 0, // No entries
+    };
+
     let with_snapshot = if matches!(params.since, GetLog2Since::None) && params.with_snapshot {
         warn!("Requested snapshot without a valid `since`. No snapshot will be provided.");
+        // FIXME: we can provide a snapshot at the first entry datetime
         false
     } else {
         params.with_snapshot
     };
 
-    // Always return a complete snapshot if requested, regardless the record_count_limit
-
-    let mut snapshot = BTreeMap::<&String, &JournalEntry>::new();
-    let mut result_entries = Vec::new();
-    let mut record_count = 0;
-    let mut last_entry = None;
-    let mut first_unmatched_entry_msec = None;
-    for journal_entry in &journal_entries {
-        if let Some(pattern) = &params.path_pattern && !matches_path_pattern(&journal_entry.path, pattern) {
-            continue;
-        }
-
-        if journal_entry.epoch_msec <= since_ms {
-            // Values up to `since` go to the snapshot
-            snapshot.insert(&journal_entry.path, journal_entry);
-        } else if journal_entry.epoch_msec >= until_ms {
-            // Done
-            first_unmatched_entry_msec = Some(journal_entry.epoch_msec);
-            break;
-        }
-
-        if journal_entry.epoch_msec > since_ms {
-            // Handle record_count_limit
-            if snapshot.len() + record_count + 1 > record_count_limit as usize {
-                record_count_limit_hit = true;
-                // Record all consecutive entries with the same timestamp
-                if last_entry.is_some_and(|e: &JournalEntry| e.epoch_msec != journal_entry.epoch_msec) {
-                    first_unmatched_entry_msec = Some(journal_entry.epoch_msec);
-                    break;
-                }
-            }
-            // Append
-            result_entries.push(journal_entry);
-            record_count += 1;
-        }
-        last_entry = Some(journal_entry);
-    }
-
     let snapshot_entries = if with_snapshot {
-        snapshot.into_values().map(|entry| {
+        context.snapshot.into_values().map(|entry| {
             JournalEntry {
                 epoch_msec: since_ms,
                 repeat: true,
-                ..entry.clone()
+                ..(*entry).clone()
             }
         })
         .collect::<Vec<_>>()
     } else {
-        // TODO
         Vec::new()
     };
 
     let current_datetime = shvproto::DateTime::now();
-    let until_ms = match first_unmatched_entry_msec {
-        Some(msec) => msec, // until is already set to the first entry that is not included in the log
+    let until_ms = match context.first_unmatched_entry_msec {
+        Some(msec) => msec, // set `until` to the first entry that is not included in the log
         None =>
-            if let Some(last_entry_msec) = result_entries.last().map(|e| e.epoch_msec) {
+            if let Some(last_entry_msec) = context.entries.last().map(|entry| entry.epoch_msec) {
                 // There are other entries than just the snapshot
                 if matches!(params.since, GetLog2Since::LastEntry) {
                     // The last entry is explicitly requested, return all we have.
@@ -754,8 +799,8 @@ async fn getlog_impl(journal_readers: impl IntoIterator<Item = JournalEntryStrea
                 } else if last_entry_msec.abs_diff(current_datetime.epoch_msec()) < 1000 {
                     // If the latest entries with the same timestmao are very recent,
                     // remove them same timestamp from the end of the log
-                    while result_entries.last().is_some_and(|e| e.epoch_msec == last_entry_msec) {
-                        result_entries.pop();
+                    while context.entries.last().is_some_and(|entry| entry.epoch_msec == last_entry_msec) {
+                        context.entries.pop();
                     }
                     // result_entries.retain(|e| e.epoch_msec != last_entry_msec);
                     last_entry_msec
@@ -770,13 +815,14 @@ async fn getlog_impl(journal_readers: impl IntoIterator<Item = JournalEntryStrea
     };
 
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
-        snapshot_entries.iter().chain(result_entries.into_iter()),
+        snapshot_entries.iter().chain(context.entries.iter().map(|arc_entry| arc_entry.as_ref())),
         params.with_paths_dict
     );
-    let log_header = Log2Header {
-        record_count: record_count as _,
-        record_count_limit,
-        record_count_limit_hit,
+
+    result.meta = Some(Box::new(Log2Header {
+        record_count: context.record_count as _,
+        record_count_limit: context.record_count_limit as _,
+        record_count_limit_hit: context.record_count_limit_hit,
         date_time: current_datetime,
         since: shvproto::DateTime::from_epoch_msec(since_ms),
         until: shvproto::DateTime::from_epoch_msec(until_ms),
@@ -785,9 +831,9 @@ async fn getlog_impl(journal_readers: impl IntoIterator<Item = JournalEntryStrea
         paths_dict,
         log_params: params.clone(),
         log_version: 2,
-    };
+    }
+    .into()));
 
-    result.meta = Some(Box::new(log_header.into()));
     result
 }
 

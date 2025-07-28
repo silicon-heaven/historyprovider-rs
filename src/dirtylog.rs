@@ -16,7 +16,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::datachange::DataChange;
 use crate::journalentry::JournalEntry;
-use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_PROVISIONAL_BIT, VALUE_FLAG_SPONTANEOUS_BIT};
+use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_SPONTANEOUS_BIT};
 use crate::util::{get_files, is_log2_file, subscribe, subscription_prefix_path};
 use crate::{ClientCommandSender, State, Subscriber};
 
