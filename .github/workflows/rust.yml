@@ -1,0 +1,38 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+permissions:
+  # For syyyr/rust-pycobertura-action
+  pull-requests: write
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Clippy
+      run: cargo clippy --verbose --all-targets --all-features
+    - name: Build
+      run: cargo build --verbose --all-features
+    - name: Run tests
+      run: cargo test --verbose --all-features
+
+  coverage:
+    name: Code coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate coverage
+        uses: syyyr/rust-pycobertura-action@v3.0.0
+        with:
+          project_name: historyprovider-rs
