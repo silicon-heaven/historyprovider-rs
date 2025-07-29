@@ -16,6 +16,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
+use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
@@ -656,6 +657,14 @@ pub(crate) async fn sync_task(
                 }
                 futures::future::join_all(sync_tasks).await;
                 log::info!("Sync logs done in {} s", sync_start.elapsed().as_secs());
+                sites_info
+                    .keys()
+                    .for_each(|site|
+                        app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
+                        .unwrap_or_else(|e|
+                            panic!("Cannot send dirtylog Trim command for site {site}: {e}")
+                        )
+                    );
             }
             SyncCommand::SyncSite(site) => {
                 let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
@@ -709,6 +718,10 @@ pub(crate) async fn sync_task(
                             // TODO
                         }
                     }
+                    app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
+                        .unwrap_or_else(|e|
+                            panic!("Cannot send dirtylog Trim command for site {site}: {e}")
+                        );
                 } else {
                     log::warn!("Requested sync for unknown site: {site}");
                 }
