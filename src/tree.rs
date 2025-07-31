@@ -1,5 +1,13 @@
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::path::Path;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use async_compression::tokio::write::GzipEncoder;
-use futures::{StreamExt, TryStreamExt};
+use futures::io::BufReader;
+use futures::{Stream, StreamExt, TryStreamExt};
+use log::{error, info, warn};
 use sha1::Digest;
 use shvclient::client::MetaMethods;
 use shvclient::clientnode::{children_on_path, ConstantNode, METH_LS};
@@ -8,10 +16,16 @@ use shvproto::RpcValue;
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
-use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
+use tokio::fs::DirEntry;
+use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_stream::wrappers::ReadDirStream;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
 
+use crate::dirtylog::DirtyLogCommand;
+use crate::journalentry::JournalEntry;
+use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
+use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, State};
 
 // History site node methods
@@ -524,7 +538,7 @@ where
     file.seek(std::io::SeekFrom::Start(offset)).await?;
     let file_size = file.metadata().await?.len();
     let size = size.unwrap_or(file_size).min(file_size).min(MAX_READ_SIZE);
-    let reader = BufReader::new(file).take(size);
+    let reader = tokio::io::BufReader::new(file).take(size);
     process(Box::new(reader)).await
 }
 
@@ -547,6 +561,306 @@ async fn compress_file(path: impl AsRef<str>, offset: u64, size: Option<u64>) ->
     }).await
 }
 
+async fn getlog_handler(
+    rq: RpcMessage,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let params = GetLog2Params::try_from(rq.param().unwrap_or_default())
+        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
+    let site_path = rq.shv_path().unwrap_or_default();
+    if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));
+    }
+    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    info!("getLog site: {site_path}, params: {params:?}");
+    let mut log_files = get_files(&local_journal_path, is_log2_file)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
+    log_files.sort_by_key(|entry| entry.file_name());
+
+    // Skip files with no journal entries
+    let log_files = tokio_stream::iter(log_files)
+        .filter(|file_entry| {
+            let file_path = file_entry.path();
+            async move {
+                match tokio::fs::File::open(&file_path).await {
+                    Ok(file) => {
+                        JournalReaderLog2::new(BufReader::new(file.compat()))
+                            .next()
+                            .await
+                            .is_some()
+                    }
+                    Err(err) => {
+                        error!("Cannot open file {file_path} in call to getLog: {err}",
+                            file_path = file_path.to_string_lossy()
+                        );
+                        false
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    let file_start_index = {
+        if log_files.is_empty() {
+            0
+        } else {
+            match &params.since {
+                GetLog2Since::DateTime(date_time) => {
+                    let since_ms = date_time.epoch_msec();
+                    let file_name_to_msec = |file_name: &str| file_name
+                        .strip_suffix(".log2")
+                        .and_then(|file| shvproto::DateTime::from_iso_str(file).ok().as_ref().map(shvproto::DateTime::epoch_msec))
+                        .unwrap_or(i64::MAX);
+
+                    log_files
+                        .iter()
+                        .map(DirEntry::file_name)
+                        .enumerate()
+                        .rev()
+                        .find(|(_,file)| file_name_to_msec(&file.to_string_lossy()) < since_ms)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0)
+                }
+                GetLog2Since::LastEntry => log_files.len() - 1,
+                GetLog2Since::None => 0,
+            }
+        }
+    };
+
+    let file_readers = tokio_stream::iter(&log_files[file_start_index..])
+        .then(|file_entry| async {
+            let file_path = file_entry.path();
+            tokio::fs::File::open(&file_path)
+                .await
+                .map_err(|err| format!("Cannot open file {file_path} in call to getLog: {err}", file_path = file_path.to_string_lossy()))
+                .map(|file| JournalReaderLog2::new(BufReader::new(file.compat())))
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, err))?;
+
+
+    let (dirtylog_tx, dirtylog_rx) = futures::channel::oneshot::channel();
+    app_state.dirtylog_cmd_tx
+        .unbounded_send(DirtyLogCommand::Get {
+            site: site_path.into(),
+            response_tx: dirtylog_tx,
+        })
+        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
+    let dirtylog = dirtylog_rx
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
+
+    Ok(getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, &params).await)
+}
+
+type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
+
+async fn getlog_impl(
+    journal_readers: impl IntoIterator<Item = JournalEntryStream>,
+    dirty_log: impl IntoIterator<Item = JournalEntry>,
+    params: &GetLog2Params
+) -> RpcValue
+{
+    const RECORD_COUNT_LIMIT_MAX: i64 = 100_000;
+
+    enum Since {
+        Msec(i64),
+        Last,
+    }
+
+    fn is_snapshot_entry(entry: &JournalEntry, since: &Since) -> bool {
+        match since {
+            Since::Msec(since_msec) => entry.epoch_msec <= *since_msec,
+            Since::Last => true,
+        }
+    }
+
+    struct Context<'a> {
+        params: &'a GetLog2Params,
+        since: Option<Since>,
+        snapshot: BTreeMap<String, Arc<JournalEntry>>,
+        entries: Vec<Arc<JournalEntry>>,
+        record_count: usize,
+        record_count_limit: usize,
+        record_count_limit_hit: bool,
+        last_entry: Option<Arc<JournalEntry>>,
+        first_unmatched_entry_msec: Option<i64>,
+        until_ms: i64,
+    }
+
+    fn process_journal_entry(
+        entry: JournalEntry,
+        context: &mut Context,
+    ) -> bool {
+        if context
+            .params
+            .path_pattern
+                .as_ref()
+                .is_some_and(|p| !matches_path_pattern(&entry.path, p))
+        {
+            return true;
+        }
+
+        let entry = Arc::new(entry);
+
+        let since_val = context.since.get_or_insert_with(|| determine_since(&entry, &context.params.since));
+        let is_snapshot_entry = is_snapshot_entry(&entry, since_val);
+
+        if is_snapshot_entry {
+            context.snapshot.insert(entry.path.clone(), Arc::clone(&entry));
+        } else if entry.epoch_msec >= context.until_ms {
+            context.first_unmatched_entry_msec = Some(entry.epoch_msec);
+            return false;
+        }
+
+        if !is_snapshot_entry {
+            let total = context.snapshot.len() + context.record_count + 1;
+            if total > context.record_count_limit {
+                context.record_count_limit_hit = true;
+
+                // Record all consecutive entries with the same timestamp
+                if context.last_entry.as_ref().is_some_and(|last_entry| last_entry.epoch_msec != entry.epoch_msec) {
+                    context.first_unmatched_entry_msec = Some(entry.epoch_msec);
+                    return false;
+                }
+            }
+
+            context.entries.push(Arc::clone(&entry));
+            context.record_count += 1;
+        }
+
+        context.last_entry = Some(entry);
+        true
+    }
+
+
+    fn determine_since(entry: &JournalEntry, params_since: &GetLog2Since) -> Since {
+        match params_since {
+            GetLog2Since::DateTime(dt) => Since::Msec(dt.epoch_msec().max(entry.epoch_msec)),
+            GetLog2Since::LastEntry => Since::Last,
+            GetLog2Since::None => Since::Msec(entry.epoch_msec),
+        }
+    }
+
+    let mut context = Context {
+        params,
+        since: None,
+        snapshot: BTreeMap::new(),
+        entries: Vec::new(),
+        record_count: 0,
+        record_count_limit: params.record_count_limit.clamp(0, RECORD_COUNT_LIMIT_MAX) as _,
+        record_count_limit_hit: false,
+        last_entry: None,
+        first_unmatched_entry_msec: None,
+        until_ms: params.until.as_ref().map_or(i64::MAX, shvproto::DateTime::epoch_msec),
+    };
+
+    for mut reader in journal_readers {
+        while let Some(entry_res) = reader.next().await {
+            match entry_res {
+                Ok(entry) => {
+                    if !process_journal_entry(entry, &mut context) {
+                        break;
+                    }
+                }
+                Err(err) => error!("Skipping corrupted journal entry: {err}"),
+            }
+        }
+    }
+
+    for entry in dirty_log {
+        // Filter out entries that overlap with the entries from the synced files
+        if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
+            continue;
+        }
+
+        if !process_journal_entry(entry, &mut context) {
+            break;
+        }
+    }
+
+    let since_ms = match context.since {
+        Some(Since::Msec(msec)) => msec,
+        Some(Since::Last) => context.last_entry.map_or(0, |entry| entry.epoch_msec),
+        None => 0, // No entries
+    };
+
+    let with_snapshot = if matches!(params.since, GetLog2Since::None) && params.with_snapshot {
+        warn!("Requested snapshot without a valid `since`. No snapshot will be provided.");
+        // FIXME: we can provide a snapshot at the first entry datetime
+        false
+    } else {
+        params.with_snapshot
+    };
+
+    let snapshot_entries = if with_snapshot {
+        context.snapshot.into_values().map(|entry| {
+            JournalEntry {
+                epoch_msec: since_ms,
+                repeat: true,
+                ..(*entry).clone()
+            }
+        })
+        .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let current_datetime = shvproto::DateTime::now();
+    let until_ms = match context.first_unmatched_entry_msec {
+        Some(msec) => msec, // set `until` to the first entry that is not included in the log
+        None =>
+            if let Some(last_entry_msec) = context.entries.last().map(|entry| entry.epoch_msec) {
+                // There are other entries than just the snapshot
+                if matches!(params.since, GetLog2Since::LastEntry) {
+                    // The last entry is explicitly requested, return all we have.
+                    // Set `until` to the timestamp of the last entry to indicate that
+                    // there might be more data with this timestamp on the next call.
+                    last_entry_msec
+                } else if last_entry_msec.abs_diff(current_datetime.epoch_msec()) < 1000 {
+                    // If the latest entries with the same timestmao are very recent,
+                    // remove them same timestamp from the end of the log
+                    while context.entries.last().is_some_and(|entry| entry.epoch_msec == last_entry_msec) {
+                        context.entries.pop();
+                    }
+                    // result_entries.retain(|e| e.epoch_msec != last_entry_msec);
+                    last_entry_msec
+                } else {
+                    // Keep the last entries, set `until` just after the last entry timestamp
+                    last_entry_msec + 1
+                }
+            } else {
+                // Empty result or only the snapshot, set `until` equal to `since`
+                since_ms
+            }
+    };
+
+    let (mut result, paths_dict) = journal_entries_to_rpcvalue(
+        snapshot_entries.iter().chain(context.entries.iter().map(|arc_entry| arc_entry.as_ref())),
+        params.with_paths_dict
+    );
+
+    result.meta = Some(Box::new(Log2Header {
+        record_count: context.record_count as _,
+        record_count_limit: context.record_count_limit as _,
+        record_count_limit_hit: context.record_count_limit_hit,
+        date_time: current_datetime,
+        since: shvproto::DateTime::from_epoch_msec(since_ms),
+        until: shvproto::DateTime::from_epoch_msec(until_ms),
+        with_paths_dict: params.with_paths_dict,
+        with_snapshot,
+        paths_dict,
+        log_params: params.clone(),
+        log_version: 2,
+    }
+    .into()));
+
+    result
+}
+
 async fn history_request_handler(
     rq: RpcMessage,
     _client_cmd_tx: ClientCommandSender,
@@ -559,7 +873,7 @@ async fn history_request_handler(
 
     match method {
         METH_LS => Ok(children.into()),
-        METH_GET_LOG if children.is_empty() => Ok(vec!["getLog: TODO"].into()),
+        METH_GET_LOG if children.is_empty() => getlog_handler(rq, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
     }
 }

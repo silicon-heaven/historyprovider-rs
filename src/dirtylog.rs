@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::{select, StreamExt};
@@ -15,7 +16,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::datachange::DataChange;
 use crate::journalentry::JournalEntry;
-use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_PROVISIONAL_BIT, VALUE_FLAG_SPONTANEOUS_BIT};
+use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_SPONTANEOUS_BIT};
 use crate::util::{get_files, is_log2_file, subscribe, subscription_prefix_path};
 use crate::{ClientCommandSender, State, Subscriber};
 
@@ -30,7 +31,7 @@ pub(crate) enum DirtyLogCommand {
     },
     Get {
         site: String,
-        response_tx: UnboundedSender<Vec<JournalEntry>>,
+        response_tx: OneshotSender<Vec<JournalEntry>>,
     }
 }
 
@@ -64,8 +65,8 @@ pub(crate) async fn dirty_log_task(
                         .sites_info
                         .clone();
                     subscribers = site_paths
-                        .iter()
-                        .flat_map(|(path, _)| {
+                        .keys()
+                        .flat_map(|path| {
                             let shv_path = join_path!("shv", path);
                             let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
                             let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
@@ -99,7 +100,7 @@ pub(crate) async fn dirty_log_task(
                         }
                     };
 
-                    let newest_log_path = {
+                    let latest_entry = {
                         let mut log_files = match get_files(&Path::new(&app_state.config.journal_dir).join(&site), is_log2_file).await {
                             Ok(files) => files,
                             Err(err) => {
@@ -107,34 +108,36 @@ pub(crate) async fn dirty_log_task(
                                 continue;
                             }
                         };
-                        log_files.sort_by_key(|entry| entry.file_name());
-                        match log_files.last() {
-                            Some(newest_log_file) => newest_log_file.path(),
+                        log_files.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+
+                        let latest_entry = Box::pin(futures::stream::iter(log_files)
+                            .map(|file_entry| file_entry.path())
+                            .then(|file_path|
+                                async move {
+                                    match tokio::fs::File::open(&file_path).await {
+                                        Ok(file) => {
+                                            let reader = JournalReaderLog2::new(BufReader::new(file.compat()));
+                                            reader.fold(None, |_, entry| { let entry = entry.ok(); async { entry }}).await
+                                        }
+                                        Err(err) => {
+                                            error!("Cannot open file {file_path} while getting the last journal entry for trim dirtylog: {err}",
+                                                file_path = file_path.to_string_lossy()
+                                            );
+                                            None
+                                        }
+                                }
+                            })
+                            .filter_map(async move |entry| entry))
+                            .next()
+                            .await;
+
+                        match latest_entry {
+                            Some(entry) => entry,
                             None => {
-                                info!("Trim dirty log done, no synced files");
+                                info!("Trim dirty log done, no journal entries in synced files");
                                 continue
                             }
                         }
-                    };
-                    let newest_log_file = match tokio::fs::File::open(&newest_log_path).await {
-                        Ok(file) => file,
-                        Err(err) => {
-                            if err.kind() == std::io::ErrorKind::NotFound {
-                                info!("Trim dirty log done, no synced files");
-                            } else {
-                                error!("Cannot trim dirty log. Cannot open file {file_path}: {err}",
-                                    file_path = newest_log_path.to_string_lossy()
-                                );
-                            }
-                            continue;
-                        }
-                    };
-
-                    // Get the latest entry from the latest log
-                    let reader = JournalReaderLog2::new(BufReader::new(newest_log_file.compat()));
-                    let Some(latest_entry) = reader.fold(None, |_, entry| { let entry = entry.ok(); async { entry }}).await else {
-                        info!("Trim dirty log done, no journal entries in synced files");
-                        continue;
                     };
 
                     // Remove all entries older than the latest entry from the dirty log
@@ -202,7 +205,7 @@ pub(crate) async fn dirty_log_task(
                             Vec::new()
                         }
                     };
-                    response_tx.unbounded_send(res).unwrap_or_default();
+                    response_tx.send(res).unwrap_or_default();
                 }
             },
             notification = subscribers.select_next_some() => {
@@ -250,7 +253,7 @@ pub(crate) async fn dirty_log_task(
                     short_time: data_change.short_time.unwrap_or(-1),
                     user_id: Default::default(),
                     repeat: data_change.value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
-                    provisional: data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
+                    provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
                 };
                 writer.append(&entry)
                     .await

@@ -4,6 +4,7 @@ use shvclient::clientnode::{METH_GET, SIG_CHNG};
 use shvproto::RpcValue;
 use shvrpc::metamethod::AccessLevel;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::error::Error;
@@ -15,7 +16,7 @@ const JOURNAL_ENTRIES_SEPARATOR: &str = "\t";
 pub(crate) const VALUE_FLAG_SPONTANEOUS_BIT: i32 = 1;
 pub(crate) const VALUE_FLAG_PROVISIONAL_BIT: i32 = 2;
 
-fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error>> {
+fn parse_journal_entry_log2(line: &str) -> Result<JournalEntry, Box<dyn Error + Send + Sync>> {
     let parts: Vec<&str> = line.split(JOURNAL_ENTRIES_SEPARATOR).collect();
     let mut parts_iter = parts.iter().copied();
 
@@ -66,7 +67,7 @@ impl<R> Stream for JournalReaderLog2<R>
 where
     R: AsyncBufRead + Unpin,
 {
-    type Item = Result<JournalEntry, Box<dyn Error>>;
+    type Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let lines = Pin::new(&mut self.lines);
@@ -142,7 +143,7 @@ impl Log2Reader {
         };
         Ok(Self {
             log: list.into_iter(),
-            header: Log2Header::from_meta(*log.meta.unwrap_or_default())?,
+            header: (*log.meta.unwrap_or_default()).try_into()?,
         })
     }
 }
@@ -151,13 +152,13 @@ impl Iterator for Log2Reader {
     type Item = Result<JournalEntry, Box<dyn Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.log.next().map(|entry| rpc_value_to_journal_entry(&entry, &self.header))
+        self.log.next().map(|entry| rpcvalue_to_journal_entry(&entry, &self.header.paths_dict))
     }
 }
 
 const NO_SHORT_TIME: i32 = -1;
 
-fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<JournalEntry, Box<dyn Error>> {
+fn rpcvalue_to_journal_entry(entry: &RpcValue, paths_dict: &BTreeMap<i32, String>) -> Result<JournalEntry, Box<dyn Error>> {
     let make_err = |msg| Err(format!("{msg}: {}", entry.to_cpon()).into());
     let shvproto::Value::List(row) = &entry.value else {
         return make_err("Log entry is not a list");
@@ -172,8 +173,7 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
 
     let path = row.next().unwrap_or_default();
     let path = match &path.value {
-        shvproto::Value::Int(idx) => header
-            .paths_dict
+        shvproto::Value::Int(idx) => paths_dict
             .get(&(*idx as i32))
             .ok_or_else(|| format!("Wrong path reference {idx} of journal entry: {}", entry.to_cpon()))?,
         shvproto::Value::String(path) => path,
@@ -226,9 +226,94 @@ fn rpc_value_to_journal_entry(entry: &RpcValue, header: &Log2Header) -> Result<J
     })
 }
 
+pub(crate) fn journal_entry_to_rpcvalue(
+    entry: &JournalEntry,
+    path_cache: &mut Option<BTreeMap<String, i32>>,
+) -> RpcValue {
+    let path_value: RpcValue = if let Some(cache) = path_cache {
+        // If path already present, use the existing index; otherwise insert new one.
+        let idx = match cache.get(&entry.path) {
+            Some(&idx) => idx,
+            None => {
+                let new_idx = cache.len() as i32;
+                cache.insert(entry.path.clone(), new_idx);
+                new_idx
+            }
+        };
+        idx.into()
+    } else {
+        entry.path.clone().into()
+    };
+
+    let mut value_flags: u64 = 0;
+    if !entry.repeat {
+        value_flags |= 1 << VALUE_FLAG_SPONTANEOUS_BIT;
+    }
+    if entry.provisional {
+        value_flags |= 1 << VALUE_FLAG_PROVISIONAL_BIT;
+    }
+
+    let domain = if entry.signal == SIG_CHNG {
+        "".into()
+    } else {
+        entry.signal.clone()
+    };
+
+    shvproto::make_list!(
+        shvproto::DateTime::from_epoch_msec(entry.epoch_msec),
+        path_value,
+        entry.value.clone(),
+        entry.short_time,
+        domain,
+        value_flags,
+        entry.user_id.clone(),
+    ).into()
+}
+
+pub(crate) fn journal_entries_to_rpcvalue<'a>(
+    entries: impl IntoIterator<Item = &'a JournalEntry>,
+    with_paths_dict: bool
+) -> (RpcValue, BTreeMap<i32, String>)
+{
+    let mut path_cache = with_paths_dict.then(BTreeMap::new);
+    let result: RpcValue = entries
+        .into_iter()
+        .map(|entry| journal_entry_to_rpcvalue(entry, &mut path_cache))
+        .collect::<Vec<_>>()
+        .into();
+
+    let paths_dict = path_cache
+        .map_or_else(Default::default, |cache| cache
+            .into_iter()
+            .map(|(k,v)| (v, k))
+            .collect()
+        );
+    (result, paths_dict)
+}
+
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub(crate) enum GetLog2Since {
+    DateTime(shvproto::DateTime),
+    LastEntry,
+    None,
+}
+
+impl Display for GetLog2Since {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            GetLog2Since::DateTime(date_time) => date_time.to_iso_string(),
+            GetLog2Since::LastEntry => "last".into(),
+            GetLog2Since::None => "none".into(),
+        };
+        write!(f, "{str}")
+    }
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct GetLog2Params {
-    pub(crate) since: Option<shvproto::DateTime>,
+    pub(crate) since: GetLog2Since,
     pub(crate) until: Option<shvproto::DateTime>,
     pub(crate) path_pattern: Option<String>,
     pub(crate) with_paths_dict: bool,
@@ -236,12 +321,12 @@ pub(crate) struct GetLog2Params {
     pub(crate) record_count_limit: i64,
 }
 
-const RECORD_COUNT_LIMIT_DEFAULT: i64 = 10000;
+pub(crate) const RECORD_COUNT_LIMIT_DEFAULT: i64 = 10000;
 
 impl Default for GetLog2Params {
     fn default() -> Self {
         Self {
-            since: None,
+            since: GetLog2Since::None,
             until: None,
             path_pattern: None,
             with_paths_dict: true,
@@ -254,8 +339,14 @@ impl Default for GetLog2Params {
 impl From<GetLog2Params> for RpcValue {
     fn from(value: GetLog2Params) -> Self {
         let mut map = shvproto::Map::new();
-        if let Some(since) = value.since {
-            map.insert("since".into(), since.into());
+        match value.since {
+            GetLog2Since::DateTime(dt) => {
+                map.insert("since".into(), dt.into());
+            }
+            GetLog2Since::LastEntry => {
+                map.insert("since".into(), "last".into());
+            }
+            GetLog2Since::None => { }
         }
         if let Some(until) = value.until {
             map.insert("until".into(), until.into());
@@ -278,8 +369,13 @@ impl TryFrom<&RpcValue> for GetLog2Params {
             return Err(format!("getLog params has wrong type, expected Map, got {}", value.type_name()));
         };
         let since = match map.get("since") {
-            Some(since) => Some(since.to_datetime().ok_or_else(|| "Invalid `since` value type".to_string())?),
-            None => None,
+            Some(since) => match &since.value {
+                shvproto::Value::Null => GetLog2Since::None,
+                shvproto::Value::DateTime(dt) => GetLog2Since::DateTime(*dt),
+                shvproto::Value::String(val) if val.as_str() == "last" => GetLog2Since::LastEntry,
+                _ => return Err("Invalid `since` value, expected a DateTime or \"last\"".into()),
+            }
+            None => GetLog2Since::None,
         };
         let until = match map.get("until") {
             Some(until) => Some(until.to_datetime().ok_or_else(|| "Invalid `until` value type".to_string())?),
@@ -309,7 +405,6 @@ impl TryFrom<&RpcValue> for GetLog2Params {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn matches_path_pattern(path: impl AsRef<str>, pattern: impl AsRef<str>) -> bool {
     let path_parts: Vec<&str> = path.as_ref().split('/').collect();
     let pattern_parts: Vec<&str> = pattern.as_ref().split('/').collect();
@@ -353,8 +448,8 @@ pub(crate) fn matches_path_pattern(path: impl AsRef<str>, pattern: impl AsRef<st
     patt_ix == pattern_parts.len()
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct Log2Header {
     pub(crate) record_count: i64,
     pub(crate) record_count_limit: i64,
@@ -369,47 +464,49 @@ pub(crate) struct Log2Header {
     pub(crate) log_version: i64,
 }
 
-impl Log2Header {
-    fn from_meta(meta: shvproto::MetaMap) -> Result<Self, Box<dyn Error>> {
+impl TryFrom<shvproto::MetaMap> for Log2Header {
+    type Error = String;
+
+    fn try_from(meta: shvproto::MetaMap) -> Result<Self, Self::Error> {
         let current_datetime = shvproto::DateTime::now();
         let record_count = match meta.get("recordCount").map(|v| &v.value) {
             Some(shvproto::Value::Int(record_count)) => *record_count,
-            Some(v) => return Err(format!("Invalid `recordCount` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `recordCount` type: {}", v.type_name())),
             None => 0,
         };
         let record_count_limit = match meta.get("recordCountLimit").map(|v| &v.value) {
             Some(shvproto::Value::Int(record_count_limit)) => *record_count_limit,
-            Some(v) => return Err(format!("Invalid `recordCountLimit` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `recordCountLimit` type: {}", v.type_name())),
             None => 0,
         };
         let record_count_limit_hit = match meta.get("recordCountLimitHit").map(|v| &v.value) {
             Some(shvproto::Value::Bool(record_count_limit_hit)) => *record_count_limit_hit,
-            Some(v) => return Err(format!("Invalid `recordCountLimitHit` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `recordCountLimitHit` type: {}", v.type_name())),
             None => false,
         };
         let date_time = match meta.get("dateTime").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(date_time)) => *date_time,
             Some(shvproto::Value::Null) | None => current_datetime,
-            Some(v) => return Err(format!("Invalid `dateTime` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `dateTime` type: {}", v.type_name())),
         };
         let since = match meta.get("since").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(since)) => *since,
             Some(shvproto::Value::Null) | None => current_datetime,
-            Some(v) => return Err(format!("Invalid `since` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `since` type: {}", v.type_name())),
         };
         let until = match meta.get("until").map(|v| &v.value) {
             Some(shvproto::Value::DateTime(until)) => *until,
             Some(shvproto::Value::Null) | None => current_datetime,
-            Some(v) => return Err(format!("Invalid `until` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `until` type: {}", v.type_name())),
         };
         let with_paths_dict = match meta.get("withPathsDict").map(|v| &v.value) {
             Some(shvproto::Value::Bool(val)) => *val,
-            Some(v) => return Err(format!("Invalid `withPathsDict` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `withPathsDict` type: {}", v.type_name())),
             None => true,
         };
         let with_snapshot = match meta.get("withSnapshot").map(|v| &v.value) {
             Some(shvproto::Value::Bool(val)) => *val,
-            Some(v) => return Err(format!("Invalid `withSnapshot` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `withSnapshot` type: {}", v.type_name())),
             None => false,
         };
         let paths_dict: BTreeMap<i32, String> = match meta.get("pathsDict").map(|v| &v.value) {
@@ -420,7 +517,7 @@ impl Log2Header {
                     .map(|s| (*i, s)))
                 .collect::<Result<BTreeMap<_, _>,_>>()
                 .map_err(|e| format!("Corrupted paths dictionary: {e}"))?,
-            Some(v) => return Err(format!("Invalid `pathsDict` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `pathsDict` type: {}", v.type_name())),
             None => Default::default(),
         };
         let log_params = match meta.get("logParams") {
@@ -430,7 +527,7 @@ impl Log2Header {
 
         let log_version = match meta.get("logVersion").map(|v| &v.value) {
             Some(shvproto::Value::Int(val)) => *val,
-            Some(v) => return Err(format!("Invalid `logVersion` type: {}", v.type_name()).into()),
+            Some(v) => return Err(format!("Invalid `logVersion` type: {}", v.type_name())),
             None => 2,
         };
         Ok(Self {
@@ -449,6 +546,24 @@ impl Log2Header {
     }
 }
 
+impl From<Log2Header> for shvproto::MetaMap {
+    fn from(value: Log2Header) -> Self {
+        let mut meta = shvproto::MetaMap::new();
+        meta.insert("recordCount", value.record_count.into());
+        meta.insert("recordCountLimit", value.record_count_limit.into());
+        meta.insert("recordCountLimitHit", value.record_count_limit_hit.into());
+        meta.insert("dateTime", value.date_time.into());
+        meta.insert("since", value.since.into());
+        meta.insert("until", value.until.into());
+        meta.insert("withPathsDict", value.with_paths_dict.into());
+        meta.insert("withSnapshot", value.with_snapshot.into());
+        meta.insert("pathsDict", value.paths_dict.into());
+        meta.insert("logParams", value.log_params.into());
+        meta.insert("logVersion", value.log_version.into());
+        meta
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::io::{BufReader, Cursor};
@@ -462,7 +577,7 @@ mod tests {
     use crate::journalentry::JournalEntry;
     use crate::journalrw::{matches_path_pattern, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 
-    use super::parse_journal_entry_log2;
+    use super::{journal_entries_to_rpcvalue, parse_journal_entry_log2, Log2Header, NO_SHORT_TIME, RECORD_COUNT_LIMIT_DEFAULT};
 
     #[tokio::test]
     async fn read_file_journal() {
@@ -535,6 +650,53 @@ mod tests {
             )
             .collect::<Result<Vec<_>,_>>().unwrap();
         println!("{res:?}");
+    }
+
+    fn make_journal_entry(epoch_msec: i64, path: &str, value: impl Into<shvproto::RpcValue>, repeat: bool, provisional: bool, signal: &str) -> JournalEntry {
+        JournalEntry {
+            epoch_msec,
+            path: path.to_string(),
+            signal: signal.to_string(),
+            source: "get".to_string(),
+            value: value.into(),
+            access_level: AccessLevel::Read as _,
+            short_time: NO_SHORT_TIME,
+            user_id: Some("testuser".to_string()),
+            repeat,
+            provisional,
+        }
+    }
+
+    #[test]
+    fn log2_journal_to_from_rpcvalue() {
+        let entries = [
+            make_journal_entry(1000, "foo", 123, true, false, SIG_CHNG),
+            make_journal_entry(2000, "bar", false, true, false, SIG_CHNG),
+            make_journal_entry(3000, "x/y/z", false, true, false, SIG_CHNG),
+            make_journal_entry(4000, "bar", "asdf", false, false, SIG_CHNG),
+            make_journal_entry(5000, "baz", 0, false, false, SIG_CHNG),
+            make_journal_entry(5000, "foo", 10, false, true, SIG_CHNG),
+        ];
+        {
+            let (mut rv, paths_dict) = journal_entries_to_rpcvalue(&entries, false);
+            let header = Log2Header {
+                record_count: entries.len() as _,
+                record_count_limit: RECORD_COUNT_LIMIT_DEFAULT,
+                record_count_limit_hit: false,
+                date_time: shvproto::DateTime::from_epoch_msec(1000),
+                since: shvproto::DateTime::from_epoch_msec(entries.first().unwrap().epoch_msec),
+                until: shvproto::DateTime::from_epoch_msec(entries.last().unwrap().epoch_msec),
+                with_paths_dict: false,
+                with_snapshot: false,
+                paths_dict,
+                log_params: super::GetLog2Params::default(),
+                log_version: 2,
+            };
+            rv.meta = Some(Box::new(header.clone().into()));
+            let reader = Log2Reader::new(rv).unwrap();
+            assert_eq!(reader.header, header);
+            assert_eq!(reader.collect::<Result<Vec<_>,_>>().unwrap(), entries);
+        }
     }
 
     #[test]
