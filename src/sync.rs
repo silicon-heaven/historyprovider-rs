@@ -232,13 +232,13 @@ async fn sync_site_by_download(
     remote_journal_path: impl AsRef<str>,
     download_chunk_size: i64,
     client_cmd_tx: ClientCommandSender,
-    app_state: AppState<State>,
+    journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
     file_list: &[LsFilesEntry],
 ) -> Result<(), String>
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
-    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    let local_journal_path = Path::new(journal_dir.as_ref()).join(site_path);
     sync_logger.log(
         log::Level::Info,
         format!("start syncing from {} to {}, download chunk size: {}",
@@ -424,12 +424,12 @@ async fn sync_site_legacy(
     site_path: impl AsRef<str>,
     getlog_path: impl AsRef<str>,
     client_cmd_tx: ClientCommandSender,
-    app_state: AppState<State>,
+    journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
 ) -> Result<(), String>
 {
     let (site_path, getlog_path) = (site_path.as_ref(), getlog_path.as_ref());
-    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    let local_journal_path = Path::new(journal_dir.as_ref()).join(site_path);
     sync_logger.log(
         log::Level::Info,
         format!("start syncing from {} to {} via getLog", getlog_path, local_journal_path.to_string_lossy())
@@ -637,6 +637,7 @@ async fn sync_site_legacy(
 }
 
 const MAX_SYNC_TASKS_DEFAULT: usize = 8;
+const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
 
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
@@ -661,7 +662,6 @@ pub(crate) async fn sync_task(
         }
     });
 
-    const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
     // The download size limit should be lower than the max_journal_dir_size, because it doesn't
     // count in the files synced by getLog.
     let max_journal_dir_size = app_state.config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as i64;
@@ -707,7 +707,7 @@ pub(crate) async fn sync_task(
                                         remote_journal_path,
                                         download_chunk_size,
                                         client_cmd_tx,
-                                        app_state,
+                                        &app_state.config.journal_dir,
                                         sync_logger.clone(),
                                         &file_list,
                                     ).await;
@@ -729,7 +729,7 @@ pub(crate) async fn sync_task(
                                     site_path,
                                     remote_getlog_path,
                                     client_cmd_tx,
-                                    app_state,
+                                    &app_state.config.journal_dir,
                                     sync_logger.clone()
                                 ).await;
                                 if let Err(err) = sync_result {
@@ -782,7 +782,7 @@ pub(crate) async fn sync_task(
                                 remote_journal_path,
                                 download_chunk_size,
                                 client_cmd_tx,
-                                app_state.clone(),
+                                &app_state.config.journal_dir,
                                 sync_logger.clone(),
                                 &files_to_download.get(&site).cloned().unwrap_or_default(),
                             ).await;
@@ -800,7 +800,7 @@ pub(crate) async fn sync_task(
                                 site_path,
                                 remote_getlog_path,
                                 client_cmd_tx,
-                                app_state.clone(),
+                                &app_state.config.journal_dir,
                                 sync_logger.clone()
                             ).await;
                             if let Err(err) = sync_result {
