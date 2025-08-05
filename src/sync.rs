@@ -251,7 +251,23 @@ async fn sync_site_by_download(
         .await
         .map_err(|e| format!("Cannot create journal directory at {}: {e}", local_journal_path.to_string_lossy()))?;
 
-    let files_to_sync = futures::stream::iter(file_list)
+    // If local files exist, limit fetching to files newer than the oldest local file.
+    // This prevents fetching old files that would be deleted by sanitize just after the sync.
+    let oldest_local_file = get_files(&local_journal_path, is_log2_file)
+        .await
+        .map(|mut log_files| {log_files.sort_by_key(|entry| entry.file_name()); log_files})
+        .unwrap_or_default()
+        .first()
+        .map(|first_file| first_file.file_name().to_string_lossy().to_string());
+
+    let files_to_sync = futures::stream::iter(
+        file_list
+            .iter()
+            .filter(|file| oldest_local_file
+                .as_ref()
+                .is_none_or(|oldest_file| &file.name >= oldest_file)
+            )
+        )
         .filter_map(|remote_file| async {
             let local_file_path = local_journal_path.join(&remote_file.name);
             match tokio::fs::metadata(&local_file_path).await {
