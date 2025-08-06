@@ -1,11 +1,13 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::io::{BufReader, BufWriter};
+use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use log::{debug, error, info, warn};
 use shvclient::client::RpcCall;
 use shvclient::clientnode::METH_DIR;
 use shvclient::{AppState, ClientEventsReceiver};
@@ -16,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
+use crate::cleanup::cleanup_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
@@ -45,6 +48,7 @@ impl SyncInfo {
 pub(crate) enum SyncCommand {
     SyncAll,
     SyncSite(String),
+    Cleanup,
 }
 
 impl TryFrom<String> for FileType {
@@ -151,17 +155,112 @@ impl SyncLogger for SyncSiteLogger {
     }
 }
 
+async fn get_files_to_sync(
+    client_cmd_tx: ClientCommandSender,
+    sites_data: SitesData,
+    size_limit: u64,
+) -> HashMap<String, Arc<Vec<LsFilesEntry>>>
+{
+    info!("Getting files to sync");
+    let sites_journal_files = sites_data.sites_info
+        .iter()
+        .filter_map(|(site_path, site_info)| {
+            let Some(sub_hp) = sites_data.sub_hps.get(&site_info.sub_hp) else {
+                panic!("Sub HP for site {site_path} should be set")
+            };
+
+            if let SubHpInfo::Normal { sync_path, .. } = sub_hp {
+                let Some(site_suffix) = shvrpc::util::strip_prefix_path(site_path, &site_info.sub_hp) else {
+                    panic!("Site {site_path} should be under its sub HP {sub_hp}", sub_hp = site_info.sub_hp);
+                };
+                let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
+                let client_cmd_tx = client_cmd_tx.clone();
+                Some(async move {
+                    let remote_files: Vec<LsFilesEntry> = RpcCall::new(&remote_journal_path, "lsfiles")
+                        .exec(&client_cmd_tx)
+                        .await
+                        .unwrap_or_default();
+                    remote_files
+                        .into_iter()
+                        .filter(|entry| matches!(entry.ftype, FileType::File))
+                        .filter_map(|entry| entry
+                            .name
+                            .strip_suffix(".log2")
+                            .and_then(|file| shvproto::DateTime::from_iso_str(file).ok().as_ref().map(shvproto::DateTime::epoch_msec))
+                            .map(|_| (site_path, entry))
+                        )
+                        .collect::<Vec<_>>()
+                })
+            } else {
+                None
+            }
+        }
+        )
+        .collect::<FuturesUnordered<_>>()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    let mut overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
+    info!("overall sync files size: {overall_size}, limit: {size_limit}");
+
+    let mut sites_journal_files = sites_journal_files
+        .into_iter()
+        .fold(HashMap::<_,BTreeSet<_>>::new(), |mut map, (site, entry)| {
+            map
+                .entry(site)
+                .or_default()
+                .insert(entry);
+            map
+        });
+
+    // We keep at least one file for each site
+    let mut deletable_files = sites_journal_files
+        .iter()
+        .flat_map(|(site, entries)| {
+            entries
+                .iter()
+                .rev()
+                .skip(1)
+                .map(|entry| (*site, entry.clone()))
+        })
+        .collect::<Vec<_>>();
+
+    deletable_files.sort_by(|(_, entry_a), (_, entry_b)| entry_a.name.cmp(&entry_b.name));
+
+    for (site, file) in deletable_files {
+        if overall_size < size_limit {
+            break;
+        }
+        if let Some(site_files) = sites_journal_files.get_mut(site) {
+            site_files.remove(&file);
+            debug!("excluding file from sync: site: {site}, file: {file_name}", file_name = file.name);
+            overall_size -= file.size as u64;
+        }
+    }
+
+    sites_journal_files
+        .into_iter()
+        .map(|(site, files)|
+            (site.into(), Arc::new(files.into_iter().collect()))
+        )
+        .collect()
+}
+
 async fn sync_site_by_download(
     site_path: impl AsRef<str>,
     remote_journal_path: impl AsRef<str>,
     download_chunk_size: i64,
     client_cmd_tx: ClientCommandSender,
-    app_state: AppState<State>,
+    journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
+    file_list: &[LsFilesEntry],
 ) -> Result<(), String>
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
-    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    let local_journal_path = Path::new(journal_dir.as_ref()).join(site_path);
     sync_logger.log(
         log::Level::Info,
         format!("start syncing from {} to {}, download chunk size: {}",
@@ -174,13 +273,29 @@ async fn sync_site_by_download(
         .await
         .map_err(|e| format!("Cannot create journal directory at {}: {e}", local_journal_path.to_string_lossy()))?;
 
-    let file_list: Vec<LsFilesEntry> = RpcCall::new(remote_journal_path, "lsfiles")
-        .exec(&client_cmd_tx)
+    // If local files exist, limit fetching to files newer than the oldest local file.
+    // This prevents fetching old files that would be deleted by cleanup just after the sync.
+    let oldest_local_file = get_files(&local_journal_path, is_log2_file)
         .await
-        .map_err(to_string)?;
+        .map(|mut log_files| {log_files.sort_by_key(|entry| entry.file_name()); log_files})
+        .unwrap_or_default()
+        .first()
+        .map(|first_file| first_file.file_name().to_string_lossy().to_string());
+
+    if let Some(oldest_file) = &oldest_local_file {
+        sync_logger.log(
+            log::Level::Info,
+            format!("oldest local file found: {oldest_file}, older files won't be fetched")
+        );
+    }
 
     let files_to_sync = futures::stream::iter(
-            file_list.iter().filter(|f| matches!(f.ftype, FileType::File) && f.name.ends_with(".log2"))
+        file_list
+            .iter()
+            .filter(|file| oldest_local_file
+                .as_ref()
+                .is_none_or(|oldest_file| &file.name >= oldest_file)
+            )
         )
         .filter_map(|remote_file| async {
             let local_file_path = local_journal_path.join(&remote_file.name);
@@ -242,9 +357,6 @@ async fn sync_site_by_download(
         .collect::<Vec<_>>()
         .await;
 
-    // Prepare sync directory
-    // TODO
-
     // Sync from the remote to the sync directory
     for (file_name, sync_offset, file_size) in files_to_sync {
         sync_file(
@@ -259,10 +371,6 @@ async fn sync_site_by_download(
         .await
         .map_err(to_string)?;
     }
-
-    // Move synced files from the sync directory to the journal directory
-    // and trim the provisional log
-    // TODO
 
     Ok(())
 }
@@ -345,12 +453,12 @@ async fn sync_site_legacy(
     site_path: impl AsRef<str>,
     getlog_path: impl AsRef<str>,
     client_cmd_tx: ClientCommandSender,
-    app_state: AppState<State>,
+    journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
 ) -> Result<(), String>
 {
     let (site_path, getlog_path) = (site_path.as_ref(), getlog_path.as_ref());
-    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+    let local_journal_path = Path::new(journal_dir.as_ref()).join(site_path);
     sync_logger.log(
         log::Level::Info,
         format!("start syncing from {} to {} via getLog", getlog_path, local_journal_path.to_string_lossy())
@@ -558,6 +666,7 @@ async fn sync_site_legacy(
 }
 
 const MAX_SYNC_TASKS_DEFAULT: usize = 8;
+const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
 
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
@@ -582,11 +691,20 @@ pub(crate) async fn sync_task(
         }
     });
 
+    // The download size limit should be lower than the max_journal_dir_size, because it doesn't
+    // count in the files synced by getLog.
+    let max_journal_dir_size = app_state.config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as u64;
+
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {
             SyncCommand::SyncAll => {
                 log::info!("Sync logs start");
                 app_state.sync_info.last_sync_timestamp.write().await.replace(tokio::time::Instant::now());
+                let files_to_download = get_files_to_sync(
+                    client_cmd_tx.clone(),
+                    app_state.sites_data.read().await.clone(),
+                    max_journal_dir_size
+                ).await;
                 let max_sync_tasks = app_state.config.max_sync_tasks.unwrap_or(MAX_SYNC_TASKS_DEFAULT);
                 let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
                 let mut sync_tasks = vec![];
@@ -611,21 +729,23 @@ pub(crate) async fn sync_task(
                                 .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
                             let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
                             let download_chunk_size = *download_chunk_size;
+                            let file_list = files_to_download.get(&site_path).cloned().unwrap_or_default();
                             let sync_task = tokio::spawn(async move {
-                                let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
-                                let sync_result = sync_site_by_download(
-                                    site_path,
-                                    remote_journal_path,
-                                    download_chunk_size,
-                                    client_cmd_tx,
-                                    app_state,
-                                    sync_logger.clone()
-                                ).await;
-                                if let Err(err) = sync_result {
-                                    sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                                }
-                                sync_logger.log(log::Level::Info, "syncing done");
-                                drop(permit);
+                                    let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
+                                    let sync_result = sync_site_by_download(
+                                        site_path,
+                                        remote_journal_path,
+                                        download_chunk_size,
+                                        client_cmd_tx,
+                                        &app_state.config.journal_dir,
+                                        sync_logger.clone(),
+                                        &file_list,
+                                    ).await;
+                                    if let Err(err) = sync_result {
+                                        sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
+                                    }
+                                    sync_logger.log(log::Level::Info, "syncing done");
+                                    drop(permit);
                             });
                             sync_tasks.push(sync_task);
                         }
@@ -639,7 +759,7 @@ pub(crate) async fn sync_task(
                                     site_path,
                                     remote_getlog_path,
                                     client_cmd_tx,
-                                    app_state,
+                                    &app_state.config.journal_dir,
                                     sync_logger.clone()
                                 ).await;
                                 if let Err(err) = sync_result {
@@ -665,8 +785,15 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
+
+                app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
             }
             SyncCommand::SyncSite(site) => {
+                let files_to_download = get_files_to_sync(
+                    client_cmd_tx.clone(),
+                    app_state.sites_data.read().await.clone(),
+                    max_journal_dir_size
+                ).await;
                 let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
                 if let Some(site_info) = sites_info.get(&site) {
                     let sub_hp = sub_hps
@@ -674,9 +801,7 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|| panic!("Sub HP for site {site} should be set"));
                     let client_cmd_tx = client_cmd_tx.clone();
                     let site_path = site.clone();
-                    // let app_state = app_state.clone();
                     let logger_tx = logger_tx.clone();
-
                     match sub_hp {
                         SubHpInfo::Normal { sync_path, download_chunk_size } => {
                             let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
@@ -689,8 +814,9 @@ pub(crate) async fn sync_task(
                                 remote_journal_path,
                                 download_chunk_size,
                                 client_cmd_tx,
-                                app_state.clone(),
-                                sync_logger.clone()
+                                &app_state.config.journal_dir,
+                                sync_logger.clone(),
+                                &files_to_download.get(&site).cloned().unwrap_or_default(),
                             ).await;
                             if let Err(err) = sync_result {
                                 sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
@@ -706,7 +832,7 @@ pub(crate) async fn sync_task(
                                 site_path,
                                 remote_getlog_path,
                                 client_cmd_tx,
-                                app_state.clone(),
+                                &app_state.config.journal_dir,
                                 sync_logger.clone()
                             ).await;
                             if let Err(err) = sync_result {
@@ -722,8 +848,16 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
+                    app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
                 } else {
-                    log::warn!("Requested sync for unknown site: {site}");
+                    warn!("Requested sync for unknown site: {site}");
+                }
+            }
+            SyncCommand::Cleanup => {
+                info!("Cleanup journal dir start");
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                    Ok(_) => info!("Cleanup journal dir done"),
+                    Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
             }
         }

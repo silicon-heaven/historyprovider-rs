@@ -315,6 +315,7 @@ impl Drop for ScopedLog {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum FileType {
     File,
     Directory,
@@ -329,6 +330,7 @@ impl std::fmt::Display for FileType {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LsFilesEntry {
     pub(crate) name: String,
     pub(crate) ftype: FileType,

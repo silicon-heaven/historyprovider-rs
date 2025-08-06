@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 mod sites;
 mod tree;
 mod sync;
+mod cleanup;
 mod journalentry;
 mod journalrw;
 mod dirtylog;
@@ -23,6 +24,7 @@ pub struct HpConfig {
     #[serde(default = "default_journal_dir")]
     journal_dir: String,
     max_sync_tasks: Option<usize>,
+    max_journal_dir_size: Option<usize>,
 }
 
 impl HpConfig {
