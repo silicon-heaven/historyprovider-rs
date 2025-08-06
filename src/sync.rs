@@ -18,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
+use crate::cleanup::cleanup_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
@@ -47,6 +48,7 @@ impl SyncInfo {
 pub(crate) enum SyncCommand {
     SyncAll,
     SyncSite(String),
+    Cleanup,
 }
 
 impl TryFrom<String> for FileType {
@@ -845,7 +847,14 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
                 } else {
-                    log::warn!("Requested sync for unknown site: {site}");
+                    warn!("Requested sync for unknown site: {site}");
+                }
+            }
+            SyncCommand::Cleanup => {
+                info!("Cleanup journal dir start");
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                    Ok(_) => info!("Cleanup journal dir done"),
+                    Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
             }
         }

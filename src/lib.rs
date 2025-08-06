@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 mod sites;
 mod tree;
 mod sync;
+mod cleanup;
 mod journalentry;
 mod journalrw;
 mod dirtylog;
