@@ -40,17 +40,7 @@ pub(crate) async fn dirty_log_task(
     _client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,
     mut cmd_rx: UnboundedReceiver<DirtyLogCommand>,
-)
-{
-    // TODO:
-    // on mntchng:
-    //   sync logs from the site (in the scope of an upper module)
-    // on client connect:
-    //   subscribe mntchng (in the scope of an upper module)
-    //   subscribe events
-    //   sync logs from all sites (in the scope of an upper module)
-    // let mut mntchng_subscribers = SelectAll::<Subscriber>::default(); // Put to the upper module
-
+) {
     let mut site_paths = Arc::default();
     let mut subscribers = SelectAll::<Subscriber>::default();
     loop {

@@ -242,10 +242,6 @@ pub(crate) async fn load_sites(
                 if signal != "mntchng" {
                     continue;
                 }
-                if !msg.param().map_or_else(|| false, RpcValue::as_bool) {
-                    // Site unmounted
-                    continue;
-                }
                 let path = msg.shv_path().unwrap_or_default().to_string();
 
                 let Some(stripped_path) = path.strip_prefix("shv/") else {
@@ -254,6 +250,11 @@ pub(crate) async fn load_sites(
                 let Some((site_path, _)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
                     continue;
                 };
+                if !msg.param().map_or_else(|| false, RpcValue::as_bool) {
+                    log::info!("Site unmounted: {site_path}");
+                    continue;
+                }
+                log::info!("Site mounted: {site_path}");
                 app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncSite(site_path.into()))
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
