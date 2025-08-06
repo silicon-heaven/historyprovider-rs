@@ -785,6 +785,8 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
+
+                app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
             }
             SyncCommand::SyncSite(site) => {
                 let files_to_download = get_files_to_sync(
@@ -846,6 +848,7 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
+                    app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
                 } else {
                     warn!("Requested sync for unknown site: {site}");
                 }
