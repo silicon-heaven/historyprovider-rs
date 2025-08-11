@@ -161,72 +161,158 @@ pub(crate) async fn load_sites(
     let mut client_evt_rx = client_evt_rx.fuse();
     let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
 
+    enum PeriodicSyncCommand {
+        Enable,
+        Disable,
+    }
+
+    let (periodic_sync_tx, mut periodic_sync_rx) = futures::channel::mpsc::unbounded();
+    {
+        const PERIODIC_SYNC_INTERVAL: u64 = 60 * 60;
+        const LOG_AGE_THRESHOLD: i64 = 60 * 60;
+
+        let app_state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval: Option<tokio::time::Interval> = None;
+
+            loop {
+                tokio::select! {
+                    event = periodic_sync_rx.next() => match event {
+                        Some(event) => {
+                            match event {
+                                PeriodicSyncCommand::Enable => {
+                                    log::info!("periodic sync enable");
+                                    let i = tokio::time::interval(tokio::time::Duration::from_secs(PERIODIC_SYNC_INTERVAL));
+                                    interval = Some(i);
+                                }
+                                PeriodicSyncCommand::Disable => {
+                                    log::info!("periodic sync disable");
+                                    interval = None;
+                                }
+                            }
+                        }
+                        None => break,
+                    },
+                    _ = async {
+                        if let Some(i) = &mut interval {
+                            i.tick().await;
+                        }
+                    }, if interval.is_some() => {
+                        log::info!("periodic sync trigger");
+                        // Collect all sites to be synced
+                        let sites_info = app_state.sites_data.read().await.sites_info.clone();
+                        let sites_to_sync: Vec<_> = futures::stream::iter(sites_info.keys().cloned())
+                            .map(|site| {
+                                let dirtylog_cmd_tx = app_state.dirtylog_cmd_tx.clone();
+                                async move {
+                                    let (response_tx, response_rx) = futures::channel::oneshot::channel();
+                                    let _ = dirtylog_cmd_tx.unbounded_send(crate::dirtylog::DirtyLogCommand::Get {
+                                        site: site.clone(),
+                                        response_tx,
+                                    });
+
+                                    match response_rx.await {
+                                        Ok(dirty_log) if dirty_log.first().is_none_or(|first_entry| {
+                                            (shvproto::DateTime::now().epoch_msec() - first_entry.epoch_msec) / 1000
+                                                > LOG_AGE_THRESHOLD
+                                        }) => Some(site),
+                                        _ => None,
+                                    }
+                                }
+                            })
+                            .buffer_unordered(30)
+                            .filter_map(std::future::ready)
+                            .collect()
+                            .await;
+
+                        app_state
+                            .sync_cmd_tx
+                            .unbounded_send(crate::sync::SyncCommand::SyncSites(sites_to_sync))
+                            .unwrap_or_else(|e| log::error!("Cannot send SyncSites command: {e}"));
+                    }
+                }
+            }
+            log::debug!("periodic sync finished");
+        });
+    }
+
     loop {
         tokio::select! {
             client_event = client_evt_rx.next() => match client_event {
-                Some(client_event) => if let shvclient::ClientEvent::Connected(shv_api_version) = client_event {
-                    log::info!("Getting sites info");
+                Some(client_event) => match client_event {
+                    shvclient::ClientEvent::Connected(shv_api_version) => {
+                        log::info!("Getting sites info");
 
-                    let sites = RpcCall::new("sites", "getSites")
-                        .exec(&client_cmd_tx)
-                        .await;
+                        let sites = RpcCall::new("sites", "getSites")
+                            .exec(&client_cmd_tx)
+                            .await;
 
-                    let (sites_info, sub_hps) = match sites
-                        .map(|sites: shvproto::Map| {
-                            let sub_hps = collect_sub_hps(&[], &sites);
-                            let mut sites_info = collect_sites(&[], &sites);
-                            for (path, site_info) in &mut sites_info {
-                                if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
-                                    site_info.sub_hp = prefix.into();
-                                } else {
-                                    log::error!("Cannot find sub HP for site {path}");
-                                    site_info.sub_hp = path.clone();
+                        let (sites_info, sub_hps) = match sites
+                            .map(|sites: shvproto::Map| {
+                                let sub_hps = collect_sub_hps(&[], &sites);
+                                let mut sites_info = collect_sites(&[], &sites);
+                                for (path, site_info) in &mut sites_info {
+                                    if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
+                                        site_info.sub_hp = prefix.into();
+                                    } else {
+                                        log::error!("Cannot find sub HP for site {path}");
+                                        site_info.sub_hp = path.clone();
+                                    }
                                 }
-                            }
-                            (Arc::new(sites_info), Arc::new(sub_hps))
-                        }) {
-                            Ok(res) => res,
-                            Err(err) => match err.error() {
-                                CallRpcMethodErrorKind::ConnectionClosed => {
-                                    log::warn!("Connection closed while getting sites info");
-                                    continue
+                                (Arc::new(sites_info), Arc::new(sub_hps))
+                            }) {
+                                Ok(res) => res,
+                                Err(err) => match err.error() {
+                                    CallRpcMethodErrorKind::ConnectionClosed => {
+                                        log::warn!("Connection closed while getting sites info");
+                                        continue
+                                    }
+                                    _ => {
+                                        log::error!("Get sites info error: {err}");
+                                        Default::default()
+                                    }
                                 }
-                                _ => {
-                                    log::error!("Get sites info error: {err}");
-                                    Default::default()
-                                }
-                            }
-                        };
+                            };
 
-                    log::info!("Loaded sites:\n{}", sites_info
-                        .iter()
-                        .map(|(path, site)| format!(" {path}: {site:?}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                    );
+                        log::info!("Loaded sites:\n{}", sites_info
+                            .iter()
+                            .map(|(path, site)| format!(" {path}: {site:?}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                        );
 
-                    log::info!("Loaded sub HPs:\n{}", sub_hps
-                        .iter()
-                        .map(|(path, hp)| format!(" {path}: {hp:?}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                    );
+                        log::info!("Loaded sub HPs:\n{}", sub_hps
+                            .iter()
+                            .map(|(path, hp)| format!(" {path}: {hp:?}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                        );
 
-                    // Subscribe mntchng
-                    mntchng_subscribers = sites_info
-                        .keys()
-                        .map(|path| {
-                            subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
-                        })
-                        .collect::<FuturesUnordered<_>>()
-                        .collect::<SelectAll<_>>()
-                        .await;
+                        // Subscribe mntchng
+                        mntchng_subscribers = sites_info
+                            .keys()
+                            .map(|path| {
+                                subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
+                            })
+                            .collect::<FuturesUnordered<_>>()
+                            .collect::<SelectAll<_>>()
+                            .await;
 
-                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
-                    app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncAll)
-                        .unwrap_or_else(|e| panic!("Cannot send SyncAll: {e}"));
-                    app_state.dirtylog_cmd_tx.unbounded_send(crate::dirtylog::DirtyLogCommand::Subscribe(shv_api_version))
-                        .unwrap_or_else(|e| panic!("Cannot send dirtylog Subscribe command: {e}"));
+                        *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
+
+                        periodic_sync_tx
+                            .unbounded_send(PeriodicSyncCommand::Enable)
+                            .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
+
+                        app_state.dirtylog_cmd_tx
+                            .unbounded_send(crate::dirtylog::DirtyLogCommand::Subscribe(shv_api_version))
+                            .unwrap_or_else(|e| log::error!("Cannot send dirtylog Subscribe command: {e}"));
+                    }
+                    _ => {
+                        periodic_sync_tx
+                            .unbounded_send(PeriodicSyncCommand::Disable)
+                            .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
+                        }
                 },
                 None => break,
             },
@@ -255,7 +341,7 @@ pub(crate) async fn load_sites(
                     continue;
                 }
                 log::info!("Site mounted: {site_path}");
-                app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncSite(site_path.into()))
+                app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncSites(Vec::from([site_path.into()])))
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
         }

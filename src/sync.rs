@@ -46,8 +46,7 @@ impl SyncInfo {
 }
 
 pub(crate) enum SyncCommand {
-    SyncAll,
-    SyncSite(String),
+    SyncSites(Vec<String>),
     Cleanup,
 }
 
@@ -697,7 +696,7 @@ pub(crate) async fn sync_task(
 
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {
-            SyncCommand::SyncAll => {
+            SyncCommand::SyncSites(sites_to_sync) => {
                 log::info!("Sync logs start");
                 app_state.sync_info.last_sync_timestamp.write().await.replace(tokio::time::Instant::now());
                 let files_to_download = get_files_to_sync(
@@ -710,17 +709,21 @@ pub(crate) async fn sync_task(
                 let mut sync_tasks = vec![];
                 let sync_start = tokio::time::Instant::now();
                 let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
-                for (site_path, site_info) in sites_info.iter() {
+                for site in sites_to_sync {
+                    let Some(site_info) = sites_info.get(&site) else {
+                        warn!("Cannot sync unknown site {site}");
+                        continue;
+                    };
                     let sub_hp = sub_hps
                         .get(&site_info.sub_hp)
-                        .unwrap_or_else(|| panic!("Sub HP for site {site_path} should be set"));
+                        .unwrap_or_else(|| panic!("Sub HP for site {site} should be set"));
                     let permit = semaphore
                         .clone()
                         .acquire_owned()
                         .await
                         .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
                     let client_cmd_tx = client_cmd_tx.clone();
-                    let site_path = site_path.clone();
+                    let site_path = site.clone();
                     let app_state = app_state.clone();
                     let logger_tx = logger_tx.clone();
                     match sub_hp {
@@ -787,71 +790,6 @@ pub(crate) async fn sync_task(
                     );
 
                 app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
-            }
-            SyncCommand::SyncSite(site) => {
-                let files_to_download = get_files_to_sync(
-                    client_cmd_tx.clone(),
-                    app_state.sites_data.read().await.clone(),
-                    max_journal_dir_size
-                ).await;
-                let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
-                if let Some(site_info) = sites_info.get(&site) {
-                    let sub_hp = sub_hps
-                        .get(&site_info.sub_hp)
-                        .unwrap_or_else(|| panic!("Sub HP for site {site} should be set"));
-                    let client_cmd_tx = client_cmd_tx.clone();
-                    let site_path = site.clone();
-                    let logger_tx = logger_tx.clone();
-                    match sub_hp {
-                        SubHpInfo::Normal { sync_path, download_chunk_size } => {
-                            let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
-                                .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
-                            let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
-                            let download_chunk_size = *download_chunk_size;
-                            let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
-                            let sync_result = sync_site_by_download(
-                                site_path,
-                                remote_journal_path,
-                                download_chunk_size,
-                                client_cmd_tx,
-                                &app_state.config.journal_dir,
-                                sync_logger.clone(),
-                                &files_to_download.get(&site).cloned().unwrap_or_default(),
-                            ).await;
-                            if let Err(err) = sync_result {
-                                sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                            }
-                            sync_logger.log(log::Level::Info, "syncing done");
-                        }
-                        SubHpInfo::Legacy { getlog_path } => {
-                            let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
-                                .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
-                            let remote_getlog_path = join_path!("shv", &site_info.sub_hp, getlog_path, site_suffix);
-                            let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
-                            let sync_result = sync_site_legacy(
-                                site_path,
-                                remote_getlog_path,
-                                client_cmd_tx,
-                                &app_state.config.journal_dir,
-                                sync_logger.clone()
-                            ).await;
-                            if let Err(err) = sync_result {
-                                sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                            }
-                            sync_logger.log(log::Level::Info, "syncing done");
-                        }
-                        SubHpInfo::PushLog => {
-                            // TODO
-                        }
-                    }
-                    app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
-                        .unwrap_or_else(|e|
-                            panic!("Cannot send dirtylog Trim command for site {site}: {e}")
-                        );
-                    app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
-                } else {
-                    warn!("Requested sync for unknown site: {site}");
-                }
             }
             SyncCommand::Cleanup => {
                 info!("Cleanup journal dir start");
