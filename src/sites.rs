@@ -152,7 +152,7 @@ fn collect_sub_hps(
         .collect()
 }
 
-pub(crate) async fn load_sites(
+pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,

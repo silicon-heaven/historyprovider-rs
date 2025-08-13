@@ -35,7 +35,7 @@ pub(crate) enum DirtyLogCommand {
     }
 }
 
-pub(crate) async fn dirty_log_task(
+pub(crate) async fn dirtylog_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,

@@ -70,9 +70,9 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         )
         .with_app_state(app_state.clone())
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
-            tokio::spawn(sites::load_sites(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
+            tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
             tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
-            tokio::spawn(dirtylog::dirty_log_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
+            tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
         })
         .await
 }
