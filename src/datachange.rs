@@ -27,7 +27,7 @@ fn is_data_change(rv: &RpcValue) -> bool {
 }
 
 impl shvproto::metamap::GetIndex for DataChangeMetaTag {
-    fn make_key(&self) -> shvproto::metamap::GetKey {
+    fn make_key(&self) -> shvproto::metamap::GetKey<'_> {
         shvproto::metamap::GetKey::Int(*self as i32)
     }
 }
