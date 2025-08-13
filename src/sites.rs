@@ -168,13 +168,11 @@ pub(crate) async fn sites_task(
 
     let (periodic_sync_tx, mut periodic_sync_rx) = futures::channel::mpsc::unbounded();
     {
-        const PERIODIC_SYNC_INTERVAL: u64 = 60 * 60;
-        const LOG_AGE_THRESHOLD: i64 = 60 * 60;
-
         let app_state = app_state.clone();
         tokio::spawn(async move {
+            const PERIODIC_SYNC_INTERVAL_DEFAULT: u64 = 60 * 60;
+            let periodic_sync_interval = app_state.config.periodic_sync_interval.unwrap_or(PERIODIC_SYNC_INTERVAL_DEFAULT);
             let mut interval: Option<tokio::time::Interval> = None;
-
             loop {
                 tokio::select! {
                     event = periodic_sync_rx.next() => match event {
@@ -182,8 +180,7 @@ pub(crate) async fn sites_task(
                             match event {
                                 PeriodicSyncCommand::Enable => {
                                     log::info!("periodic sync enable");
-                                    let i = tokio::time::interval(tokio::time::Duration::from_secs(PERIODIC_SYNC_INTERVAL));
-                                    interval = Some(i);
+                                    interval = Some(tokio::time::interval(tokio::time::Duration::from_secs(periodic_sync_interval)));
                                 }
                                 PeriodicSyncCommand::Disable => {
                                     log::info!("periodic sync disable");
@@ -199,40 +196,14 @@ pub(crate) async fn sites_task(
                         }
                     }, if interval.is_some() => {
                         log::info!("periodic sync trigger");
-                        // Collect all sites to be synced
-                        let sites_info = app_state.sites_data.read().await.sites_info.clone();
-                        let sites_to_sync: Vec<_> = futures::stream::iter(sites_info.keys().cloned())
-                            .map(|site| {
-                                let dirtylog_cmd_tx = app_state.dirtylog_cmd_tx.clone();
-                                async move {
-                                    let (response_tx, response_rx) = futures::channel::oneshot::channel();
-                                    let _ = dirtylog_cmd_tx.unbounded_send(crate::dirtylog::DirtyLogCommand::Get {
-                                        site: site.clone(),
-                                        response_tx,
-                                    });
-
-                                    match response_rx.await {
-                                        Ok(dirty_log) if dirty_log.first().is_none_or(|first_entry| {
-                                            (shvproto::DateTime::now().epoch_msec() - first_entry.epoch_msec) / 1000
-                                                > LOG_AGE_THRESHOLD
-                                        }) => Some(site),
-                                        _ => None,
-                                    }
-                                }
-                            })
-                            .buffer_unordered(30)
-                            .filter_map(std::future::ready)
-                            .collect()
-                            .await;
-
                         app_state
                             .sync_cmd_tx
-                            .unbounded_send(crate::sync::SyncCommand::SyncSites(sites_to_sync))
-                            .unwrap_or_else(|e| log::error!("Cannot send SyncSites command: {e}"));
+                            .unbounded_send(crate::sync::SyncCommand::SyncAll)
+                            .unwrap_or_else(|e| log::error!("Cannot send SyncAll command: {e}"));
                     }
                 }
             }
-            log::debug!("periodic sync finished");
+            log::debug!("periodic sync task finished");
         });
     }
 
@@ -341,7 +312,8 @@ pub(crate) async fn sites_task(
                     continue;
                 }
                 log::info!("Site mounted: {site_path}");
-                app_state.sync_cmd_tx.unbounded_send(crate::sync::SyncCommand::SyncSites(Vec::from([site_path.into()])))
+                app_state.sync_cmd_tx
+                    .unbounded_send(crate::sync::SyncCommand::SyncSite(site_path.into()))
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
         }
