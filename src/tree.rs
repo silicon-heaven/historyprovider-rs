@@ -536,6 +536,9 @@ where
     Fut: Future<Output = tokio::io::Result<R>> + Send,
 {
     const MAX_READ_SIZE: u64 = 1 << 20;
+    if path_contains_parent_dir_references(&path) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Path cannot contain parent dir references"));
+    }
     let mut file = tokio::fs::File::open(path.as_ref()).await?;
     file.seek(std::io::SeekFrom::Start(offset)).await?;
     let file_size = file.metadata().await?.len();

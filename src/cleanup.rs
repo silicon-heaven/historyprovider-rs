@@ -25,14 +25,13 @@ async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<LogFile>> {
 
             if metadata.is_dir() {
                 dirs.push(path);
-            } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "log2") {
-                if let (Some(file_name), Some(parent)) = (path.file_name(), path.parent()) {
+            } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "log2")
+                && let (Some(file_name), Some(parent)) = (path.file_name(), path.parent()) {
                     result.push(LogFile {
                         name: file_name.into(),
                         parent_dir: parent.to_path_buf(),
                         size: metadata.len(),
                     });
-                }
             }
         }
     }
