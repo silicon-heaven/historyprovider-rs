@@ -25,7 +25,7 @@ use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWr
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{get_files, is_log2_file};
-use crate::{ClientCommandSender, State};
+use crate::{ClientCommandSender, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
@@ -666,7 +666,6 @@ async fn sync_site_legacy(
 }
 
 const MAX_SYNC_TASKS_DEFAULT: usize = 8;
-const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
 
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,

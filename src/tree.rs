@@ -22,11 +22,12 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
 
+use crate::cleanup::collect_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
 use crate::util::{get_files, is_log2_file};
-use crate::{ClientCommandSender, State};
+use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
@@ -349,6 +350,16 @@ impl From<LsFilesEntry> for RpcValue {
     }
 }
 
+fn log_size_limit(config: &HpConfig) -> i64 {
+    config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as i64
+}
+
+async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {
+    collect_log2_files(&config.journal_dir)
+        .await
+        .map(|files| files.into_iter().map(|f| f.size as i64).sum::<i64>())
+}
+
 async fn shvjournal_request_handler(
     rq: RpcMessage,
     app_state: AppState<State>,
@@ -359,9 +370,15 @@ async fn shvjournal_request_handler(
     if path == "_shvjournal" {
         match method {
             METH_LS | METH_LS_FILES => { /* handled as a directory */ }
-            METH_LOG_SIZE_LIMIT => return Ok("To be implemented".into()),
-            METH_TOTAL_LOG_SIZE => return Ok("To be implemented".into()),
-            METH_LOG_USAGE => return Ok("To be implemented".into()),
+            METH_LOG_SIZE_LIMIT => return Ok(log_size_limit(&app_state.config).into()),
+            METH_TOTAL_LOG_SIZE => return total_log_size(&app_state.config)
+                .await
+                .map(RpcValue::from)
+                .map_err(rpc_error_filesystem),
+            METH_LOG_USAGE => return total_log_size(&app_state.config)
+                .await
+                .map(|size| ((size as f64) / (log_size_limit(&app_state.config) as f64)).into())
+                .map_err(rpc_error_filesystem),
             METH_SYNC_LOG => return Ok("To be implemented".into()),
             METH_SYNC_INFO => return Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned().into()),
             METH_SANITIZE_LOG => return Ok("To be implemented".into()),
