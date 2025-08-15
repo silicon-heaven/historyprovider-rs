@@ -25,7 +25,7 @@ use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWr
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{get_files, is_log2_file};
-use crate::{ClientCommandSender, State};
+use crate::{ClientCommandSender, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
@@ -182,13 +182,8 @@ async fn get_files_to_sync(
                         .unwrap_or_default();
                     remote_files
                         .into_iter()
-                        .filter(|entry| matches!(entry.ftype, FileType::File))
-                        .filter_map(|entry| entry
-                            .name
-                            .strip_suffix(".log2")
-                            .and_then(|file| shvproto::DateTime::from_iso_str(file).ok().as_ref().map(shvproto::DateTime::epoch_msec))
-                            .map(|_| (site_path, entry))
-                        )
+                        .filter(|entry| matches!(entry.ftype, FileType::File) && entry.name.ends_with(".log2"))
+                        .map(|entry| (site_path, entry))
                         .collect::<Vec<_>>()
                 })
             } else {
@@ -203,7 +198,7 @@ async fn get_files_to_sync(
         .flatten()
         .collect::<Vec<_>>();
 
-    let mut overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
+    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
     info!("overall sync files size: {overall_size}, limit: {size_limit}");
 
     let mut sites_journal_files = sites_journal_files
@@ -230,16 +225,20 @@ async fn get_files_to_sync(
 
     deletable_files.sort_by(|(_, entry_a), (_, entry_b)| entry_a.name.cmp(&entry_b.name));
 
+    let mut excluded_files_count = 0;
+    let mut excluded_size = 0;
     for (site, file) in deletable_files {
-        if overall_size < size_limit {
+        if overall_size - excluded_size < size_limit {
             break;
         }
         if let Some(site_files) = sites_journal_files.get_mut(site) {
             site_files.remove(&file);
             debug!("excluding file from sync: site: {site}, file: {file_name}", file_name = file.name);
-            overall_size -= file.size as u64;
+            excluded_size += file.size as u64;
+            excluded_files_count += 1;
         }
     }
+    info!("excluded {excluded_files_count} files of size: {excluded_size}");
 
     sites_journal_files
         .into_iter()
@@ -666,7 +665,6 @@ async fn sync_site_legacy(
 }
 
 const MAX_SYNC_TASKS_DEFAULT: usize = 8;
-const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
 
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
@@ -785,8 +783,10 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
-
-                app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                    Ok(_) => info!("Cleanup journal dir done"),
+                    Err(err) => error!("Cleanup journal dir error: {err}"),
+                }
             }
             SyncCommand::SyncSite(site) => {
                 let files_to_download = get_files_to_sync(
@@ -848,7 +848,10 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
-                    app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
+                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                        Ok(_) => info!("Cleanup journal dir done"),
+                        Err(err) => error!("Cleanup journal dir error: {err}"),
+                    }
                 } else {
                     warn!("Requested sync for unknown site: {site}");
                 }
