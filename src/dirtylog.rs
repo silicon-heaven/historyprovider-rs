@@ -146,6 +146,7 @@ pub(crate) async fn dirtylog_task(
                     // Write the dirty log
                     let dirty_log_file = match tokio::fs::OpenOptions::new()
                         .write(true)
+                        .truncate(true)
                         .open(&dirty_log_path)
                         .await {
                             Ok(file) => file,
