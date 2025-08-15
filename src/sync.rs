@@ -182,13 +182,8 @@ async fn get_files_to_sync(
                         .unwrap_or_default();
                     remote_files
                         .into_iter()
-                        .filter(|entry| matches!(entry.ftype, FileType::File))
-                        .filter_map(|entry| entry
-                            .name
-                            .strip_suffix(".log2")
-                            .and_then(|file| shvproto::DateTime::from_iso_str(file).ok().as_ref().map(shvproto::DateTime::epoch_msec))
-                            .map(|_| (site_path, entry))
-                        )
+                        .filter(|entry| matches!(entry.ftype, FileType::File) && entry.name.ends_with(".log2"))
+                        .map(|entry| (site_path, entry))
                         .collect::<Vec<_>>()
                 })
             } else {
