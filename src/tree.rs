@@ -864,13 +864,14 @@ async fn getlog_impl(
             }
     };
 
+    let record_count = snapshot_entries.len() as i64 + context.entries.len() as i64;
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
         snapshot_entries.iter().chain(context.entries.iter().map(|arc_entry| arc_entry.as_ref())),
         params.with_paths_dict
     );
 
     result.meta = Some(Box::new(Log2Header {
-        record_count: context.record_count as _,
+        record_count,
         record_count_limit: context.record_count_limit as _,
         record_count_limit_hit: context.record_count_limit_hit,
         date_time: current_datetime,
