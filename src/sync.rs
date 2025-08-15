@@ -783,8 +783,10 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
-
-                app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                    Ok(_) => info!("Cleanup journal dir done"),
+                    Err(err) => error!("Cleanup journal dir error: {err}"),
+                }
             }
             SyncCommand::SyncSite(site) => {
                 let files_to_download = get_files_to_sync(
@@ -846,7 +848,10 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
-                    app_state.sync_cmd_tx.unbounded_send(SyncCommand::Cleanup).unwrap_or_default();
+                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                        Ok(_) => info!("Cleanup journal dir done"),
+                        Err(err) => error!("Cleanup journal dir error: {err}"),
+                    }
                 } else {
                     warn!("Requested sync for unknown site: {site}");
                 }
