@@ -218,9 +218,19 @@ pub(crate) async fn dirtylog_task(
                 let Some((site_path, property_path)) = find_longest_path_prefix(&*site_paths, stripped_path) else {
                     continue;
                 };
+                // If the journal_dir + site_path does not exist yet, we can ignore this notification
+                // until the directory is created during the initial sync of the site.
+                let journal_site_path = Path::new(&app_state.config.journal_dir).join(site_path);
+                if !journal_site_path.exists() {
+                    warn!("Ignoring notification while journal directory {journal_site_path} for the site does not exist",
+                        journal_site_path = journal_site_path.to_string_lossy()
+                    );
+                    continue;
+                }
                 // Append to the site's dirty log
-                let dirty_log_path = Path::new(&app_state.config.journal_dir).join(site_path).join("dirtylog");
+                let dirty_log_path = journal_site_path.join("dirtylog");
                 let dirty_log_file = match tokio::fs::OpenOptions::new()
+                    .create(true)
                     .append(true)
                     .open(&dirty_log_path)
                     .await {
