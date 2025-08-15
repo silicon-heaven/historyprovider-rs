@@ -287,7 +287,7 @@ pub(crate) async fn sites_task(
                 },
                 None => break,
             },
-            mntchng_frame = mntchng_subscribers.select_next_some() => {
+            mntchng_frame = mntchng_subscribers.select_next_some(), if !mntchng_subscribers.is_empty() => {
                 let msg = match mntchng_frame.to_rpcmesage() {
                     Ok(msg) => msg,
                     Err(err) => {
