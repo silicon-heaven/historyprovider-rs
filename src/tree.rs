@@ -780,12 +780,12 @@ async fn getlog_impl(
         until_ms: params.until.as_ref().map_or(i64::MAX, shvproto::DateTime::epoch_msec),
     };
 
-    for mut reader in journal_readers {
+    'outer: for mut reader in journal_readers {
         while let Some(entry_res) = reader.next().await {
             match entry_res {
                 Ok(entry) => {
                     if !process_journal_entry(entry, &mut context) {
-                        break;
+                        break 'outer;
                     }
                 }
                 Err(err) => error!("Skipping corrupted journal entry: {err}"),
@@ -793,14 +793,18 @@ async fn getlog_impl(
         }
     }
 
-    for entry in dirty_log {
-        // Filter out entries that overlap with the entries from the synced files
-        if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
-            continue;
-        }
+    // Only append entries from the dirtylog if they are adjacent to the journal entries or else
+    // the resulting `until` will be incorrectly taken from the first dirtylog entry.
+    if !context.record_count_limit_hit {
+        for entry in dirty_log {
+            // Filter out entries that overlap with the entries from the synced files
+            if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
+                continue;
+            }
 
-        if !process_journal_entry(entry, &mut context) {
-            break;
+            if !process_journal_entry(entry, &mut context) {
+                break;
+            }
         }
     }
 
