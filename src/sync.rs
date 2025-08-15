@@ -198,7 +198,7 @@ async fn get_files_to_sync(
         .flatten()
         .collect::<Vec<_>>();
 
-    let mut overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
+    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
     info!("overall sync files size: {overall_size}, limit: {size_limit}");
 
     let mut sites_journal_files = sites_journal_files
@@ -225,16 +225,20 @@ async fn get_files_to_sync(
 
     deletable_files.sort_by(|(_, entry_a), (_, entry_b)| entry_a.name.cmp(&entry_b.name));
 
+    let mut excluded_files_count = 0;
+    let mut excluded_size = 0;
     for (site, file) in deletable_files {
-        if overall_size < size_limit {
+        if overall_size - excluded_size < size_limit {
             break;
         }
         if let Some(site_files) = sites_journal_files.get_mut(site) {
             site_files.remove(&file);
             debug!("excluding file from sync: site: {site}, file: {file_name}", file_name = file.name);
-            overall_size -= file.size as u64;
+            excluded_size += file.size as u64;
+            excluded_files_count += 1;
         }
     }
+    info!("excluded {excluded_files_count} files of size: {excluded_size}");
 
     sites_journal_files
         .into_iter()
