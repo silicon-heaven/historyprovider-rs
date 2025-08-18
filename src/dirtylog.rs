@@ -7,7 +7,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
 use futures::stream::{FuturesUnordered, SelectAll};
-use futures::{select, StreamExt};
+use futures::{StreamExt};
 use log::{debug, error, info, warn};
 use shvclient::client::ShvApiVersion;
 use shvclient::{AppState, ClientEventsReceiver};
@@ -263,7 +263,7 @@ pub(crate) async fn dirtylog_task(
     let mut request_scheduler = RequestScheduler::new(Path::new(&app_state.config.journal_dir).into());
 
     loop {
-        select! {
+        futures::select! {
             command = cmd_rx.select_next_some() => match command {
                 DirtyLogCommand::Subscribe(shv_api_version) => {
                     info!("Subscribing signals on the devices");
@@ -336,10 +336,8 @@ pub(crate) async fn dirtylog_task(
                 request_scheduler.schedule_new(site_path.into(), Request::Append(journal_entry));
 
             }
-            site = request_scheduler.inflight.next() => {
-                if let Some(site) = site {
-                    request_scheduler.on_finished(site);
-                }
+            site = request_scheduler.inflight.select_next_some() => {
+                request_scheduler.on_finished(site);
             }
             complete => break,
         }

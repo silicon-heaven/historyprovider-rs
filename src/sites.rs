@@ -208,9 +208,8 @@ pub(crate) async fn sites_task(
     }
 
     loop {
-        tokio::select! {
-            client_event = client_evt_rx.next() => match client_event {
-                Some(client_event) => match client_event {
+        futures::select! {
+            client_event = client_evt_rx.select_next_some() => match client_event {
                     shvclient::ClientEvent::Connected(shv_api_version) => {
                         log::info!("Getting sites info");
 
@@ -283,11 +282,9 @@ pub(crate) async fn sites_task(
                         periodic_sync_tx
                             .unbounded_send(PeriodicSyncCommand::Disable)
                             .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
-                        }
-                },
-                None => break,
+                    }
             },
-            mntchng_frame = mntchng_subscribers.select_next_some(), if !mntchng_subscribers.is_empty() => {
+            mntchng_frame = mntchng_subscribers.select_next_some() => {
                 let msg = match mntchng_frame.to_rpcmesage() {
                     Ok(msg) => msg,
                     Err(err) => {
@@ -316,6 +313,7 @@ pub(crate) async fn sites_task(
                     .unbounded_send(crate::sync::SyncCommand::SyncSite(site_path.into()))
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
+            complete => break,
         }
     }
 }
