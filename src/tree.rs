@@ -22,11 +22,12 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
 
+use crate::cleanup::collect_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
 use crate::util::{get_files, is_log2_file};
-use crate::{ClientCommandSender, State};
+use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
@@ -349,6 +350,16 @@ impl From<LsFilesEntry> for RpcValue {
     }
 }
 
+fn log_size_limit(config: &HpConfig) -> i64 {
+    config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as i64
+}
+
+async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {
+    collect_log2_files(&config.journal_dir)
+        .await
+        .map(|files| files.into_iter().map(|f| f.size as i64).sum::<i64>())
+}
+
 async fn shvjournal_request_handler(
     rq: RpcMessage,
     app_state: AppState<State>,
@@ -359,12 +370,21 @@ async fn shvjournal_request_handler(
     if path == "_shvjournal" {
         match method {
             METH_LS | METH_LS_FILES => { /* handled as a directory */ }
-            METH_LOG_SIZE_LIMIT => return Ok("To be implemented".into()),
-            METH_TOTAL_LOG_SIZE => return Ok("To be implemented".into()),
-            METH_LOG_USAGE => return Ok("To be implemented".into()),
+            METH_LOG_SIZE_LIMIT => return Ok(log_size_limit(&app_state.config).into()),
+            METH_TOTAL_LOG_SIZE => return total_log_size(&app_state.config)
+                .await
+                .map(RpcValue::from)
+                .map_err(rpc_error_filesystem),
+            METH_LOG_USAGE => return total_log_size(&app_state.config)
+                .await
+                .map(|size| ((size as f64) / (log_size_limit(&app_state.config) as f64)).into())
+                .map_err(rpc_error_filesystem),
             METH_SYNC_LOG => return Ok("To be implemented".into()),
             METH_SYNC_INFO => return Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned().into()),
-            METH_SANITIZE_LOG => return Ok("To be implemented".into()),
+            METH_SANITIZE_LOG => return app_state.sync_cmd_tx
+                .unbounded_send(crate::sync::SyncCommand::Cleanup)
+                .map(|_| true.into())
+                .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel")),
             _ => return Err(rpc_error_unknown_method(method)),
         }
     }
@@ -763,12 +783,12 @@ async fn getlog_impl(
         until_ms: params.until.as_ref().map_or(i64::MAX, shvproto::DateTime::epoch_msec),
     };
 
-    for mut reader in journal_readers {
+    'outer: for mut reader in journal_readers {
         while let Some(entry_res) = reader.next().await {
             match entry_res {
                 Ok(entry) => {
                     if !process_journal_entry(entry, &mut context) {
-                        break;
+                        break 'outer;
                     }
                 }
                 Err(err) => error!("Skipping corrupted journal entry: {err}"),
@@ -776,14 +796,18 @@ async fn getlog_impl(
         }
     }
 
-    for entry in dirty_log {
-        // Filter out entries that overlap with the entries from the synced files
-        if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
-            continue;
-        }
+    // Only append entries from the dirtylog if they are adjacent to the journal entries or else
+    // the resulting `until` will be incorrectly taken from the first dirtylog entry.
+    if !context.record_count_limit_hit {
+        for entry in dirty_log {
+            // Filter out entries that overlap with the entries from the synced files
+            if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
+                continue;
+            }
 
-        if !process_journal_entry(entry, &mut context) {
-            break;
+            if !process_journal_entry(entry, &mut context) {
+                break;
+            }
         }
     }
 
@@ -843,13 +867,14 @@ async fn getlog_impl(
             }
     };
 
+    let record_count = snapshot_entries.len() as i64 + context.entries.len() as i64;
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
         snapshot_entries.iter().chain(context.entries.iter().map(|arc_entry| arc_entry.as_ref())),
         params.with_paths_dict
     );
 
     result.meta = Some(Box::new(Log2Header {
-        record_count: context.record_count as _,
+        record_count,
         record_count_limit: context.record_count_limit as _,
         record_count_limit_hit: context.record_count_limit_hit,
         date_time: current_datetime,

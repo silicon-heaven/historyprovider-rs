@@ -6,13 +6,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
-struct LogFile {
-    name: PathBuf,
-    parent_dir: PathBuf,
-    size: u64,
+pub(crate) struct LogFile {
+    pub(crate) name: PathBuf,
+    pub(crate) parent_dir: PathBuf,
+    pub(crate) size: u64,
 }
 
-async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<LogFile>> {
+pub(crate) async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<LogFile>> {
     let mut result = Vec::new();
     let mut dirs = vec![dir.as_ref().to_path_buf()];
 
