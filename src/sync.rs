@@ -255,7 +255,7 @@ async fn sync_site_by_download(
     client_cmd_tx: ClientCommandSender,
     journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
-    file_list: &[LsFilesEntry],
+    file_list: Option<&[LsFilesEntry]>,
 ) -> Result<(), String>
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
@@ -288,8 +288,14 @@ async fn sync_site_by_download(
         );
     }
 
-    let files_to_sync = futures::stream::iter(
-        file_list
+    let file_list = match file_list {
+        Some(file_list) => file_list,
+        None => &RpcCall::new(remote_journal_path, "lsfiles")
+            .exec::<_, Vec<LsFilesEntry>, _>(&client_cmd_tx)
+            .await
+            .map_err(to_string)?
+    };
+    let files_to_sync = futures::stream::iter(file_list
             .iter()
             .filter(|file| oldest_local_file
                 .as_ref()
@@ -707,7 +713,11 @@ pub(crate) async fn sync_task(
                 let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
                 let mut sync_tasks = vec![];
                 let sync_start = tokio::time::Instant::now();
-                let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
+                let SitesData { sites_info, sub_hps } = app_state
+                    .sites_data
+                    .read()
+                    .await
+                    .clone();
                 for (site_path, site_info) in sites_info.iter() {
                     let sub_hp = sub_hps
                         .get(&site_info.sub_hp)
@@ -737,7 +747,7 @@ pub(crate) async fn sync_task(
                                         client_cmd_tx,
                                         &app_state.config.journal_dir,
                                         sync_logger.clone(),
-                                        &file_list,
+                                        Some(&file_list),
                                     ).await;
                                     if let Err(err) = sync_result {
                                         sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
@@ -789,12 +799,11 @@ pub(crate) async fn sync_task(
                 }
             }
             SyncCommand::SyncSite(site) => {
-                let files_to_download = get_files_to_sync(
-                    client_cmd_tx.clone(),
-                    app_state.sites_data.read().await.clone(),
-                    max_journal_dir_size
-                ).await;
-                let SitesData { sites_info, sub_hps } = app_state.sites_data.read().await.clone();
+                let SitesData { sites_info, sub_hps } = app_state
+                    .sites_data
+                    .read()
+                    .await
+                    .clone();
                 if let Some(site_info) = sites_info.get(&site) {
                     let sub_hp = sub_hps
                         .get(&site_info.sub_hp)
@@ -816,7 +825,7 @@ pub(crate) async fn sync_task(
                                 client_cmd_tx,
                                 &app_state.config.journal_dir,
                                 sync_logger.clone(),
-                                &files_to_download.get(&site).cloned().unwrap_or_default(),
+                                None,
                             ).await;
                             if let Err(err) = sync_result {
                                 sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
