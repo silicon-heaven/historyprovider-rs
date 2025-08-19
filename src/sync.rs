@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::UnboundedSender;
 use futures::io::{BufReader, BufWriter};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
@@ -24,7 +24,7 @@ use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
-use crate::util::{get_files, is_log2_file};
+use crate::util::{get_files, is_log2_file, DedupReceiver};
 use crate::{ClientCommandSender, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 #[derive(Default)]
@@ -45,6 +45,7 @@ impl SyncInfo {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub(crate) enum SyncCommand {
     SyncAll,
     SyncSite(String),
@@ -676,7 +677,7 @@ pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,
-    mut sync_cmd_rx: UnboundedReceiver<SyncCommand>,
+    mut sync_cmd_rx: DedupReceiver<SyncCommand>,
 )
 {
 

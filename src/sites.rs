@@ -198,7 +198,8 @@ pub(crate) async fn sites_task(
                         log::info!("periodic sync trigger");
                         app_state
                             .sync_cmd_tx
-                            .unbounded_send(crate::sync::SyncCommand::SyncAll)
+                            .send(crate::sync::SyncCommand::SyncAll)
+                            .map(|_|())
                             .unwrap_or_else(|e| log::error!("Cannot send SyncAll command: {e}"));
                     }
                 }
@@ -310,7 +311,8 @@ pub(crate) async fn sites_task(
                 }
                 log::info!("Site mounted: {site_path}");
                 app_state.sync_cmd_tx
-                    .unbounded_send(crate::sync::SyncCommand::SyncSite(site_path.into()))
+                    .send(crate::sync::SyncCommand::SyncSite(site_path.into()))
+                    .map(|_|())
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
             complete => break,

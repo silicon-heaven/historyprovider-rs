@@ -5,6 +5,8 @@ use shvclient::AppState;
 use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;
 
+use self::util::DedupSender;
+
 mod sites;
 mod tree;
 mod sync;
@@ -43,7 +45,7 @@ struct State {
     sites_data: RwLock<sites::SitesData>,
     sync_info: sync::SyncInfo,
     config: HpConfig,
-    sync_cmd_tx: UnboundedSender<sync::SyncCommand>,
+    sync_cmd_tx: DedupSender<sync::SyncCommand>,
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
 }
 
@@ -55,7 +57,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     std::fs::create_dir_all(&hp_config.journal_dir)?;
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
 
-    let (sync_cmd_tx, sync_cmd_rx) = unbounded();
+    let (sync_cmd_tx, sync_cmd_rx) = crate::util::dedup_channel();
     let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded();
 
     let app_state = AppState::new(State {

@@ -382,7 +382,7 @@ async fn shvjournal_request_handler(
             METH_SYNC_LOG => return Ok("To be implemented".into()),
             METH_SYNC_INFO => return Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned().into()),
             METH_SANITIZE_LOG => return app_state.sync_cmd_tx
-                .unbounded_send(crate::sync::SyncCommand::Cleanup)
+                .send(crate::sync::SyncCommand::Cleanup)
                 .map(|_| true.into())
                 .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel")),
             _ => return Err(rpc_error_unknown_method(method)),
