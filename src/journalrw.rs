@@ -3,6 +3,7 @@ use futures::io::{AsyncBufRead, AsyncBufReadExt, Lines};
 use shvclient::clientnode::{METH_GET, SIG_CHNG};
 use shvproto::RpcValue;
 use shvrpc::metamethod::AccessLevel;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::pin::Pin;
@@ -321,6 +322,25 @@ pub(crate) struct GetLog2Params {
     pub(crate) record_count_limit: i64,
 }
 
+impl Display for GetLog2Params {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let until = self.until
+            .map_or_else(
+                || Cow::Borrowed("<none>"),
+                |dt| Cow::Owned(dt.to_iso_string())
+            );
+        let path_pattern = self.path_pattern
+            .as_ref()
+            .map_or("<none>", String::as_str);
+        write!(f, "since: {since}, until: {until}, path_pattern: {path_pattern}, with_paths_dict: {with_paths_dict}, with_snapshot: {with_snapshot}, record_count_limit: {record_count_limit}",
+            since = self.since,
+            with_paths_dict = self.with_paths_dict,
+            with_snapshot = self.with_snapshot,
+            record_count_limit = self.record_count_limit,
+        )
+    }
+}
+
 pub(crate) const RECORD_COUNT_LIMIT_DEFAULT: i64 = 10000;
 
 impl Default for GetLog2Params {
@@ -462,6 +482,36 @@ pub(crate) struct Log2Header {
     pub(crate) paths_dict: BTreeMap<i32, String>,
     pub(crate) log_params: GetLog2Params,
     pub(crate) log_version: i64,
+}
+
+impl Display for Log2Header {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Log2Header {{\n\
+             \trecord_count: {record_count},\n\
+             \trecord_count_limit: {record_count_limit},\n\
+             \trecord_count_limit_hit: {record_count_limit_hit},\n\
+             \tdate_time: {date_time},\n\
+             \tsince: {since},\n\
+             \tuntil: {until},\n\
+             \twith_paths_dict: {with_paths_dict},\n\
+             \twith_snapshot: {with_snapshot},\n\
+             \tlog_params: {log_params},\n\
+             \tlog_version: {log_version}\n\
+             }}",
+            record_count = self.record_count,
+            record_count_limit = self.record_count_limit,
+            record_count_limit_hit = self.record_count_limit_hit,
+            date_time = self.date_time.to_iso_string(),
+            since = self.since.to_iso_string(),
+            until = self.until.to_iso_string(),
+            with_paths_dict = self.with_paths_dict,
+            with_snapshot = self.with_snapshot,
+            log_params = self.log_params,
+            log_version = self.log_version,
+        )
+    }
 }
 
 impl TryFrom<shvproto::MetaMap> for Log2Header {
