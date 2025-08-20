@@ -1094,7 +1094,7 @@ async fn history_request_handler(
 
     match method {
         METH_LS => Ok(children.into()),
-        METH_GET_LOG if children.is_empty() => getlog_handler(rq, app_state).await,
+        METH_GET_LOG => getlog_handler(rq, app_state).await,
         METH_PUSH_LOG => pushlog_handler(rq, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
     }
