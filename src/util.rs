@@ -1,7 +1,11 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::path::Path;
+use std::pin::Pin;
+use std::task::Poll;
 
-use futures::TryStreamExt;
+use futures::{Stream, StreamExt, TryStreamExt};
 use shvclient::client::ShvApiVersion;
 use shvrpc::join_path;
 use shvrpc::rpc::ShvRI;
@@ -63,4 +67,50 @@ pub(crate) fn is_log2_file(entry: &DirEntry) -> bool {
         .file_name()
         .to_str()
         .is_some_and(|file_name| file_name.ends_with(".log2"))
+}
+
+#[derive(Clone)]
+pub(crate) struct DedupSender<T: Eq + Hash + Clone> {
+    sender: futures::channel::mpsc::UnboundedSender<T>,
+    pending: std::sync::Arc<std::sync::Mutex<HashSet<T>>>,
+}
+
+impl<T: Eq + Hash + Clone> DedupSender<T> {
+    pub(crate) fn send(&self, msg: T) -> Result<bool, futures::channel::mpsc::TrySendError<T>> {
+        let mut pending = self.pending.lock().expect("Tried to lock a mutex already held by the same thread");
+        if pending.contains(&msg) {
+            return Ok(false);
+        }
+        self.sender
+            .unbounded_send(msg.clone())
+            .map(|_| {
+                pending.insert(msg);
+                true
+            })
+    }
+}
+
+pub(crate) struct DedupReceiver<T: Eq + Hash + Clone> {
+    receiver: futures::channel::mpsc::UnboundedReceiver<T>,
+    pending: std::sync::Arc<std::sync::Mutex<HashSet<T>>>,
+}
+
+impl<T: Eq + Hash + Clone + Unpin> Stream for DedupReceiver<T> {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let next = this.receiver.poll_next_unpin(cx);
+        if let Poll::Ready(Some(msg)) = &next {
+            let mut pending = this.pending.lock().expect("Tried to lock a mutex already held by the same thread");
+            pending.remove(msg);
+        }
+        next
+    }
+}
+
+pub(crate) fn dedup_channel<T: Eq + Hash + Clone>() -> (DedupSender<T>, DedupReceiver<T>) {
+    let pending = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+    let (sender, receiver) = futures::channel::mpsc::unbounded();
+    (DedupSender { pending: pending.clone(), sender }, DedupReceiver { pending, receiver })
 }

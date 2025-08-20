@@ -26,6 +26,7 @@ use crate::cleanup::collect_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
+use crate::sites::SubHpInfo;
 use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
@@ -360,6 +361,40 @@ async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {
         .map(|files| files.into_iter().map(|f| f.size as i64).sum::<i64>())
 }
 
+async fn sync_log_request_handler(rq: RpcMessage, app_state: AppState<State>) -> RpcRequestResult {
+    let shvproto::Value::String(shv_path) = &rq.param().unwrap_or_default().value else {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, "Expected a string parameter (SHV path)"));
+    };
+
+    let (sites_info, sub_hps) = {
+        let sites_data = app_state.sites_data.read().await;
+        (sites_data.sites_info.clone(), sites_data.sub_hps.clone())
+    };
+
+    let sites_to_sync = sites_info
+        .iter()
+        .filter(|(site, site_info)|
+            site.starts_with(shv_path.as_str()) &&
+            sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+        )
+        .map(|(site, _)| site)
+        .collect::<Vec<_>>();
+
+    if shv_path.is_empty() {
+        app_state.sync_cmd_tx.send(crate::sync::SyncCommand::SyncAll)
+            .map(|_|())
+            .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send SyncAll command through the channel"))?;
+    } else {
+        sites_to_sync.iter().try_for_each(|site| app_state.sync_cmd_tx
+            .send(crate::sync::SyncCommand::SyncSite(site.to_string()))
+            .map(|_|())
+            .map_err(|_| RpcError::new(RpcErrorCode::InternalError, format!("Cannot send Sync({site}) command through the channel")))
+        )?;
+    }
+
+    Ok(sites_to_sync.into())
+}
+
 async fn shvjournal_request_handler(
     rq: RpcMessage,
     app_state: AppState<State>,
@@ -377,12 +412,12 @@ async fn shvjournal_request_handler(
                 .map_err(rpc_error_filesystem),
             METH_LOG_USAGE => return total_log_size(&app_state.config)
                 .await
-                .map(|size| ((size as f64) / (log_size_limit(&app_state.config) as f64)).into())
+                .map(|size| (100. * (size as f64) / (log_size_limit(&app_state.config) as f64)).into())
                 .map_err(rpc_error_filesystem),
-            METH_SYNC_LOG => return Ok("To be implemented".into()),
+            METH_SYNC_LOG => return sync_log_request_handler(rq, app_state).await,
             METH_SYNC_INFO => return Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned().into()),
             METH_SANITIZE_LOG => return app_state.sync_cmd_tx
-                .unbounded_send(crate::sync::SyncCommand::Cleanup)
+                .send(crate::sync::SyncCommand::Cleanup)
                 .map(|_| true.into())
                 .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel")),
             _ => return Err(rpc_error_unknown_method(method)),
