@@ -632,7 +632,7 @@ async fn getlog_handler(
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));
     }
     let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
-    info!("getLog site: {site_path}, params: {params:?}");
+    info!("getLog handler, site: {site_path}, params: {params}");
     let mut log_files = get_files(&local_journal_path, is_log2_file)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
