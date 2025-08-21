@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_compression::tokio::write::GzipEncoder;
-use futures::io::BufReader;
+use futures::io::{BufReader, BufWriter};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{error, info, warn};
 use sha1::Digest;
@@ -25,18 +25,29 @@ use tokio_util::io::ReaderStream;
 use crate::cleanup::collect_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
-use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, Log2Header};
+use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Header, Log2Reader};
 use crate::sites::SubHpInfo;
 use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
+const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod {
     name: METH_GET_LOG,
     flags: 0,
     access: shvrpc::metamethod::AccessLevel::Read,
+    param: "RpcValue",
+    result: "RpcValue",
+    signals: &[],
+    description: "",
+};
+
+const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod {
+    name: METH_PUSH_LOG,
+    flags: 0,
+    access: shvrpc::metamethod::AccessLevel::Write,
     param: "RpcValue",
     result: "RpcValue",
     signals: &[],
@@ -621,6 +632,150 @@ async fn compress_file(path: impl AsRef<str>, offset: u64, size: Option<u64>) ->
     }).await
 }
 
+async fn pushlog_handler(
+    rq: RpcMessage,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let log_reader = Log2Reader::new(rq.param().map_or_else(RpcValue::null, RpcValue::clone))
+        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Cannot parse pushLog parameter: {e}")))?;
+    let Log2Header {since, until, ..} = log_reader.header;
+    let site_path = rq.shv_path().unwrap_or_default();
+    info!("pushLog handler, site: {site_path}, log header: {header}", header = log_reader.header);
+    if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong site path for pushLog: {site_path}")));
+    }
+
+    let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
+
+    let local_latest_entries = {
+        let log_files = get_files(&local_journal_path, is_log2_file)
+            .await
+            .map(|mut files| { files.sort_by_key(|entry| std::cmp::Reverse(entry.file_name())); files })
+            .inspect_err(|err| {error!("Cannot read journal dir entries: {err}"); })
+            .unwrap_or_default();
+
+        Box::pin(futures::stream::iter(log_files)
+            .map(|file_entry| file_entry.path())
+            .then(|file_path|
+                async move {
+                    match tokio::fs::File::open(&file_path).await {
+                        Ok(file) => {
+                            let reader = JournalReaderLog2::new(BufReader::new(file.compat()));
+                            let (_, latest_entries) = reader
+                                .filter_map(async |res| res.ok())
+                                .fold((None, Vec::new()), async |(latest_ts, mut latest_entries), entry| {
+                                    match latest_ts {
+                                        None => (Some(entry.epoch_msec), vec![entry]),
+                                        Some(ts) if entry.epoch_msec > ts =>
+                                            (Some(entry.epoch_msec), vec![entry]),
+                                        Some(ts) if entry.epoch_msec == ts => {
+                                            latest_entries.push(entry);
+                                            (Some(ts), latest_entries)
+                                        }
+                                        Some(ts) => (Some(ts), latest_entries),
+                                    }
+                                })
+                                .await;
+                            (!latest_entries.is_empty()).then_some(latest_entries)
+                        }
+                        Err(err) => {
+                            error!("Cannot open file {file_path} while getting the last journal entries in pushLog handler: {err}",
+                                file_path = file_path.to_string_lossy()
+                            );
+                            None
+                        }
+                    }
+                })
+            .filter_map(async |latest_entries| latest_entries))
+            .next()
+            .await
+            .unwrap_or_default()
+    };
+    let local_latest_entry_msec = local_latest_entries.first().map_or(0, |entry| entry.epoch_msec);
+
+    let journal_file_path = local_journal_path.join(since.to_iso_string() + ".log2");
+    let journal_file = match tokio::fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(&journal_file_path)
+        .await {
+            Ok(file) => file,
+            Err(err) => {
+                error!("Cannot open journal file {} for writing: {}", journal_file_path.to_string_lossy(), err);
+                // Return Ok to the device assuming that the devices are not smart enough to handle
+                // the error in this case. It is not their fault that we cannot create the file.
+                // FIXME: if there is a better approach
+                return Ok(shvproto::make_map!(
+                        "since" => since,
+                        "until" => until,
+                        "msg" => "success",
+                ).into())
+            }
+        };
+
+    let mut remote_entries_count = 0;
+    let mut log_reader_stream = futures::stream::iter(log_reader
+        .into_iter()
+        .filter_map(|entry_res| {
+            let entry = entry_res
+                .inspect_err(|err| warn!("Ignoring invalid pushLog entry: {err}"))
+                .ok()?;
+
+            remote_entries_count += 1;
+
+            if entry.epoch_msec < local_latest_entry_msec {
+                warn!("Ignoring pushLog entry for: {entry_path} with timestamp: {entry_msec}, because a newer one exists with ts: {local_latest_entry_msec}",
+                    entry_path = entry.path,
+                    entry_msec = entry.epoch_msec,
+                );
+                return None;
+            }
+            if entry.epoch_msec == local_latest_entry_msec && local_latest_entries.iter().any(|latest_entry| latest_entry.path == entry.path) {
+                warn!("Ignoring pushLog entry for: {entry_path} with timestamp: {entry_msec}, because we already have an entry with this timestamp and path",
+                    entry_path = entry.path,
+                    entry_msec = entry.epoch_msec,
+                );
+                return None;
+            }
+            Some(entry)
+        }));
+
+    let mut writer = JournalWriterLog2::new(BufWriter::new(journal_file.compat()));
+    let mut written_entries_count = 0;
+    while let Some(entry) = log_reader_stream.next().await {
+        if let Err(err) = writer.append(&entry).await {
+            warn!("Cannot append to journal file {path}: {err}", path = journal_file_path.to_string_lossy());
+            break;
+        }
+        written_entries_count += 1;
+    }
+
+    if written_entries_count == 0 {
+        tokio::fs::remove_file(&journal_file_path)
+            .await
+            .unwrap_or_else(|err|
+                error!("Cannot remove empty journal file {path}: {err}", path = journal_file_path.to_string_lossy())
+            );
+    }
+
+    let (since, until) = if remote_entries_count == 0 {
+        (RpcValue::null(), RpcValue::null())
+    } else {
+        (since.into(), until.into())
+    };
+
+    info!("pushLog for site: {site_path} done, got {remote_entries_count}, rejected {rejected_count} entries",
+        rejected_count = remote_entries_count - written_entries_count
+    );
+
+    Ok(shvproto::make_map!(
+            "since" => since,
+            "until" => until,
+            "msg" => "success",
+    ).into())
+}
+
 async fn getlog_handler(
     rq: RpcMessage,
     app_state: AppState<State>,
@@ -632,7 +787,7 @@ async fn getlog_handler(
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));
     }
     let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
-    info!("getLog site: {site_path}, params: {params:?}");
+    info!("getLog handler, site: {site_path}, params: {params}");
     let mut log_files = get_files(&local_journal_path, is_log2_file)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
@@ -938,7 +1093,8 @@ async fn history_request_handler(
 
     match method {
         METH_LS => Ok(children.into()),
-        METH_GET_LOG if children.is_empty() => getlog_handler(rq, app_state).await,
+        METH_GET_LOG => getlog_handler(rq, app_state).await,
+        METH_PUSH_LOG => pushlog_handler(rq, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
     }
 }
@@ -1005,10 +1161,19 @@ pub(crate) async fn methods_getter(
                     // reloadSites (wr) -> Bool
         ])),
         NodeType::History => {
-            let children = children_on_path(&app_state.sites_data.read().await.sites_info, path)?;
+            let sites_data = app_state.sites_data.read().await;
+            let children = children_on_path(&sites_data.sites_info, &path)?;
             if children.is_empty() {
                 // `path` is a site path
-                Some(MetaMethods::from(&[&META_METHOD_GET_LOG]))
+                let meta_methods = if sites_data.sites_info
+                    .get(&path)
+                    .and_then(|site_info| sites_data.sub_hps.get(&site_info.sub_hp))
+                    .is_some_and(|sub_hp_info| matches!(sub_hp_info, SubHpInfo::PushLog)) {
+                        MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_PUSH_LOG])
+                    } else {
+                        MetaMethods::from(&[&META_METHOD_GET_LOG])
+                    };
+                Some(meta_methods)
             } else {
                 // `path` is a dir in the middle of the tree
                 Some(MetaMethods::from(&[]))

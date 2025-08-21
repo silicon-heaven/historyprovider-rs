@@ -149,7 +149,7 @@ pub(crate) async fn dirtylog_task(
                                 match tokio::fs::File::open(&file_path).await {
                                     Ok(file) => {
                                         let reader = JournalReaderLog2::new(BufReader::new(file.compat()));
-                                        reader.fold(None, |_, entry| { let entry = entry.ok(); async { entry }}).await
+                                        reader.fold(None, async |_, entry| entry.ok()).await
                                     }
                                     Err(err) => {
                                         error!("Cannot open file {file_path} while getting the last journal entry for trim dirtylog: {err}",
@@ -159,7 +159,7 @@ pub(crate) async fn dirtylog_task(
                                     }
                         }
                             })
-                        .filter_map(async move |entry| entry))
+                        .filter_map(async |entry| entry))
                         .next()
                         .await;
 
