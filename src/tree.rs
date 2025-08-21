@@ -646,10 +646,9 @@ async fn pushlog_handler(
     }
 
     let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
-    let journal_file_path = local_journal_path.join(since.to_iso_string() + ".log2");
 
     let local_latest_entries = {
-        let log_files = get_files(local_journal_path, is_log2_file)
+        let log_files = get_files(&local_journal_path, is_log2_file)
             .await
             .map(|mut files| { files.sort_by_key(|entry| std::cmp::Reverse(entry.file_name())); files })
             .inspect_err(|err| {error!("Cannot read journal dir entries: {err}"); })
@@ -694,6 +693,7 @@ async fn pushlog_handler(
     };
     let local_latest_entry_msec = local_latest_entries.first().map_or(0, |entry| entry.epoch_msec);
 
+    let journal_file_path = local_journal_path.join(since.to_iso_string() + ".log2");
     let journal_file = match tokio::fs::OpenOptions::new()
         .write(true)
         .append(true)
@@ -714,10 +714,7 @@ async fn pushlog_handler(
             }
         };
 
-    let mut writer = JournalWriterLog2::new(BufWriter::new(journal_file.compat()));
-
     let mut remote_entries_count = 0;
-    let mut written_entries_count = 0;
     let mut log_reader_stream = futures::stream::iter(log_reader
         .into_iter()
         .filter_map(|entry_res| {
@@ -744,6 +741,8 @@ async fn pushlog_handler(
             Some(entry)
         }));
 
+    let mut writer = JournalWriterLog2::new(BufWriter::new(journal_file.compat()));
+    let mut written_entries_count = 0;
     while let Some(entry) = log_reader_stream.next().await {
         if let Err(err) = writer.append(&entry).await {
             warn!("Cannot append to journal file {path}: {err}", path = journal_file_path.to_string_lossy());
