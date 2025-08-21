@@ -1016,16 +1016,24 @@ async fn getlog_impl(
     };
 
     let snapshot_entries = if with_snapshot {
-        context.snapshot.into_values().map(|entry| {
-            JournalEntry {
+        context.snapshot
+            .into_values()
+            .map(|entry| JournalEntry {
                 epoch_msec: since_ms,
                 repeat: true,
                 ..(*entry).clone()
-            }
-        })
-        .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
     } else {
-        Vec::new()
+        // Include all entries from the snapshot if their timestamp >= since
+        context.snapshot
+            .into_values()
+            .filter_map(|entry| (entry.epoch_msec >= since_ms)
+                .then(|| Arc::try_unwrap(entry)
+                    .unwrap_or_else(|entry| (*entry).clone())
+                )
+            )
+            .collect::<Vec<_>>()
     };
 
     let current_datetime = shvproto::DateTime::now();
