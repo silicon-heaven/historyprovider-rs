@@ -638,7 +638,7 @@ async fn pushlog_handler(
 ) -> RpcRequestResult {
     let log_reader = Log2Reader::new(rq.param().map_or_else(RpcValue::null, RpcValue::clone))
         .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Cannot parse pushLog parameter: {e}")))?;
-    let (since, until) = (log_reader.header.since, log_reader.header.until);
+    let Log2Header {since, until, ..} = log_reader.header;
     let site_path = rq.shv_path().unwrap_or_default();
     info!("pushLog handler, site: {site_path}, log header: {header}", header = log_reader.header);
     if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
