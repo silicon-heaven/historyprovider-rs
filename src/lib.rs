@@ -16,6 +16,7 @@ mod journalrw;
 mod dirtylog;
 mod datachange;
 mod util;
+pub mod typeinfo;
 
 const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
 
