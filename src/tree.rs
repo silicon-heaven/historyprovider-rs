@@ -1231,3 +1231,513 @@ async fn request_handler_impl(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use shvproto::{DateTime, RpcValue};
+
+    use crate::{journalrw::{GetLog2Params, GetLog2Since, Log2Header}, tree::JournalEntryStream};
+
+    use super::{getlog_impl, JournalEntry};
+
+    fn ts(ts_str: &str) -> shvproto::DateTime {
+        DateTime::from_iso_str(ts_str).unwrap()
+    }
+
+    fn since(ts_str: &str)-> crate::journalrw::GetLog2Since {
+        crate::journalrw::GetLog2Since::DateTime(ts(ts_str))
+    }
+
+    fn make_entry(timestamp: &str, path: &str, value: impl Into<RpcValue>) -> Result<JournalEntry, Box<dyn Error + Send + Sync>> {
+        Ok(JournalEntry {
+            path: path.to_string(),
+            epoch_msec: DateTime::from_iso_str(timestamp).unwrap().epoch_msec(),
+            signal: "chng".to_string(),
+            short_time: -1,
+            access_level: 32,
+            source: "".to_string(),
+            value: value.into(),
+            user_id: None,
+            repeat: false,
+            provisional: false,
+        })
+    }
+
+    fn create_reader(entries: Vec<Result<JournalEntry, Box<dyn Error + Send + Sync + 'static>>>) -> crate::tree::JournalEntryStream {
+        Box::pin(tokio_stream::iter(entries))
+    }
+
+    async fn get_log_entries(readers: Vec<JournalEntryStream>, params: GetLog2Params) -> (Log2Header, Vec<(String, String, RpcValue)>) {
+        let log = getlog_impl(readers, [], &params).await;
+        let log_rd = crate::journalrw::Log2Reader::new(log).expect("Reader must work");
+        let log_header = log_rd.header.clone();
+        let log_entries = log_rd
+            .filter_map(Result::ok)
+            .map(|entry_val| {
+                (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path, entry_val.value)
+            })
+            .collect();
+        (log_header, log_entries)
+    }
+
+    #[tokio::test]
+    async fn getlog() {
+        fn data_1() -> Vec<JournalEntryStream> {
+            vec![
+                create_reader(vec![
+                    make_entry("2022-07-07T18:06:15.557Z", "APP_START", true),
+                    make_entry("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32),
+
+                    make_entry("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32),
+                ]),
+                create_reader(vec![
+                    make_entry("2022-07-07T18:06:17.872Z", "APP_START", true),
+                    make_entry("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32),
+
+                    make_entry("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false),
+                    make_entry("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32),
+                ])
+            ]
+        }
+
+        fn data_2() -> Vec<JournalEntryStream> {
+            vec![
+                create_reader(vec![
+                    make_entry("2022-07-07T18:06:17.784Z", "value1", 0),
+                    make_entry("2022-07-07T18:06:17.784Z", "value2", 1),
+                    make_entry("2022-07-07T18:06:17.784Z", "value3", 3),
+                    make_entry("2022-07-07T18:06:17.800Z", "value3", 200),
+                    make_entry("2022-07-07T18:06:17.950Z", "value2", 10),
+                ]),
+            ]
+        }
+
+        fn data_3() -> Vec<JournalEntryStream> {
+            vec![]
+        }
+
+        fn data_4() -> Vec<JournalEntryStream> {
+            vec![
+				create_reader(vec![
+					make_entry("2022-07-07T18:06:14.000Z", "value1", 10),
+					make_entry("2022-07-07T18:06:15.557Z", "value2", 20),
+					make_entry("2022-07-07T18:06:16.600Z", "value3", 30),
+					make_entry("2022-07-07T18:06:17.784Z", "value4", 40),
+                ])
+            ]
+        }
+
+        #[derive(Default)]
+        struct TestCase {
+            name: &'static str,
+            params: GetLog2Params,
+            expected: Vec<(&'static str, &'static str, RpcValue)>,
+            expected_record_count_limit_hit: Option<bool>,
+            expected_since: Option<&'static str>,
+            expected_until: Option<&'static str>,
+        }
+
+        let test_cases = [
+            TestCase {
+                name: "default params (no snapshot)",
+                params: Default::default(),
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.872Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "since",
+                params: GetLog2Params { since: since("2022-07-07T18:06:17.872Z"), ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:17.872Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "until",
+                params: GetLog2Params { until: Some(ts("2022-07-07T18:06:17.872Z")), ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "until after last entry",
+                params: GetLog2Params { until: Some(ts("2022-07-07T18:06:17.900")), ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.872Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "until on last entry",
+                params: GetLog2Params { until: Some(ts("2022-07-07T18:06:17.880")), ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.872Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "exact path",
+                params: GetLog2Params { path_pattern: "zone1/pme/TSH1-1/switchRightCounterPermanent".to_string().into(), ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "wildcard",
+                params: GetLog2Params { path_pattern: "zone1/**".to_string().into(), ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "record count higher",
+                params: GetLog2Params { record_count_limit: 1000, ..Default::default() },
+                expected_record_count_limit_hit: Some(false),
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.872Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.872Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+
+                    ("2022-07-07T18:06:17.873Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.874Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.880Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "record count lower",
+                params: GetLog2Params { record_count_limit: 7, ..Default::default() },
+                expected_record_count_limit_hit: Some(true),
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.869Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "records from the same timestamp are always returned",
+                params: GetLog2Params { record_count_limit: 5, ..Default::default() },
+                expected_record_count_limit_hit: Some(true),
+                expected: vec![
+                    ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:15.557Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/system/sig/plcDisconnected", false.into()),
+                    ("2022-07-07T18:06:17.784Z", "zone1/zone/Zone1/plcDisconnected", false.into()),
+                ],
+                ..Default::default()
+            },
+        ].into_iter().map(|test_case| (data_1 as fn() -> _, test_case)).chain([
+            TestCase {
+                name: "snapshot without since",
+                params: GetLog2Params { with_snapshot: true, ..Default::default() },
+                expected: vec![
+					("2022-07-07T18:06:17.784Z", "value1", 0.into()),
+					("2022-07-07T18:06:17.784Z", "value2", 1.into()),
+					("2022-07-07T18:06:17.784Z", "value3", 3.into()),
+					("2022-07-07T18:06:17.800Z", "value3", 200.into()),
+					("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "snapshot - one entry between snapshot and since",
+                params: GetLog2Params { since: since("2022-07-07T18:06:17.850"), with_snapshot: true, ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:17.850Z", "value1", 0.into()),
+                    ("2022-07-07T18:06:17.850Z", "value2", 1.into()),
+                    ("2022-07-07T18:06:17.850Z", "value3", 200.into()),
+                    ("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "snapshot - one entry exactly on since",
+                params: GetLog2Params { since: since("2022-07-07T18:06:17.800"), with_snapshot: true, ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:17.800Z", "value1", 0.into()),
+                    ("2022-07-07T18:06:17.800Z", "value2", 1.into()),
+                    ("2022-07-07T18:06:17.800Z", "value3", 200.into()),
+                    ("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "snapshot - with record cound limit smaller than the snapshot",
+                params: GetLog2Params { since: since("2022-07-07T18:06:17.800"), with_snapshot: true, record_count_limit: 1, ..Default::default() },
+                expected_record_count_limit_hit: Some(true),
+				// The whole snapshot should be sent regardless of the small recordCountLimit.
+                expected: vec![
+					("2022-07-07T18:06:17.800Z", "value1", 0.into()),
+					("2022-07-07T18:06:17.800Z", "value2", 1.into()),
+					("2022-07-07T18:06:17.800Z", "value3", 200.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "snapshot - with since after the last entry",
+                params: GetLog2Params { since: since("2022-07-07T18:06:20.850"), with_snapshot: true, ..Default::default() },
+                expected: vec![
+					("2022-07-07T18:06:20.850Z", "value1", 0.into()),
+					("2022-07-07T18:06:20.850Z", "value2", 10.into()),
+					("2022-07-07T18:06:20.850Z", "value3", 200.into()),
+                ],
+                ..Default::default()
+            },
+            TestCase {
+                name: "since last with snapshot",
+                params: GetLog2Params { since: GetLog2Since::LastEntry, with_snapshot: true, ..Default::default() },
+                expected: vec![
+					("2022-07-07T18:06:17.950Z", "value1", 0.into()),
+					("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+					("2022-07-07T18:06:17.950Z", "value3", 200.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:17.950Z"),
+                expected_until: Some("2022-07-07T18:06:17.950Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "since last without snapshot",
+                params: GetLog2Params { since: GetLog2Since::LastEntry, with_snapshot: false, ..Default::default() },
+                expected: vec![
+                    ("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:17.950Z"),
+                expected_until: Some("2022-07-07T18:06:17.950Z"),
+                ..Default::default()
+            },
+        ].into_iter().map(|test_case| (data_2 as fn() -> _, test_case))).chain([
+            ("result since/until - default params", Default::default()),
+            ("result since/until - since set", GetLog2Params { since: since("2022-07-07T18:06:15.557Z"), ..Default::default() }),
+            ("result since/until - until set", GetLog2Params { until: Some(ts("2022-07-07T18:06:15.557Z")), ..Default::default() }),
+            ("result since/until - both since/until set", GetLog2Params { since: since("2022-07-07T18:06:15.557Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default() }),
+        ].into_iter().map(|(name, params)| (data_3 as fn() -> _, TestCase {
+            name,
+            params,
+            expected: vec![],
+            // For empty dataset, getlog always returns this since and until.
+            expected_since: Some("1970-01-01T00:00:00.000Z"),
+            expected_until: Some("1970-01-01T00:00:00.000Z"),
+            ..Default::default()
+        }))).chain([
+            TestCase {
+                name: "since/until not set",
+                params: Default::default(),
+                expected: vec![
+					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:14.000Z"),
+                expected_until: Some("2022-07-07T18:06:17.785Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "since on the first entry",
+                params: GetLog2Params{since: since("2022-07-07T18:06:15.557Z"), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:15.557Z"),
+                expected_until: Some("2022-07-07T18:06:17.785Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "since before the first entry",
+                params: GetLog2Params{since: since("2022-07-07T18:06:13.000Z"), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:14.000Z"),
+                expected_until: Some("2022-07-07T18:06:17.785Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "since after the first entry",
+                params: GetLog2Params{since: since("2022-07-07T18:06:15.553Z"), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:15.553Z"),
+                expected_until: Some("2022-07-07T18:06:17.785Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "until set",
+                params: GetLog2Params{until: Some(ts("2022-07-07T18:06:18.700")), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:14.000Z"),
+                expected_until: Some("2022-07-07T18:06:17.785Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "until set - record count limit hit",
+                params: GetLog2Params{record_count_limit: 2, until: Some(ts("2022-07-07T18:06:18.700")), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:14.000Z"),
+                expected_until: Some("2022-07-07T18:06:16.600Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "since/until set",
+                params: GetLog2Params{since: since("2022-07-07T18:06:10.000Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:14.000Z"),
+                expected_until: Some("2022-07-07T18:06:17.785Z"),
+                ..Default::default()
+            },
+            TestCase {
+                name: "since/until set - record_count_limit hit",
+                params: GetLog2Params{record_count_limit: 2, since: since("2022-07-07T18:06:10.000Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default()},
+                expected: vec![
+					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                ],
+                expected_since: Some("2022-07-07T18:06:14.000Z"),
+                expected_until: Some("2022-07-07T18:06:16.600Z"),
+                ..Default::default()
+            }
+        ].into_iter().map(|test_case| (data_4 as fn() -> _, test_case)));
+
+        for (data, case) in test_cases {
+            let (header, actual) = get_log_entries(data(), case.params).await;
+            let expected = case.expected.into_iter().map(|(ts, path, val)| (ts.to_string(), path.to_string(), val)).collect::<Vec<_>>();
+            assert_eq!(actual, expected, "Test case failed: {}", case.name);
+            if let Some(expected_record_count_limit_hit) = case.expected_record_count_limit_hit {
+                assert_eq!(header.record_count_limit_hit, expected_record_count_limit_hit, "Test case failed: {}", case.name);
+            }
+            if let Some(expected_since) = case.expected_since {
+                assert_eq!(header.since.to_iso_string(), expected_since, "Test case failed: {}", case.name);
+            }
+            if let Some(expected_until) = case.expected_until {
+                assert_eq!(header.until.to_iso_string(), expected_until, "Test case failed: {}", case.name);
+            }
+        }
+    }
+}
