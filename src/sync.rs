@@ -680,7 +680,6 @@ pub(crate) async fn sync_task(
     mut sync_cmd_rx: DedupReceiver<SyncCommand>,
 )
 {
-
     let (logger_tx, mut logger_rx) = futures::channel::mpsc::unbounded();
     let logger_task = tokio::task::spawn({
         let app_state = app_state.clone();
@@ -877,3 +876,6 @@ pub(crate) async fn sync_task(
     }
     logger_task.abort();
 }
+
+#[cfg(test)]
+mod tests;
