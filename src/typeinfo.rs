@@ -1028,3 +1028,132 @@ impl TryFrom<&RpcValue> for TypeInfo {
         Ok(res)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use shvproto::RpcValue;
+
+    use crate::typeinfo::{FieldDescriptionMethods, SampleType, Type, TypeDescriptionMethods, TypeInfo};
+    use std::collections::BTreeMap;
+    use std::sync::Once;
+    use simple_logger::SimpleLogger;
+
+    const TYPE_INFO: &str = r#"
+<"version":4>{
+	"deviceDescriptions":{
+		"device1":{
+			"properties":[
+				{
+					"name":"status1",
+					"typeName":"BitField"
+				},
+				{
+					"name":"status2",
+					"typeName":"Map"
+				},
+				{
+					"name":"status3",
+					"typeName":"Enum"
+				},
+			]
+		},
+	},
+	"devicePaths":{
+		"foo/bar":"device1",
+	},
+	"types":{
+        "BitField":{
+			"fields":[
+				{"alarm":"warning", "description":"Alarm 1", "label":"Alarm 1 label", "name":"field1", "value": [0,7] },
+				{"alarm":"error", "description":"Alarm 2", "label":"Alarm 2 label", "name":"field2", "value": 24 },
+				{"name":"field3", "value": [25, 26] },
+			],
+			"typeName":"BitField"
+        },
+		"Map":{
+			"fields":[
+				{"description":"Description 1", "label":"Label 1", "name":"mapField1", "typeName":"Int"},
+				{"description":"Description 2", "label":"Label 2", "name":"mapField2", "typeName":"String"},
+			],
+			"typeName":"Map",
+			"sampleType":"Discrete"
+		},
+		"Enum":{
+			"fields":[
+				{"description":"", "label":"", "name":"Unknown", "value":0},
+				{"description":"", "label":"", "name":"Normal", "value":1},
+				{
+					"alarm":"warning",
+					"alarmLevel":50,
+					"description":"",
+					"label":"",
+					"name":"Warning",
+					"value":2
+				},
+				{
+					"alarm":"error",
+					"alarmLevel":100,
+					"description":"",
+					"label":"",
+					"name":"Error",
+					"value":3
+				}
+			],
+			"typeName":"Enum"
+		},
+	}
+}
+"#;
+
+
+    fn init_logger() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            SimpleLogger::new()
+                .with_level(log::LevelFilter::Debug)
+                .init()
+                .unwrap();
+            });
+    }
+
+    #[test]
+    fn parse_type_info() {
+        init_logger();
+        let rv = RpcValue::from_cpon(TYPE_INFO).unwrap_or_else(|e| panic!("Cannot parse typeInfo: {e}"));
+        let type_info = TypeInfo::try_from(&rv).unwrap_or_else(|e| panic!("Cannot convert RpcValue to TypeInfo: {e}"));
+
+        let type_descr = type_info.type_description_for_path("foo/bar/status1").unwrap();
+        assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
+        assert!(type_descr.field_value(0x1234, "field1").is_some_and(|v| v.as_u32() == 0x34));
+
+        let bitfield_type_descr = type_info.find_type_description("BitField").unwrap();
+        assert!(bitfield_type_descr.is_valid());
+        assert!(matches!(bitfield_type_descr.type_id(), Some(Type::BitField)));
+        assert!(bitfield_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Continuous)));
+        assert_eq!(bitfield_type_descr.field_value(0xfffa, "field1").unwrap().as_u32(), 0xfa);
+        assert_eq!(bitfield_type_descr.field_value(0x7fffffff, "field2").unwrap().as_u32(), 1);
+        assert_eq!(bitfield_type_descr.field_value(0x7effffff, "field2").unwrap().as_u32(), 0);
+        assert_eq!(bitfield_type_descr.field_value(0x1cffffff, "field3").unwrap().as_u32(), 2);
+
+        let map_type_descr = type_info.find_type_description("Map").unwrap();
+        assert!(matches!(map_type_descr.type_id(), Some(Type::Map)));
+        assert!(map_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Discrete)));
+        let vehicle_data: RpcValue = shvproto::make_map!("mapField1" => 123).into();
+        assert_eq!(map_type_descr.field_value(&vehicle_data, "mapField1").unwrap().as_int(), 123);
+        assert!(map_type_descr.field_value(&vehicle_data, "noMapField").is_none());
+
+        let enum_type_descr = type_info.find_type_description("Enum").unwrap();
+        assert!(matches!(enum_type_descr.type_id(), Some(Type::Enum)));
+        assert!(enum_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Continuous)));
+        assert_eq!(enum_type_descr.field_value((), "Warning").unwrap().as_u32(), 2);
+        let field_alarms = BTreeMap::from([
+            ("Unknown", (None, None)),
+            ("Normal", (None, None)),
+            ("Warning", (Some("warning"), Some(50))),
+            ("Error", (Some("error"), Some(100))),
+        ]);
+        for fld in &enum_type_descr.fields() {
+            assert!(field_alarms.get(fld.name()).is_some_and(|(alarm, level)| alarm == &fld.alarm() && level == &fld.alarm_level()));
+        }
+    }
+}
