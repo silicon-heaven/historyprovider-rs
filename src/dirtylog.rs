@@ -1,33 +1,29 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
-use futures::stream::{FuturesUnordered, SelectAll};
+use futures::stream::FuturesUnordered;
 use futures::{StreamExt};
-use log::{debug, error, info, warn};
-use shvclient::client::ShvApiVersion;
+use log::{error, info, warn};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
-use shvrpc::{join_path, RpcMessageMetaTags};
+use shvrpc::{RpcMessage, RpcMessageMetaTags};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::datachange::DataChange;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_SPONTANEOUS_BIT};
-use crate::util::{get_files, is_log2_file, subscribe, subscription_prefix_path};
-use crate::{ClientCommandSender, State, Subscriber};
+use crate::util::{get_files, is_log2_file};
+use crate::{ClientCommandSender, State};
 
-use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
-const SIG_CMDLOG: &str = "cmdlog";
+use shvclient::clientnode::find_longest_path_prefix;
 
 pub(crate) enum DirtyLogCommand {
-    // On the client connect
-    Subscribe(ShvApiVersion),
+    ProcessNotification(RpcMessage),
     Trim {
         site: String
     },
@@ -38,14 +34,11 @@ pub(crate) enum DirtyLogCommand {
 }
 
 pub(crate) async fn dirtylog_task(
-    client_cmd_tx: ClientCommandSender,
+    _client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
     app_state: AppState<State>,
     mut cmd_rx: UnboundedReceiver<DirtyLogCommand>,
 ) {
-    let mut site_paths = Arc::default();
-    let mut subscribers = SelectAll::<Subscriber>::default();
-
     // Per site request
     enum Request {
         Get(OneshotSender<Vec<JournalEntry>>),
@@ -265,77 +258,46 @@ pub(crate) async fn dirtylog_task(
     loop {
         futures::select! {
             command = cmd_rx.select_next_some() => match command {
-                DirtyLogCommand::Subscribe(shv_api_version) => {
-                    info!("Subscribing signals on the devices");
-                    site_paths = app_state
-                        .sites_data
-                        .read()
-                        .await
-                        .sites_info
-                        .clone();
-                    subscribers = site_paths
-                        .keys()
-                        .flat_map(|path| {
-                            let shv_path = join_path!("shv", path);
-                            let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
-                            let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
-                            [sub_chng, sub_cmdlog]
-                        })
-                        .collect::<FuturesUnordered<_>>()
-                        .collect::<SelectAll<_>>()
-                        .await;
-
-                    debug!("Device subscriptions:\n{}", subscribers.iter()
-                        .map(Subscriber::path_signal)
-                        .map(|(path, signal)| format!("{path}:{signal}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                    );
-                }
                 DirtyLogCommand::Trim { site } => {
                     request_scheduler.schedule_new(site, Request::Trim);
                 }
                 DirtyLogCommand::Get { site, response_tx } => {
                     request_scheduler.schedule_new(site, Request::Get(response_tx));
                 }
-            },
-            notification = subscribers.select_next_some() => {
-                // Parse the notification
-                let msg = match notification.to_rpcmesage() {
-                    Ok(msg) => msg,
-                    Err(err) => {
-                        warn!("Ignoring wrong RpcFrame: {err}");
+                DirtyLogCommand::ProcessNotification(msg) => {
+                    let signal = msg.method().unwrap_or_default().to_string();
+                    let path = msg.shv_path().unwrap_or_default().to_string();
+                    let param = msg.param().unwrap_or_default();
+
+                    let Some(stripped_path) = path.strip_prefix("shv/") else {
                         continue;
-                    }
-                };
-                let signal = msg.method().unwrap_or_default().to_string();
-                let path = msg.shv_path().unwrap_or_default().to_string();
-                let param = msg.param().unwrap_or_default();
+                    };
+                    let sites_data = app_state
+                        .sites_data
+                        .read()
+                        .await;
+                    let Some((site_path, property_path)) = find_longest_path_prefix(&*sites_data.sites_info, stripped_path) else {
+                        continue;
+                    };
+                    drop(sites_data);
 
-                let Some(stripped_path) = path.strip_prefix("shv/") else {
-                    continue;
-                };
-                let Some((site_path, property_path)) = find_longest_path_prefix(&*site_paths, stripped_path) else {
-                    continue;
-                };
-
-                let data_change = DataChange::from(param.clone());
-                let journal_entry = JournalEntry {
-                    epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
-                    path: property_path.to_string(),
-                    signal,
-                    source: Default::default(),
-                    value: data_change.value,
-                    access_level: AccessLevel::Read as _,
-                    short_time: data_change.short_time.unwrap_or(-1),
-                    user_id: Default::default(),
-                    repeat: data_change.value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
-                    provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
-                };
-                // Schedule next task
-                request_scheduler.schedule_new(site_path.into(), Request::Append(journal_entry));
-
-            }
+                    let data_change = DataChange::from(param.clone());
+                    let journal_entry = JournalEntry {
+                        epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
+                        path: property_path.to_string(),
+                        signal,
+                        source: Default::default(),
+                        value: data_change.value,
+                        access_level: AccessLevel::Read as _,
+                        short_time: data_change.short_time.unwrap_or(-1),
+                        user_id: Default::default(),
+                        repeat: data_change.value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
+                        provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
+                    };
+                    // Schedule next task
+                    request_scheduler.schedule_new(site_path.into(), Request::Append(journal_entry));
+                }
+            },
             site = request_scheduler.inflight.select_next_some() => {
                 request_scheduler.on_finished(site);
             }
