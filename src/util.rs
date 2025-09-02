@@ -14,6 +14,21 @@ use tokio_stream::wrappers::ReadDirStream;
 
 use crate::{ClientCommandSender, Subscriber};
 
+#[cfg(test)]
+use std::sync::Once;
+#[cfg(test)]
+use simple_logger::SimpleLogger;
+
+#[cfg(test)]
+pub(crate) fn init_logger() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        SimpleLogger::new()
+            .with_level(log::LevelFilter::Debug)
+            .init()
+            .unwrap();
+        });
+}
 
 pub(crate) fn subscription_prefix_path<'a>(path: impl Into<Cow<'a, str>>, api_version: &ShvApiVersion) -> String {
     let path = path.into();
