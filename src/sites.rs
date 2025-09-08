@@ -5,7 +5,7 @@ use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
 use log::warn;
 use shvclient::client::{CallRpcMethodErrorKind, RpcCall};
-use shvclient::clientnode::find_longest_path_prefix;
+use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::{join_path, RpcMessageMetaTags};
@@ -152,6 +152,8 @@ fn collect_sub_hps(
         .collect()
 }
 
+const SIG_CMDLOG: &str = "cmdlog";
+
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
@@ -160,6 +162,7 @@ pub(crate) async fn sites_task(
 {
     let mut client_evt_rx = client_evt_rx.fuse();
     let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
+    let mut subscribers = SelectAll::<Subscriber>::default();
 
     enum PeriodicSyncCommand {
         Enable,
@@ -211,79 +214,90 @@ pub(crate) async fn sites_task(
     loop {
         futures::select! {
             client_event = client_evt_rx.select_next_some() => match client_event {
-                    shvclient::ClientEvent::Connected(shv_api_version) => {
-                        log::info!("Getting sites info");
+                shvclient::ClientEvent::Connected(shv_api_version) => {
+                    log::info!("Getting sites info");
 
-                        let sites = RpcCall::new("sites", "getSites")
-                            .exec(&client_cmd_tx)
-                            .await;
+                    let sites = RpcCall::new("sites", "getSites")
+                        .exec(&client_cmd_tx)
+                        .await;
 
-                        let (sites_info, sub_hps) = match sites
-                            .map(|sites: shvproto::Map| {
-                                let sub_hps = collect_sub_hps(&[], &sites);
-                                let mut sites_info = collect_sites(&[], &sites);
-                                for (path, site_info) in &mut sites_info {
-                                    if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
-                                        site_info.sub_hp = prefix.into();
-                                    } else {
-                                        log::error!("Cannot find sub HP for site {path}");
-                                        site_info.sub_hp = path.clone();
-                                    }
+                    let (sites_info, sub_hps) = match sites
+                        .map(|sites: shvproto::Map| {
+                            let sub_hps = collect_sub_hps(&[], &sites);
+                            let mut sites_info = collect_sites(&[], &sites);
+                            for (path, site_info) in &mut sites_info {
+                                if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
+                                    site_info.sub_hp = prefix.into();
+                                } else {
+                                    log::error!("Cannot find sub HP for site {path}");
+                                    site_info.sub_hp = path.clone();
                                 }
-                                (Arc::new(sites_info), Arc::new(sub_hps))
-                            }) {
-                                Ok(res) => res,
-                                Err(err) => match err.error() {
-                                    CallRpcMethodErrorKind::ConnectionClosed => {
-                                        log::warn!("Connection closed while getting sites info");
-                                        continue
-                                    }
-                                    _ => {
-                                        log::error!("Get sites info error: {err}");
-                                        Default::default()
-                                    }
+                            }
+                            (Arc::new(sites_info), Arc::new(sub_hps))
+                        }) {
+                            Ok(res) => res,
+                            Err(err) => match err.error() {
+                                CallRpcMethodErrorKind::ConnectionClosed => {
+                                    log::warn!("Connection closed while getting sites info");
+                                    continue
                                 }
-                            };
+                                _ => {
+                                    log::error!("Get sites info error: {err}");
+                                    Default::default()
+                                }
+                            }
+                        };
 
-                        log::info!("Loaded sites:\n{}", sites_info
-                            .iter()
-                            .map(|(path, site)| format!(" {path}: {site:?}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                        );
+                    log::info!("Loaded sites:\n{}", sites_info
+                        .iter()
+                        .map(|(path, site)| format!(" {path}: {site:?}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                    );
 
-                        log::info!("Loaded sub HPs:\n{}", sub_hps
-                            .iter()
-                            .map(|(path, hp)| format!(" {path}: {hp:?}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                        );
+                    log::info!("Loaded sub HPs:\n{}", sub_hps
+                        .iter()
+                        .map(|(path, hp)| format!(" {path}: {hp:?}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                    );
 
-                        // Subscribe mntchng
-                        mntchng_subscribers = sites_info
-                            .keys()
-                            .map(|path| {
-                                subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
-                            })
-                            .collect::<FuturesUnordered<_>>()
-                            .collect::<SelectAll<_>>()
-                            .await;
+                    // Subscribe mntchng
+                    mntchng_subscribers = sites_info
+                        .keys()
+                        .map(|path| {
+                            subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
+                        })
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<SelectAll<_>>()
+                        .await;
 
-                        *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
+                    subscribers = sites_info
+                        .keys()
+                        .flat_map(|path| {
+                            let shv_path = join_path!("shv", path);
+                            let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
+                            let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
+                            [sub_chng, sub_cmdlog]
+                        })
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<SelectAll<_>>()
+                        .await;
 
-                        periodic_sync_tx
-                            .unbounded_send(PeriodicSyncCommand::Enable)
-                            .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
+                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
 
-                        app_state.dirtylog_cmd_tx
-                            .unbounded_send(crate::dirtylog::DirtyLogCommand::Subscribe(shv_api_version))
-                            .unwrap_or_else(|e| log::error!("Cannot send dirtylog Subscribe command: {e}"));
-                    }
-                    _ => {
-                        periodic_sync_tx
-                            .unbounded_send(PeriodicSyncCommand::Disable)
-                            .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
-                    }
+                    periodic_sync_tx
+                        .unbounded_send(PeriodicSyncCommand::Enable)
+                        .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
+
+                }
+                _ => {
+                    // TODO: Drain subscribers
+
+                    periodic_sync_tx
+                        .unbounded_send(PeriodicSyncCommand::Disable)
+                        .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
+                }
             },
             mntchng_frame = mntchng_subscribers.select_next_some() => {
                 let msg = match mntchng_frame.to_rpcmesage() {
@@ -305,7 +319,7 @@ pub(crate) async fn sites_task(
                 let Some((site_path, _)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
                     continue;
                 };
-                if !msg.param().map_or_else(|| false, RpcValue::as_bool) {
+                if !msg.param().is_some_and(RpcValue::as_bool) {
                     log::info!("Site unmounted: {site_path}");
                     continue;
                 }
@@ -314,6 +328,18 @@ pub(crate) async fn sites_task(
                     .send(crate::sync::SyncCommand::SyncSite(site_path.into()))
                     .map(|_|())
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
+            }
+            notification_frame = subscribers.select_next_some() => {
+                let msg = match notification_frame.to_rpcmesage() {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        warn!("Ignoring wrong RpcFrame: {err}");
+                        continue;
+                    }
+                };
+                app_state.dirtylog_cmd_tx
+                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(msg))
+                    .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
             }
             complete => break,
         }
