@@ -298,9 +298,9 @@ async fn sync_site_by_download(
     };
     let files_to_sync = futures::stream::iter(file_list
             .iter()
-            .filter(|file| oldest_local_file
-                .as_ref()
-                .is_none_or(|oldest_file| &file.name >= oldest_file)
+            .filter(|file|
+                file.name.ends_with(".log2")
+                && oldest_local_file.as_ref().is_none_or(|oldest_file| &file.name >= oldest_file)
             )
         )
         .filter_map(|remote_file| async {
