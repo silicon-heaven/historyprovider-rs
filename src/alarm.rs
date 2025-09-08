@@ -312,7 +312,7 @@ mod tests {
         let alarms = collect_alarms(&type_info, "foo/bar/status1", &RpcValue::from(1_u64 << 24));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 3);
-        let alarm1  = &alarms[0];
+        let alarm1 = &alarms[0];
         assert!(!alarm1.is_active);
         assert_eq!(alarm1.path, "foo/bar/status1/field1".to_owned());
         assert_eq!(alarm1.severity, Severity::Warning);
