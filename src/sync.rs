@@ -415,13 +415,7 @@ async fn sync_file(
         format!("{file_path_remote}: starting to sync, start offset: {sync_offset}, file size: {file_size}",
     ));
 
-    let mut local_file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .write(true)
-        .open(file_path_local)
-        .await
-        .map_err(|e| format!("Cannot open {}: {e}", file_path_local.to_string_lossy()))?;
+    let mut local_file: Option<tokio::fs::File> = None;
 
     let mut sync_offset = sync_offset;
     let mut remaining_bytes = file_size - sync_offset;
@@ -446,6 +440,20 @@ async fn sync_file(
         if chunk_len > sync_size {
             return Err(format!("{file_path_remote}: Got chunk of size: {chunk_len}, which is larger than requested: {sync_size}"));
         }
+
+        let local_file = match &mut local_file {
+            Some(file) => file,
+            None => {
+                let file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .write(true)
+                    .open(file_path_local)
+                    .await
+                    .map_err(|e| format!("Cannot open {}: {e}", file_path_local.to_string_lossy()))?;
+                local_file.get_or_insert(file)
+            }
+        };
 
         local_file.write_all(&chunk)
           .await
