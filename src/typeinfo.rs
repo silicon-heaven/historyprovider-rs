@@ -1034,9 +1034,8 @@ mod tests {
     use shvproto::RpcValue;
 
     use crate::typeinfo::{FieldDescriptionMethods, SampleType, Type, TypeDescriptionMethods, TypeInfo};
+    use crate::util::init_logger;
     use std::collections::BTreeMap;
-    use std::sync::Once;
-    use simple_logger::SimpleLogger;
 
     const TYPE_INFO: &str = r#"
 <"version":4>{
@@ -1104,17 +1103,6 @@ mod tests {
 	}
 }
 "#;
-
-
-    fn init_logger() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            SimpleLogger::new()
-                .with_level(log::LevelFilter::Debug)
-                .init()
-                .unwrap();
-            });
-    }
 
     #[test]
     fn parse_type_info() {
