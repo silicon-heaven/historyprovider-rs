@@ -365,24 +365,38 @@ async fn sync_site_by_download(
         .collect::<Vec<_>>()
         .await;
 
-    // Sync from the remote to the sync directory
-    for (file_name, sync_offset, file_size) in files_to_sync {
-        sync_file(
-            client_cmd_tx.clone(),
-            join_path!(remote_journal_path, &file_name),
-            local_journal_path.join(&file_name),
-            download_chunk_size,
-            sync_offset,
-            file_size,
-            sync_logger.clone(),
-        )
-        .await
-        .map_err(to_string)?;
+    if let Some((first_file, _, _)) = files_to_sync.first() {
+        let read_api = RpcCall::new(&join_path!(remote_journal_path, first_file), METH_DIR)
+            .param("sha1")
+            .exec(&client_cmd_tx)
+            .await
+            .map(|v: RpcValue| if v.is_imap() { ReadApi::List } else { ReadApi::Map })
+            .map_err(|e| format!("Cannot get read param API for {remote_journal_path}: {e}"))?;
+
+        // Sync from the remote to the sync directory
+        for (file_name, sync_offset, file_size) in files_to_sync {
+            sync_file(
+                client_cmd_tx.clone(),
+                join_path!(remote_journal_path, &file_name),
+                local_journal_path.join(&file_name),
+                download_chunk_size,
+                sync_offset,
+                file_size,
+                read_api,
+                sync_logger.clone(),
+            )
+            .await
+            .map_err(to_string)?;
+        }
     }
 
     Ok(())
 }
 
+#[derive(Copy,Clone)]
+enum ReadApi { List, Map }
+
+#[allow(clippy::too_many_arguments)]
 async fn sync_file(
     client_cmd_tx: ClientCommandSender,
     file_path_remote: impl AsRef<str>,
@@ -390,6 +404,7 @@ async fn sync_file(
     download_chunk_size: i64,
     sync_offset: i64,
     file_size: i64,
+    read_api: ReadApi,
     sync_logger: impl SyncLogger,
 ) -> Result<(), String>
 {
@@ -408,20 +423,10 @@ async fn sync_file(
         .await
         .map_err(|e| format!("Cannot open {}: {e}", file_path_local.to_string_lossy()))?;
 
-    enum ReadApi { List, Map }
-    let read_api = RpcCall::new(file_path_remote, METH_DIR)
-        .param("sha1")
-        .exec(&client_cmd_tx)
-        .await
-        .map(|v: RpcValue| if v.is_imap() { ReadApi::List } else { ReadApi::Map })
-        .map_err(|e| format!("Cannot get read param API for {file_path_remote}: {e}"))?;
-
     let mut sync_offset = sync_offset;
     let mut remaining_bytes = file_size - sync_offset;
     while sync_offset < file_size {
         let sync_size = remaining_bytes.max(0).min(download_chunk_size);
-
-        // log::info!("  downloading chunk, offset: {}, size: {}", sync_offset, sync_size);
 
         let param: RpcValue = match read_api {
             ReadApi::List => shvproto::make_list!(sync_offset, sync_size).into(),
