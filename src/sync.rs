@@ -294,7 +294,7 @@ async fn sync_site_by_download(
         None => &RpcCall::new(remote_journal_path, "lsfiles")
             .exec::<_, Vec<LsFilesEntry>, _>(&client_cmd_tx)
             .await
-            .map(|file_list| file_list.into_iter().filter(|file| file.name.ends_with(".log2")).collect::<Vec<_>>())
+            .map(|file_list| file_list.into_iter().filter(|file| matches!(file.ftype, FileType::File) && file.name.ends_with(".log2")).collect::<Vec<_>>())
             .map(|mut file_list| { file_list.sort_by(|file_a, file_b| file_a.name.cmp(&file_b.name)); file_list })
             .map_err(to_string)?
     };
