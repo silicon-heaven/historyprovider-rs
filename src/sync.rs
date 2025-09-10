@@ -417,6 +417,16 @@ async fn sync_file(
 
     let mut local_file: Option<tokio::fs::File> = None;
 
+    let do_open_file = async || {
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .write(true)
+            .open(file_path_local)
+            .await
+            .map_err(|e| format!("Cannot open {}: {e}", file_path_local.to_string_lossy()))
+    };
+
     let mut sync_offset = sync_offset;
     let mut remaining_bytes = file_size - sync_offset;
     while sync_offset < file_size {
@@ -444,14 +454,7 @@ async fn sync_file(
         let local_file = match &mut local_file {
             Some(file) => file,
             None => {
-                let file = tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .write(true)
-                    .open(file_path_local)
-                    .await
-                    .map_err(|e| format!("Cannot open {}: {e}", file_path_local.to_string_lossy()))?;
-                local_file.get_or_insert(file)
+                local_file.insert(do_open_file().await?)
             }
         };
 
@@ -469,6 +472,10 @@ async fn sync_file(
                 remaining_bytes,
                 (sync_offset as f64 / file_size as f64) * 100.0,
         ));
+    }
+
+    if local_file.is_none() {
+        do_open_file().await?;
     }
     sync_logger.log(log::Level::Info, format!("{file_path_remote}: successfully synced"));
     Ok(())

@@ -306,19 +306,20 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             starting_files: vec![],
             expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2", "site1/2022-07-08T18-06-15-557.log2"],
         },
-        // FIXME: Does not work, empty files shouldn't be pulled from the remote
-        // TestCase {
-        //     name: "SyncSite: Remote has one empty file and one non-empty file",
-        //     steps: &[
-        //         TestStep::SyncCommand(SyncCommand::SyncSite("site1".to_string())),
-        //         TestStep::ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-        //                 make_list![ "2022-07-05T18-06-15-557.log2", "f", 0 ],
-        //                 make_list![ "2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32]
-        //         ].into())),
-        //          TestStep::ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into())),
-        //     ],
-        //     expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2"],
-        // },
+        TestCase {
+            name: "SyncSite: Remote has one empty file and one non-empty file",
+            steps: &[
+                TestStep::SyncCommand(SyncCommand::SyncSite("site1".to_string())),
+                TestStep::ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list![ "2022-07-05T18-06-15-557.log2", "f", 0 ],
+                        make_list![ "2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32]
+                ].into())),
+                TestStep::ExpectCallParam("shv/site1/.app/shvjournal/2022-07-05T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into())),
+                TestStep::ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into())),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec!["site1/2022-07-05T18-06-15-557.log2", "site1/2022-07-07T18-06-15-557.log2"],
+        },
         TestCase {
             name: "SyncSite: Don't download files older than we already have",
             steps: &[
