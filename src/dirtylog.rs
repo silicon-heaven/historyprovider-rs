@@ -50,7 +50,7 @@ pub(crate) async fn dirtylog_task(
         match request {
             Request::Get(response_sender) => {
                 // Load the dirty log and return it in the response channel
-                let dirty_log_path =  journal_dir.join(site).join("dirtylog");
+                let dirty_log_path = journal_dir.join(site).join("dirtylog");
                 let res = match tokio::fs::File::open(&dirty_log_path).await {
                     Ok(file) => {
                         let reader = JournalReaderLog2::new(BufReader::new(file.compat())).enumerate();

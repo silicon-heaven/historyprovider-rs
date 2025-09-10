@@ -116,18 +116,14 @@ fn collect_sub_hps(
                             SubHpInfo::PushLog
                         } else if meta.contains_key("HP") {
                             SubHpInfo::Legacy {
-                                getlog_path: if is_device { LEGACY_SYNC_PATH_DEVICE }
-                                         else { LEGACY_SYNC_PATH_HP }.to_string(),
+                                getlog_path: if is_device { LEGACY_SYNC_PATH_DEVICE } else { LEGACY_SYNC_PATH_HP }.to_string(),
                             }
                         } else {
                             SubHpInfo::Normal {
                                 sync_path: hp
                                     .get("syncPath")
                                     .map(RpcValue::as_str)
-                                    .unwrap_or_else(||
-                                        if is_device { DEFAULT_SYNC_PATH_DEVICE }
-                                        else { DEFAULT_SYNC_PATH_HP }
-                                    )
+                                    .unwrap_or_else(|| if is_device { DEFAULT_SYNC_PATH_DEVICE } else { DEFAULT_SYNC_PATH_HP })
                                     .to_string(),
                                 download_chunk_size: hp
                                     .get("readLogChunkLimit")

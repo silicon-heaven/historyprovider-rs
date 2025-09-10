@@ -11,7 +11,7 @@ use tokio::{io::AsyncWriteExt, sync::RwLock};
 use crate::{dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesData, SubHpInfo}, sync::{sync_task, SyncCommand}, util::{dedup_channel, init_logger}, State};
 
 async fn expect_rpc_call(client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>, expected_shv_path: &str, expected_method: &str, expected_param: Option<RpcValue>, return_val: Result<RpcValue, RpcError>) {
-    let Some(event)  = client_command_reciever.next().await else {
+    let Some(event) = client_command_reciever.next().await else {
         panic!("got unexpected event");
     };
     match event {
