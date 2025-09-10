@@ -22,6 +22,7 @@ use crate::{ClientCommandSender, State};
 
 use shvclient::clientnode::find_longest_path_prefix;
 
+#[derive(Debug)]
 pub(crate) enum DirtyLogCommand {
     ProcessNotification(RpcMessage),
     Trim {
@@ -303,5 +304,315 @@ pub(crate) async fn dirtylog_task(
             }
             complete => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+    use log::debug;
+    use shvclient::client::ClientCommand;
+    use shvproto::DateTime;
+    use shvrpc::RpcMessage;
+
+    use crate::{datachange::DataChange, dirtylog::{dirtylog_task, DirtyLogCommand}, journalentry::JournalEntry, util::{init_logger, testing::{run_test, PrettyJoinError, TestStep}}, State};
+
+    struct DirtylogTaskTestState {
+        sender: UnboundedSender<DirtyLogCommand>
+    }
+
+    struct TestDirtyLogCommand(DirtyLogCommand);
+
+    #[async_trait::async_trait]
+    impl TestStep<DirtylogTaskTestState> for TestDirtyLogCommand {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, state: &DirtylogTaskTestState) {
+            let cmd = match &self.0 {
+                DirtyLogCommand::ProcessNotification(msg) => DirtyLogCommand::ProcessNotification(msg.clone()),
+                DirtyLogCommand::Trim { site } => DirtyLogCommand::Trim { site: site.clone() },
+                DirtyLogCommand::Get { .. } => panic!("Cannot send DirtyLogCommand::Get through TestDirtyLogCommand"),
+            };
+            debug!(target: "test-driver", "Sending DirtyLogCommand::{cmd:?}");
+            state.sender.unbounded_send(cmd).expect("Sending DirtyLogCommands should succeed");
+        }
+    }
+
+    struct TestGetDirtyLog {
+        site: String,
+        expected: Vec<JournalEntry>,
+    }
+
+    #[async_trait::async_trait]
+    impl TestStep<DirtylogTaskTestState> for TestGetDirtyLog {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, state: &DirtylogTaskTestState) {
+            debug!(target: "test-driver", "Sending DirtyLogCommand::Get");
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            state.sender.unbounded_send(DirtyLogCommand::Get { site: self.site.clone(), response_tx: sender }).expect("Sending DirtyLogCommands should succeed");
+            let dirtylog = receiver.await.expect("Getting dirtylog must succeed");
+            assert_eq!(dirtylog, self.expected);
+        }
+    }
+
+    struct TestCase<'a> {
+        name: &'static str,
+        steps: &'a [Box<dyn TestStep<DirtylogTaskTestState>>],
+        starting_files: Vec<(&'static str, &'static str)>,
+        expected_file_paths: Vec<(&'static str, &'a str)>,
+    }
+
+    #[tokio::test]
+    async fn dirtylog_task_test() -> std::result::Result<(), PrettyJoinError> {
+        init_logger();
+
+        let test_cases = [
+            TestCase {
+                name: "ProcessNotification: journaldir doesn't exist",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/site1/some_value_node", "chng", Some(20.into())))))
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+            },
+            TestCase {
+                name: "ProcessNotification: non-shv/ notifications are skipped",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("something_else/site1/some_value_node", "chng", Some(20.into())))))
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+            },
+            TestCase {
+                name: "ProcessNotification: notifications from unknown sites are skipped",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/unknown_site/some_value_node", "chng", Some(20.into())))))
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+            },
+            TestCase {
+                name: "ProcessNotification: notifications get written to disk",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/site1/some_value_node", "chng", Some(DataChange{
+                        value: 20.into(),
+                        date_time: Some(DateTime::from_iso_str("2022-07-07T00:00:00.000").expect("DateTime must work")),
+                        value_flags: 0,
+                        short_time: None,
+                    }.into()))))),
+                ],
+                starting_files: vec![("site1/2022-07-07T18-06-15-000.log2", "")],
+                expected_file_paths: vec![
+                    ("site1/2022-07-07T18-06-15-000.log2", ""),
+                    (
+                        "site1/dirtylog",
+                        "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"
+                    )
+                ],
+            },
+            TestCase {
+                name: "Get nonexisting dirtylog",
+                steps: &[
+                    Box::new(TestGetDirtyLog{
+                        site: "site1".to_string(),
+                        expected: vec![],
+                    })
+                ],
+                starting_files: vec![("site1/2022-07-07T18-06-15-000.log2", "")],
+                expected_file_paths: vec![
+                    ("site1/2022-07-07T18-06-15-000.log2", ""),
+                ],
+            },
+            TestCase {
+                name: "Get existing empty dirtylog",
+                steps: &[
+                    Box::new(TestGetDirtyLog{
+                        site: "site1".to_string(),
+                        expected: vec![],
+                    })
+                ],
+                starting_files: vec![("site1/dirtylog", "")],
+                expected_file_paths: vec![
+                    ("site1/dirtylog", ""),
+                ],
+            },
+            TestCase {
+                name: "Get existing dirtylog with entry",
+                steps: &[
+                    Box::new(TestGetDirtyLog{
+                        site: "site1".to_string(),
+                        expected: vec![JournalEntry {
+                            epoch_msec: 1657152000000,
+                            path: "some_value_node".into(),
+                            signal: "chng".into(),
+                            source: "get".into(),
+                            value: 20.into(),
+                            access_level: 8,
+                            short_time: -1,
+                            user_id: None,
+                            repeat: true,
+                            provisional: true
+                        }],
+                    })
+                ],
+                starting_files: vec![("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n")],
+                expected_file_paths: vec![
+                    ("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"),
+                ],
+            },
+            TestCase {
+                name: "Existing dirtylog with invalid entries",
+                steps: &[
+                    Box::new(TestGetDirtyLog{
+                        site: "site1".to_string(),
+                        expected: vec![JournalEntry {
+                            epoch_msec: 1657152000000,
+                            path: "some_value_node".into(),
+                            signal: "chng".into(),
+                            source: "get".into(),
+                            value: 20.into(),
+                            access_level: 8,
+                            short_time: -1,
+                            user_id: None,
+                            repeat: true,
+                            provisional: true
+                        }],
+                    })
+                ],
+                starting_files: vec![
+                    (
+                        "site1/dirtylog",
+                        concat!(
+                            "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                            "sadjfasjn",
+                        )
+                    )
+                ],
+                expected_file_paths: vec![
+                    (
+                        "site1/dirtylog",
+                        concat!(
+                            "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                            "sadjfasjn",
+                        )
+                    )
+                ],
+            },
+            TestCase {
+                name: "Trim: journaldir doesn't exist",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::Trim{site: "site1".to_string()}))
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+            },
+            TestCase {
+                name: "Trim: no dirtylog",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::Trim{site: "site1".to_string()}))
+                ],
+                starting_files: vec![("site1/2022-07-07T18-06-15-000.log2", "")],
+                expected_file_paths: vec![
+                    ("site1/2022-07-07T18-06-15-000.log2", ""),
+                ],
+            },
+            TestCase {
+                name: "Trim: no files to trim from",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::Trim{site: "site1".to_string()}))
+                ],
+                starting_files: vec![("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n")],
+                expected_file_paths: vec![
+                    ("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"),
+                ],
+            },
+            TestCase {
+                name: "Trim: nothing to trim",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::Trim{site: "site1".to_string()}))
+                ],
+                starting_files: vec![("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n")],
+                expected_file_paths: vec![
+                    ("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"),
+                ],
+            },
+            TestCase {
+                name: "Trim: emptying dirtylog",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::Trim{site: "site1".to_string()}))
+                ],
+                starting_files: vec![
+                    (
+                        "site1/2022-07-06T18-06-15-000.log2",
+                        concat!(
+                            "2022-07-06T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                            "2022-07-08T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"
+                        )
+                    ),
+                    ("site1/dirtylog", "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n")
+                ],
+                expected_file_paths: vec![
+                    (
+                        "site1/2022-07-06T18-06-15-000.log2",
+                        concat!(
+                            "2022-07-06T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                            "2022-07-08T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                        )
+                    ),
+                    ("site1/dirtylog", ""),
+                ],
+            },
+            TestCase {
+                name: "Trim: trimming some entries from the dirtylog",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::Trim{site: "site1".to_string()}))
+                ],
+                starting_files: vec![
+                    (
+                        "site1/2022-07-06T18-06-15-000.log2",
+                        "2022-07-06T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"
+                    ),
+                    (
+                        "site1/dirtylog",
+                        concat!(
+                            "2022-07-06T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                            "2022-07-08T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                        )
+                    ),
+                ],
+                expected_file_paths: vec![
+                    (
+                        "site1/2022-07-06T18-06-15-000.log2",
+                        "2022-07-06T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"
+                    ),
+                    (
+                        "site1/dirtylog",
+                        concat!(
+                            "2022-07-06T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                            "2022-07-08T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n",
+                        )
+                    ),
+                ],
+            },
+        ];
+
+        for test_case in test_cases {
+            run_test(
+                test_case.name,
+                test_case.steps,
+                test_case.starting_files,
+                test_case.expected_file_paths,
+                |ccs, cer, state| {
+                    let (sender, receiver) = unbounded();
+                    let task_state = DirtylogTaskTestState {
+                        sender,
+                    };
+                    let dirtylog_task = tokio::spawn(dirtylog_task(ccs, cer, state, receiver));
+                    (dirtylog_task, task_state)
+                },
+                |state| {
+                    state.sender.close_channel();
+                }
+            ).await?;
+        }
+
+        Ok(())
     }
 }
