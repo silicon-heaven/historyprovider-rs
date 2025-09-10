@@ -331,7 +331,7 @@ mod tests {
         let alarms = collect_alarms(&type_info, "foo/bar/status1", &RpcValue::from((3 << 25) | (1 << 1)));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 3);
-        let alarm1  = &alarms[0];
+        let alarm1 = &alarms[0];
         assert!(alarm1.is_active);
         assert_eq!(alarm1.path, "foo/bar/status1/field1".to_owned());
         assert_eq!(alarm1.severity, Severity::Warning);
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(alarm2.label, "Alarm 2 label".to_owned());
         assert_eq!(alarm2.description, "Alarm 2".to_owned());
 
-        let alarm3  = &alarms[2];
+        let alarm3 = &alarms[2];
         assert!(alarm3.is_active);
         assert_eq!(alarm3.path, "foo/bar/status1/field3".to_owned());
         assert_eq!(alarm3.severity, Severity::Error);
@@ -358,7 +358,7 @@ mod tests {
         let alarms = collect_alarms(&type_info, "foo/bar/status3", &RpcValue::from(0));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 1);
-        let alarm  = &alarms[0];
+        let alarm = &alarms[0];
         assert!(!alarm.is_active);
         assert_eq!(alarm.path, "foo/bar/status3".to_owned());
         assert_eq!(alarm.severity, Severity::Invalid);
@@ -367,7 +367,7 @@ mod tests {
         let alarms = collect_alarms(&type_info, "foo/bar/status3", &RpcValue::from(2));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 1);
-        let alarm  = &alarms[0];
+        let alarm = &alarms[0];
         assert!(alarm.is_active);
         assert_eq!(alarm.path, "foo/bar/status3".to_owned());
         assert_eq!(alarm.severity, Severity::Warning);
@@ -378,7 +378,7 @@ mod tests {
         let alarms = collect_alarms(&type_info, "foo/bar/status3", &RpcValue::from(3));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 1);
-        let alarm  = &alarms[0];
+        let alarm = &alarms[0];
         assert!(alarm.is_active);
         assert_eq!(alarm.path, "foo/bar/status3".to_owned());
         assert_eq!(alarm.severity, Severity::Error);

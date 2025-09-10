@@ -96,7 +96,7 @@ where
         }
     }
 
-    pub async fn append(&mut self, entry: &JournalEntry)  -> Result<(), std::io::Error> {
+    pub async fn append(&mut self, entry: &JournalEntry) -> Result<(), std::io::Error> {
         let mut msec = entry.epoch_msec;
         if msec == 0 {
             msec = shvproto::DateTime::now().epoch_msec();
