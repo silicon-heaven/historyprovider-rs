@@ -32,13 +32,13 @@ struct TestCase<'a> {
 async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
     init_logger();
 
-    static DUMMY_LOGFILE: &str = r"2022-07-07T18:06:15.557Z	809779	APP_START	true		SHV_SYS	0	
-2022-07-07T18:06:17.784Z	809781	zone1/system/sig/plcDisconnected	false		chng	2	
-2022-07-07T18:06:17.784Z	809781	zone1/zone/Zone1/plcDisconnected	false		chng	2	
-2022-07-07T18:06:17.869Z	809781	zone1/pme/TSH1-1/switchRightCounterPermanent	0u		chng	2	
+    static DUMMY_LOGFILE: &str = "2022-07-07T18:06:15.557Z\t809779\tAPP_START\ttrue\t\tSHV_SYS\t0\t
+2022-07-07T18:06:17.784Z\t809781\tzone1/system/sig/plcDisconnected\tfalse\t\tchng\t2\t
+2022-07-07T18:06:17.784Z\t809781\tzone1/zone/Zone1/plcDisconnected\tfalse\t\tchng\t2\t
+2022-07-07T18:06:17.869Z\t809781\tzone1/pme/TSH1-1/switchRightCounterPermanent\t0u\t\tchng\t2\t
 ";
 
-    let very_large_log_file: String = "2022-07-07T18:06:17.784Z	809781	zone1/system/sig/plcDisconnected	false		chng	2	\n".to_string().repeat(50000);
+    let very_large_log_file: String = "2022-07-07T18:06:17.784Z\t809781\tzone1/system/sig/plcDisconnected\tfalse\t\tchng\t2\t\n".to_string().repeat(50000);
     let test_cases = [
         TestCase {
             name: "SyncSite: Remote and local - empty",
