@@ -1326,11 +1326,11 @@ mod tests {
 
         fn data_4() -> Vec<JournalEntryStream> {
             vec![
-				create_reader(vec![
-					make_entry("2022-07-07T18:06:14.000Z", "value1", 10),
-					make_entry("2022-07-07T18:06:15.557Z", "value2", 20),
-					make_entry("2022-07-07T18:06:16.600Z", "value3", 30),
-					make_entry("2022-07-07T18:06:17.784Z", "value4", 40),
+                create_reader(vec![
+                    make_entry("2022-07-07T18:06:14.000Z", "value1", 10),
+                    make_entry("2022-07-07T18:06:15.557Z", "value2", 20),
+                    make_entry("2022-07-07T18:06:16.600Z", "value3", 30),
+                    make_entry("2022-07-07T18:06:17.784Z", "value4", 40),
                 ])
             ]
         }
@@ -1537,11 +1537,11 @@ mod tests {
                 name: "snapshot without since",
                 params: GetLog2Params { with_snapshot: true, ..Default::default() },
                 expected: vec![
-					("2022-07-07T18:06:17.784Z", "value1", 0.into()),
-					("2022-07-07T18:06:17.784Z", "value2", 1.into()),
-					("2022-07-07T18:06:17.784Z", "value3", 3.into()),
-					("2022-07-07T18:06:17.800Z", "value3", 200.into()),
-					("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+                    ("2022-07-07T18:06:17.784Z", "value1", 0.into()),
+                    ("2022-07-07T18:06:17.784Z", "value2", 1.into()),
+                    ("2022-07-07T18:06:17.784Z", "value3", 3.into()),
+                    ("2022-07-07T18:06:17.800Z", "value3", 200.into()),
+                    ("2022-07-07T18:06:17.950Z", "value2", 10.into()),
                 ],
                 ..Default::default()
             },
@@ -1571,11 +1571,11 @@ mod tests {
                 name: "snapshot - with record cound limit smaller than the snapshot",
                 params: GetLog2Params { since: since("2022-07-07T18:06:17.800"), with_snapshot: true, record_count_limit: 1, ..Default::default() },
                 expected_record_count_limit_hit: Some(true),
-				// The whole snapshot should be sent regardless of the small recordCountLimit.
+                // The whole snapshot should be sent regardless of the small recordCountLimit.
                 expected: vec![
-					("2022-07-07T18:06:17.800Z", "value1", 0.into()),
-					("2022-07-07T18:06:17.800Z", "value2", 1.into()),
-					("2022-07-07T18:06:17.800Z", "value3", 200.into()),
+                    ("2022-07-07T18:06:17.800Z", "value1", 0.into()),
+                    ("2022-07-07T18:06:17.800Z", "value2", 1.into()),
+                    ("2022-07-07T18:06:17.800Z", "value3", 200.into()),
                 ],
                 ..Default::default()
             },
@@ -1583,9 +1583,9 @@ mod tests {
                 name: "snapshot - with since after the last entry",
                 params: GetLog2Params { since: since("2022-07-07T18:06:20.850"), with_snapshot: true, ..Default::default() },
                 expected: vec![
-					("2022-07-07T18:06:20.850Z", "value1", 0.into()),
-					("2022-07-07T18:06:20.850Z", "value2", 10.into()),
-					("2022-07-07T18:06:20.850Z", "value3", 200.into()),
+                    ("2022-07-07T18:06:20.850Z", "value1", 0.into()),
+                    ("2022-07-07T18:06:20.850Z", "value2", 10.into()),
+                    ("2022-07-07T18:06:20.850Z", "value3", 200.into()),
                 ],
                 ..Default::default()
             },
@@ -1593,9 +1593,9 @@ mod tests {
                 name: "since last with snapshot",
                 params: GetLog2Params { since: GetLog2Since::LastEntry, with_snapshot: true, ..Default::default() },
                 expected: vec![
-					("2022-07-07T18:06:17.950Z", "value1", 0.into()),
-					("2022-07-07T18:06:17.950Z", "value2", 10.into()),
-					("2022-07-07T18:06:17.950Z", "value3", 200.into()),
+                    ("2022-07-07T18:06:17.950Z", "value1", 0.into()),
+                    ("2022-07-07T18:06:17.950Z", "value2", 10.into()),
+                    ("2022-07-07T18:06:17.950Z", "value3", 200.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:17.950Z"),
                 expected_until: Some("2022-07-07T18:06:17.950Z"),
@@ -1629,10 +1629,10 @@ mod tests {
                 name: "since/until not set",
                 params: Default::default(),
                 expected: vec![
-					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
-					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
-					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                    ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+                    ("2022-07-07T18:06:17.784Z", "value4", 40.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:14.000Z"),
                 expected_until: Some("2022-07-07T18:06:17.785Z"),
@@ -1642,9 +1642,9 @@ mod tests {
                 name: "since on the first entry",
                 params: GetLog2Params{since: since("2022-07-07T18:06:15.557Z"), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
-					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
-					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+                    ("2022-07-07T18:06:17.784Z", "value4", 40.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:15.557Z"),
                 expected_until: Some("2022-07-07T18:06:17.785Z"),
@@ -1654,10 +1654,10 @@ mod tests {
                 name: "since before the first entry",
                 params: GetLog2Params{since: since("2022-07-07T18:06:13.000Z"), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
-					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
-					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                    ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+                    ("2022-07-07T18:06:17.784Z", "value4", 40.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:14.000Z"),
                 expected_until: Some("2022-07-07T18:06:17.785Z"),
@@ -1667,9 +1667,9 @@ mod tests {
                 name: "since after the first entry",
                 params: GetLog2Params{since: since("2022-07-07T18:06:15.553Z"), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
-					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
-					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+                    ("2022-07-07T18:06:17.784Z", "value4", 40.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:15.553Z"),
                 expected_until: Some("2022-07-07T18:06:17.785Z"),
@@ -1679,10 +1679,10 @@ mod tests {
                 name: "until set",
                 params: GetLog2Params{until: Some(ts("2022-07-07T18:06:18.700")), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
-					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
-					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                    ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+                    ("2022-07-07T18:06:17.784Z", "value4", 40.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:14.000Z"),
                 expected_until: Some("2022-07-07T18:06:17.785Z"),
@@ -1692,8 +1692,8 @@ mod tests {
                 name: "until set - record count limit hit",
                 params: GetLog2Params{record_count_limit: 2, until: Some(ts("2022-07-07T18:06:18.700")), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:14.000Z"),
                 expected_until: Some("2022-07-07T18:06:16.600Z"),
@@ -1703,10 +1703,10 @@ mod tests {
                 name: "since/until set",
                 params: GetLog2Params{since: since("2022-07-07T18:06:10.000Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
-					("2022-07-07T18:06:16.600Z", "value3", 30.into()),
-					("2022-07-07T18:06:17.784Z", "value4", 40.into()),
+                    ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:16.600Z", "value3", 30.into()),
+                    ("2022-07-07T18:06:17.784Z", "value4", 40.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:14.000Z"),
                 expected_until: Some("2022-07-07T18:06:17.785Z"),
@@ -1716,8 +1716,8 @@ mod tests {
                 name: "since/until set - record_count_limit hit",
                 params: GetLog2Params{record_count_limit: 2, since: since("2022-07-07T18:06:10.000Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default()},
                 expected: vec![
-					("2022-07-07T18:06:14.000Z", "value1", 10.into()),
-					("2022-07-07T18:06:15.557Z", "value2", 20.into()),
+                    ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
+                    ("2022-07-07T18:06:15.557Z", "value2", 20.into()),
                 ],
                 expected_since: Some("2022-07-07T18:06:14.000Z"),
                 expected_until: Some("2022-07-07T18:06:16.600Z"),

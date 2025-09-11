@@ -125,10 +125,10 @@ impl From<Alarm> for RpcValue {
 }
 
 pub fn collect_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
-	if value.is_null() {
-		// value not available, keep previous alarms active
-		return vec![];
-	}
+    if value.is_null() {
+        // value not available, keep previous alarms active
+        return vec![];
+    }
 
     let shv_path = shv_path.as_ref();
     let PathInfo { property_description, .. } = type_info.path_info(shv_path);
@@ -207,11 +207,11 @@ fn collect_alarms_for_type(type_info: &TypeInfo, shv_path: impl AsRef<str>, type
                 Some(field) => vec![
                     Alarm {
                         path: shv_path.into(),
-						is_active: true,
-						description: field.description().unwrap_or_default().into(),
-						label: field.label().unwrap_or_default().into(),
-						level: field.alarm_level().unwrap_or_default(),
-						severity: field.alarm().unwrap_or_default().into(),
+                        is_active: true,
+                        description: field.description().unwrap_or_default().into(),
+                        label: field.label().unwrap_or_default().into(),
+                        level: field.alarm_level().unwrap_or_default(),
+                        severity: field.alarm().unwrap_or_default().into(),
                     }
                 ],
                 None => vec![
@@ -239,68 +239,68 @@ mod tests {
 
     const TYPE_INFO: &str = r#"
 <"version":4>{
-	"deviceDescriptions":{
-		"device1":{
-			"properties":[
-				{
-					"name":"status1",
-					"typeName":"BitField"
-				},
-				{
-					"name":"status2",
-					"typeName":"Map"
-				},
-				{
-					"name":"status3",
-					"typeName":"Enum"
-				},
-			]
-		},
-	},
-	"devicePaths":{
-		"foo/bar":"device1",
-	},
-	"types":{
-        "BitField":{
-			"fields":[
-				{"alarm":"warning", "description":"Alarm 1", "label":"Alarm 1 label", "name":"field1", "value": [0,7]},
-				{"alarm":"error", "description":"Alarm 2", "label":"Alarm 2 label", "name":"field2", "value": 24 },
-				{"name":"field3", "value": [25, 26], "typeName": "Enum" },
-			],
-			"typeName":"BitField"
+    "deviceDescriptions":{
+        "device1":{
+            "properties":[
+                {
+                    "name":"status1",
+                    "typeName":"BitField"
+                },
+                {
+                    "name":"status2",
+                    "typeName":"Map"
+                },
+                {
+                    "name":"status3",
+                    "typeName":"Enum"
+                },
+            ]
         },
-		"Map":{
-			"fields":[
-				{"description":"Description 1", "label":"Label 1", "name":"mapField1", "typeName":"Int"},
-				{"description":"Description 2", "label":"Label 2", "name":"mapField2", "typeName":"String"},
-			],
-			"typeName":"Map",
-			"sampleType":"Discrete"
-		},
-		"Enum":{
-			"fields":[
-				{"description":"", "label":"", "name":"Unknown", "value":0},
-				{"description":"", "label":"", "name":"Normal", "value":1},
-				{
-					"alarm":"warning",
-					"alarmLevel":50,
-					"description":"Warning description",
-					"label":"Warning label",
-					"name":"Warning",
-					"value":2
-				},
-				{
-					"alarm":"error",
-					"alarmLevel":100,
-					"description":"Error description",
-					"label":"Error label",
-					"name":"Error",
-					"value":3
-				}
-			],
-			"typeName":"Enum"
-		},
-	}
+    },
+    "devicePaths":{
+        "foo/bar":"device1",
+    },
+    "types":{
+        "BitField":{
+            "fields":[
+                {"alarm":"warning", "description":"Alarm 1", "label":"Alarm 1 label", "name":"field1", "value": [0,7]},
+                {"alarm":"error", "description":"Alarm 2", "label":"Alarm 2 label", "name":"field2", "value": 24 },
+                {"name":"field3", "value": [25, 26], "typeName": "Enum" },
+            ],
+            "typeName":"BitField"
+        },
+        "Map":{
+            "fields":[
+                {"description":"Description 1", "label":"Label 1", "name":"mapField1", "typeName":"Int"},
+                {"description":"Description 2", "label":"Label 2", "name":"mapField2", "typeName":"String"},
+            ],
+            "typeName":"Map",
+            "sampleType":"Discrete"
+        },
+        "Enum":{
+            "fields":[
+                {"description":"", "label":"", "name":"Unknown", "value":0},
+                {"description":"", "label":"", "name":"Normal", "value":1},
+                {
+                    "alarm":"warning",
+                    "alarmLevel":50,
+                    "description":"Warning description",
+                    "label":"Warning label",
+                    "name":"Warning",
+                    "value":2
+                },
+                {
+                    "alarm":"error",
+                    "alarmLevel":100,
+                    "description":"Error description",
+                    "label":"Error label",
+                    "name":"Error",
+                    "value":3
+                }
+            ],
+            "typeName":"Enum"
+        },
+    }
 }
 "#;
 
