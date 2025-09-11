@@ -191,14 +191,14 @@ pub mod testing {
         Ok(())
     }
 
-    pub fn list_files(path: &Path) -> Vec<String> {
+    pub fn list_files(path: &Path) -> Vec<(String, String)> {
         let mut res = Vec::new();
         _list_files(&mut res, path).expect("Failed to list journal files");
         let mut res = res
             .into_iter()
-            .map(|path| path.to_string_lossy().to_string())
+            .map(|path| (path.to_string_lossy().to_string(), std::fs::read_to_string(path).expect("Reading file should work")))
             .collect::<Vec<_>>();
-        res.sort();
+        res.sort_by(|(path, _), (path2, _)| path.cmp(path2));
         res
     }
 
@@ -258,7 +258,7 @@ pub mod testing {
         test_name: &str,
         steps: &[Box<dyn TestStep<TestState>>],
         starting_files: Vec<(&str, &str)>,
-        expected_file_paths: Vec<&str>,
+        expected_file_paths: Vec<(&str, &str)>,
         create_task: impl FnOnce(ClientCommandSender<State>, ClientEventsReceiver, AppState<State>) -> (tokio::task::JoinHandle<()>, TestState),
         destroy_task: impl FnOnce(&TestState),
     ) -> std::result::Result<(), PrettyJoinError> {
@@ -339,7 +339,7 @@ pub mod testing {
             }
         }
 
-        let prefixed_expected_paths = expected_file_paths.iter().map(|path| format!("{}/{}", journal_dir.path().to_string_lossy(), path)).collect::<Vec<_>>();
+        let prefixed_expected_paths = expected_file_paths.into_iter().map(|(path, content)| (format!("{}/{}", journal_dir.path().to_string_lossy(), path), content.to_string())).collect::<Vec<_>>();
         assert_eq!(list_files(journal_dir.path()), prefixed_expected_paths);
 
         Ok(())

@@ -25,7 +25,7 @@ struct TestCase<'a> {
     name: &'static str,
     steps: &'a [Box<dyn TestStep<SyncTaskTestState>>],
     starting_files: Vec<(&'static str, &'static str)>,
-    expected_file_paths: Vec<&'static str>,
+    expected_file_paths: Vec<(&'static str, &'a str)>,
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: chunk download",
@@ -74,7 +74,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 100, "size" => (DUMMY_LOGFILE.len() as i32) - 100).into(), Ok(DUMMY_LOGFILE.as_bytes()[100..].into()))),
             ],
             starting_files: vec![],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: File API detection error",
@@ -102,7 +102,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2", "site1/2022-07-08T18-06-15-557.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15-557.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: File without chronological order",
@@ -117,7 +117,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2", "site1/2022-07-08T18-06-15-557.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15-557.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: Remote has one empty file and one non-empty file",
@@ -131,7 +131,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
-            expected_file_paths: vec!["site1/2022-07-05T18-06-15-557.log2", "site1/2022-07-07T18-06-15-557.log2"],
+            expected_file_paths: vec![("site1/2022-07-05T18-06-15-557.log2", ""), ("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: Don't download files older than we already have",
@@ -145,7 +145,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 ("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE),
                 ("site1/2022-07-07T18-06-15-558.log2", DUMMY_LOGFILE),
             ],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2", "site1/2022-07-07T18-06-15-558.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE), ("site1/2022-07-07T18-06-15-558.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: Files with same size remote/local size aren't synced",
@@ -158,7 +158,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             starting_files: vec![
                 ("site1/2022-07-07T18-06-15-000.log2", DUMMY_LOGFILE),
             ],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-000.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-000.log2", DUMMY_LOGFILE)],
         },
         TestCase {
             name: "SyncSite: Remote sends more data",
@@ -187,7 +187,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 3000000, "size" => 1000000).into(), Ok(very_large_log_file.as_bytes()[3000000..4000000].into()))),
             ],
             starting_files: vec![],
-            expected_file_paths: vec!["site1/2022-07-07T18-06-15-557.log2"],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", very_large_log_file.as_str())],
         },
     ];
 
