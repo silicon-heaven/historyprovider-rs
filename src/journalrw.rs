@@ -762,7 +762,7 @@ mod tests {
     fn parse_journal_entry_log2_variants() {
         // All fields present
         assert_eq!(parse_journal_entry_log2(
-                "2025-04-28T11:51:14.300Z		system/status	2u		chng	1").unwrap(),
+                "2025-04-28T11:51:14.300Z\t\tsystem/status\t2u\t\tchng\t1").unwrap(),
                 JournalEntry {
                     epoch_msec: shvproto::DateTime::from_iso_str("2025-04-28T11:51:14.300Z").unwrap().epoch_msec(),
                     path: "system/status".into(),
@@ -778,7 +778,7 @@ mod tests {
         );
         // Optional fields missing
         assert_eq!(parse_journal_entry_log2(
-                "2025-04-28T11:51:14.300Z		system/status	2u").unwrap(),
+                "2025-04-28T11:51:14.300Z\t\tsystem/status\t2u").unwrap(),
                 JournalEntry {
                     epoch_msec: shvproto::DateTime::from_iso_str("2025-04-28T11:51:14.300Z").unwrap().epoch_msec(),
                     path: "system/status".into(),
@@ -793,7 +793,7 @@ mod tests {
                 }
         );
         // Mandatory field missing
-        let line = "2025-04-28T11:51:14.300Z		system/status";
+        let line = "2025-04-28T11:51:14.300Z\t\tsystem/status";
         assert_eq!(parse_journal_entry_log2(line).unwrap_err().to_string(), format!("Missing value on line: {line}"));
     }
 }
