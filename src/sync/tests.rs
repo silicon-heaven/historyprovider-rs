@@ -1,18 +1,23 @@
+use std::collections::HashMap;
+
+use crate::dirtylog::DirtyLogCommand;
 use crate::util::{dedup_channel, testing::*};
 use crate::{sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}, State};
-use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::debug;
 use shvclient::client::ClientCommand;
 use shvproto::{make_list, make_map, RpcValue};
+use shvrpc::rpcframe::RpcFrame;
 use shvrpc::rpcmessage::RpcError;
 
 struct SyncTaskTestState {
     dedup_sender: DedupSender<SyncCommand>,
+    _dirtylog_cmd_rx: UnboundedReceiver<DirtyLogCommand>,
 }
 
 #[async_trait::async_trait]
 impl TestStep<SyncTaskTestState> for SyncCommand {
-    async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>, state: &SyncTaskTestState) {
+    async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
         let cmd = self.clone();
         debug!(target: "test-driver", "Sending SyncCommand::{cmd:?}");
         state.dedup_sender.send(cmd).expect("Sending SyncCommands should succeed");
@@ -42,7 +47,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             name: "SyncSite: Remote and local - empty",
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
-                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(RpcValue::null()))),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(Vec::<RpcValue>::new().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![],
@@ -195,17 +200,19 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             test_case.steps,
             test_case.starting_files,
             test_case.expected_file_paths,
-            |ccs, _ces, cer, state| {
+            |ccs, _ces, cer, dirtylog_cmd_rx, _sync_cmd_rx, state| {
                 let (dedup_sender, receiver) = dedup_channel::<SyncCommand>();
                 let task_state = SyncTaskTestState {
                     dedup_sender,
+                    _dirtylog_cmd_rx: dirtylog_cmd_rx,
                 };
                 let sync_task = tokio::spawn(sync_task(ccs, cer, state, receiver));
                 (sync_task, task_state)
             },
             |state| {
                 state.dedup_sender.close_channel();
-            }
+            },
+            &[]
         ).await?;
     }
 
