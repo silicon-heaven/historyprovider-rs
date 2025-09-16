@@ -137,13 +137,13 @@ pub(crate) fn dedup_channel<T: Eq + Hash + Clone>() -> (DedupSender<T>, DedupRec
 
 #[cfg(test)]
 pub mod testing {
-    use crate::{State, util::dedup_channel, sync::SyncCommand, sites::{SitesData, SiteInfo, SubHpInfo}, dirtylog::DirtyLogCommand};
-    use futures::{channel::mpsc::{unbounded, UnboundedReceiver}, StreamExt};
+    use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesData, SubHpInfo}, sync::SyncCommand, util::{DedupReceiver, dedup_channel}};
+    use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
     use shvclient::{client::{ClientCommand, ClientEventsReceiver}, AppState, ClientCommandSender};
     use shvproto::RpcValue;
-    use shvrpc::{rpcmessage::RpcError, RpcMessageMetaTags};
-    use std::{collections::BTreeMap, path::{Path, PathBuf}, sync::Arc};
+    use shvrpc::{rpcframe::RpcFrame, rpcmessage::RpcError, RpcMessage, RpcMessageMetaTags};
+    use std::{collections::{BTreeMap, HashMap}, path::{Path, PathBuf}, sync::Arc};
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, sync::RwLock};
 
@@ -226,20 +226,64 @@ pub mod testing {
                 response_sender.unbounded_send(response.to_frame().unwrap()).unwrap();
             },
             _ => {
-                panic!("got unexpected event other than rpccall");
+                panic!("got unexpected event other than rpccall: {}", print_client_command(event));
+            }
+        }
+    }
+
+    pub fn print_client_command<T>(cmd: ClientCommand<T>) -> String {
+        match cmd {
+            ClientCommand::SendMessage { message } => format!("SendMessage({})", message.to_cpon()),
+            ClientCommand::RpcCall { request, .. } => format!("RpcCall({:?}, {:?}, {:?})", request.shv_path(), request.method(), request.param()),
+            ClientCommand::Subscribe { ri, subscription_id, .. } => format!("Subscribe({ri}) -> {subscription_id}"),
+            ClientCommand::Unsubscribe { subscription_id } => format!("Unsubscribe({subscription_id})"),
+            ClientCommand::MountNode { path, .. } => format!("MountNode({path})"),
+            ClientCommand::UnmountNode { path } => format!("UnmountNode({path})"),
+            ClientCommand::TerminateClient => "TerminateClient".to_string(),
+        }
+    }
+
+    pub async fn expect_subscription(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, expected_ri: &shvrpc::rpc::ShvRI) -> UnboundedSender<RpcFrame> {
+        let Some(event) = client_command_receiver.next().await else {
+            panic!("expected event, but got none");
+        };
+        match event {
+            ClientCommand::Subscribe { ri, notifications_tx, .. } => {
+                debug!(target: "test-driver", "subscription: {ri}");
+                assert_eq!(&ri, expected_ri);
+                let subscribe_response = RpcMessage::new_request("dummy", "dummy", None).prepare_response().unwrap().to_frame().unwrap();
+                notifications_tx.unbounded_send(subscribe_response).unwrap();
+                notifications_tx
+            },
+            _ => {
+                panic!("got unexpected event other than Subscribe: {}", print_client_command(event));
+            }
+        }
+    }
+
+    pub async fn expect_unsubscription(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>) {
+        let Some(event) = client_command_receiver.next().await else {
+            panic!("expected event, but got none");
+        };
+        match event {
+            ClientCommand::Unsubscribe { subscription_id } => {
+                debug!(target: "test-driver", "unsubscription: {subscription_id}");
+            },
+            _ => {
+                panic!("got unexpected event other than Unsubscribe: {}", print_client_command(event));
             }
         }
     }
 
     #[async_trait::async_trait]
     pub trait TestStep<TestState> {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, state: &TestState);
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut TestState);
     }
 
     pub struct ExpectCall(pub &'static str, pub &'static str, pub Result<RpcValue, RpcError>);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectCall {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _state: &TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let ExpectCall(path, method, ret_val) = self;
             expect_rpc_call(client_command_receiver, path, method, None, ret_val.clone()).await;
         }
@@ -248,9 +292,41 @@ pub mod testing {
     pub struct ExpectCallParam(pub &'static str, pub &'static str, pub RpcValue, pub Result<RpcValue, RpcError>);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectCallParam {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _state: &TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let ExpectCallParam(path, method, param, ret_val) = self;
             expect_rpc_call(client_command_receiver, path, method, Some(param.clone()), ret_val.clone()).await;
+        }
+    }
+
+    pub struct ExpectSubscription(pub shvrpc::rpc::ShvRI);
+    #[async_trait::async_trait]
+    impl<TestState> TestStep<TestState> for ExpectSubscription {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+            let sub_id = self.0.to_string();
+            let notifications_tx = expect_subscription(client_command_receiver, &self.0).await;
+            subscriptions.insert(sub_id, notifications_tx);
+        }
+    }
+
+    pub struct SendSignal(pub String, pub String, pub String, pub RpcValue);
+    #[async_trait::async_trait]
+    impl<TestState> TestStep<TestState> for SendSignal {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+            let sub_id = self.0.to_string();
+            let (_, sender)  = subscriptions.iter().find(|(id, _)| **id == sub_id).expect("Sub must exist");
+            let shv_path = self.1.as_str();
+            let method = self.2.as_str();
+            let param = self.3.clone();
+            debug!(target: "test-driver", "==> {shv_path}:{method}, param: {param}");
+            sender.unbounded_send(RpcMessage::new_signal(shv_path, method, Some(param)).to_frame().unwrap()).unwrap();
+        }
+    }
+
+    pub struct ExpectUnsubscription;
+    #[async_trait::async_trait]
+    impl<TestState> TestStep<TestState> for ExpectUnsubscription {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+            expect_unsubscription(client_command_receiver).await;
         }
     }
 
@@ -259,16 +335,17 @@ pub mod testing {
         steps: &[Box<dyn TestStep<TestState>>],
         starting_files: Vec<(&str, &str)>,
         expected_file_paths: Vec<(&str, &str)>,
-        create_task: impl FnOnce(ClientCommandSender<State>, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, AppState<State>) -> (tokio::task::JoinHandle<()>, TestState),
-        destroy_task: impl FnOnce(&TestState),
+        create_task: impl FnOnce(ClientCommandSender<State>, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, UnboundedReceiver<DirtyLogCommand>, DedupReceiver<SyncCommand>, AppState<State>) -> (tokio::task::JoinHandle<()>, TestState),
+        destroy_task: impl FnOnce(&mut TestState),
+        cleanup_steps: &[Box<dyn TestStep<TestState>>]
     ) -> std::result::Result<(), PrettyJoinError> {
         debug!(target: "test-driver", "Running test '{test_name}'");
         let (client_command_sender, mut client_command_receiver) = unbounded();
         let client_command_sender: ClientCommandSender<State> = ClientCommandSender::from_raw(client_command_sender);
         let (client_events_sender, client_events_rx) = async_broadcast::broadcast(10);
-        let (dedup_sender, _receiver) = dedup_channel::<SyncCommand>();
+        let (dedup_sender, dedup_receiver) = dedup_channel::<SyncCommand>();
         let client_events_receiver = ClientEventsReceiver::from_raw(client_events_rx.clone());
-        let (dirtylog_cmd_tx, _dirtylog_cmd_rx) = unbounded::<DirtyLogCommand>();
+        let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded::<DirtyLogCommand>();
         let journal_dir = TempDir::with_prefix("test-hprs-sync_task.").expect("tempdir should work");
         for (starting_file_name, starting_file_content) in starting_files {
             let file_name = format!("{}/{}", journal_dir.path().to_string_lossy(), starting_file_name);
@@ -294,7 +371,7 @@ pub mod testing {
                 journal_dir: journal_dir.path().to_str().expect("path must work").to_string(),
                 max_sync_tasks: None,
                 max_journal_dir_size: None,
-                periodic_sync_interval: None,
+                periodic_sync_interval: Some(3),
             },
             dirtylog_cmd_tx,
             sync_cmd_tx: dedup_sender.clone(),
@@ -317,13 +394,19 @@ pub mod testing {
         });
 
 
-        let (sync_task, task_state) = create_task(client_command_sender.clone(), client_events_sender.clone(), client_events_receiver.clone(), state.clone());
+        let (sync_task, mut task_state) = create_task(client_command_sender.clone(), client_events_sender.clone(), client_events_receiver.clone(), dirtylog_cmd_rx, dedup_receiver, state.clone());
+
+        let mut subscriptions = HashMap::new();
 
         for step in steps {
-            step.exec(&mut client_command_receiver, &task_state).await;
+            step.exec(&mut client_command_receiver, &mut subscriptions, &mut task_state).await;
         }
 
-        destroy_task(&task_state);
+        destroy_task(&mut task_state);
+        subscriptions.clear();
+        for step in cleanup_steps {
+            step.exec(&mut client_command_receiver, &mut subscriptions, &mut task_state).await;
+        }
 
         tokio::select! {
             task_end = sync_task => {
@@ -333,7 +416,7 @@ pub mod testing {
                 if let Some(unexpected_client_command) = unexpected_client_command {
                     match unexpected_client_command {
                         ClientCommand::RpcCall { request, .. } => return Err(PrettyJoinError(format!("Unexpected RpcCall: {request}"))),
-                            _ => return Err(PrettyJoinError("Unexpected ClientCommand".to_string()))
+                        _ => return Err(PrettyJoinError(format!("Unexpected ClientCommand: {}", print_client_command(unexpected_client_command))))
                     }
                 }
             }
