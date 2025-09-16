@@ -599,7 +599,7 @@ mod tests {
                 test_case.steps,
                 test_case.starting_files,
                 test_case.expected_file_paths,
-                |ccs, cer, state| {
+                |ccs, _ces, cer, state| {
                     let (sender, receiver) = unbounded();
                     let task_state = DirtylogTaskTestState {
                         sender,
