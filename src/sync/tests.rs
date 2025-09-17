@@ -7,15 +7,13 @@ use shvproto::{make_list, make_map, RpcValue};
 use shvrpc::rpcmessage::RpcError;
 
 struct SyncTaskTestState {
-    dedup_sender: DedupSender<crate::sync::SyncCommand>,
+    dedup_sender: DedupSender<SyncCommand>,
 }
 
-struct DoSyncCommand(crate::sync::SyncCommand);
-
 #[async_trait::async_trait]
-impl TestStep<SyncTaskTestState> for DoSyncCommand {
+impl TestStep<SyncTaskTestState> for SyncCommand {
     async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>, state: &SyncTaskTestState) {
-        let cmd = self.0.clone();
+        let cmd = self.clone();
         debug!(target: "test-driver", "Sending SyncCommand::{cmd:?}");
         state.dedup_sender.send(cmd).expect("Sending SyncCommands should succeed");
     }
@@ -43,7 +41,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: Remote and local - empty",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(RpcValue::null()))),
             ],
             starting_files: vec![],
@@ -52,7 +50,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: Remote - has files, local - empty",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
                 ].into()))),
@@ -65,7 +63,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: chunk download",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
                 ].into()))),
@@ -79,7 +77,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: File API detection error",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
                 ].into()))),
@@ -92,7 +90,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncAll: File without chronological order",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncAll)),
+                Box::new(SyncCommand::SyncAll),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-08T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
                         make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
@@ -107,7 +105,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: File without chronological order",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-08T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
                         make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
@@ -122,7 +120,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: Remote has one empty file and one non-empty file",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list![ "2022-07-05T18-06-15-557.log2", "f", 0 ],
                         make_list![ "2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32]
@@ -136,7 +134,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: Don't download files older than we already have",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-000.log2", "f", DUMMY_LOGFILE.len() as i32],
                 ].into()))),
@@ -150,7 +148,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: Files with same size remote/local size aren't synced",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-000.log2", "f", DUMMY_LOGFILE.len() as i32],
                 ].into()))),
@@ -163,7 +161,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: Remote sends more data",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
                 ].into()))),
@@ -176,7 +174,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: chunk size",
             steps: &[
-                Box::new(DoSyncCommand(SyncCommand::SyncSite("site1".to_string()))),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list!["2022-07-07T18-06-15-557.log2", "f", very_large_log_file.len() as i32],
                 ].into()))),
