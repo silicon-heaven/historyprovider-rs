@@ -346,7 +346,12 @@ pub(crate) async fn sites_task(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::sites::SiteInfo;
+    use async_broadcast::Sender;
+    use futures::channel::mpsc::UnboundedReceiver;
+    use shvclient::{client::ClientCommand, ClientEvent};
+    use shvproto::Map;
+
+    use crate::{sites::{sites_task, SiteInfo}, util::{init_logger, testing::{run_test, ExpectCall, PrettyJoinError, TestStep}}, State};
 
     #[test]
     fn collect_sites() {
@@ -373,6 +378,72 @@ mod tests {
         ]
         .into_iter()
         .collect::<BTreeMap<_,_>>());
+    }
+
+    #[async_trait::async_trait]
+    impl TestStep<SitesTaskTestState> for ClientEvent {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>, state: &SitesTaskTestState) {
+            let x = state.sender.clone();
+            x.broadcast(self.clone()).await.expect("Sending ClientEvents must work");
+        }
+    }
+
+    struct SitesTaskTestState {
+        sender: Sender<ClientEvent>
+    }
+
+    struct TestCase<'a> {
+        name: &'static str,
+        steps: &'a [Box<dyn TestStep<SitesTaskTestState>>],
+        starting_files: Vec<(&'static str, &'static str)>,
+        expected_file_paths: Vec<(&'static str, &'a str)>,
+    }
+
+    #[tokio::test]
+    async fn sites_task_test() -> std::result::Result<(), PrettyJoinError> {
+        init_logger();
+
+        let test_cases = [
+            TestCase {
+                name: "disconnected when uninitialized",
+                steps: &[
+                    Box::new(ClientEvent::Disconnected),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+            },
+            TestCase {
+                name: "Empty sites",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(Map::new().into()))),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+            }
+        ];
+
+
+        for test_case in test_cases {
+            run_test(
+                test_case.name,
+                test_case.steps,
+                test_case.starting_files,
+                test_case.expected_file_paths,
+                |ccs, ces, cer, state| {
+                    let task_state = SitesTaskTestState {
+                        sender: ces,
+                    };
+                    let sites_task = tokio::spawn(sites_task(ccs, cer, state));
+                    (sites_task, task_state)
+                },
+                |state| {
+                    state.sender.close();
+                }
+            ).await?;
+        }
+
+        Ok(())
     }
 }
 

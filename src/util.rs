@@ -259,13 +259,13 @@ pub mod testing {
         steps: &[Box<dyn TestStep<TestState>>],
         starting_files: Vec<(&str, &str)>,
         expected_file_paths: Vec<(&str, &str)>,
-        create_task: impl FnOnce(ClientCommandSender<State>, ClientEventsReceiver, AppState<State>) -> (tokio::task::JoinHandle<()>, TestState),
+        create_task: impl FnOnce(ClientCommandSender<State>, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, AppState<State>) -> (tokio::task::JoinHandle<()>, TestState),
         destroy_task: impl FnOnce(&TestState),
     ) -> std::result::Result<(), PrettyJoinError> {
         debug!(target: "test-driver", "Running test '{test_name}'");
         let (client_command_sender, mut client_command_receiver) = unbounded();
         let client_command_sender: ClientCommandSender<State> = ClientCommandSender::from_raw(client_command_sender);
-        let (_client_events_tx, client_events_rx) = async_broadcast::broadcast(10);
+        let (client_events_sender, client_events_rx) = async_broadcast::broadcast(10);
         let (dedup_sender, _receiver) = dedup_channel::<SyncCommand>();
         let client_events_receiver = ClientEventsReceiver::from_raw(client_events_rx.clone());
         let (dirtylog_cmd_tx, _dirtylog_cmd_rx) = unbounded::<DirtyLogCommand>();
@@ -317,7 +317,7 @@ pub mod testing {
         });
 
 
-        let (sync_task, task_state) = create_task(client_command_sender.clone(), client_events_receiver.clone(), state.clone());
+        let (sync_task, task_state) = create_task(client_command_sender.clone(), client_events_sender.clone(), client_events_receiver.clone(), state.clone());
 
         for step in steps {
             step.exec(&mut client_command_receiver, &task_state).await;

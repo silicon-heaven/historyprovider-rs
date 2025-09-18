@@ -195,7 +195,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             test_case.steps,
             test_case.starting_files,
             test_case.expected_file_paths,
-            |ccs, cer, state| {
+            |ccs, _ces, cer, state| {
                 let (dedup_sender, receiver) = dedup_channel::<SyncCommand>();
                 let task_state = SyncTaskTestState {
                     dedup_sender,
