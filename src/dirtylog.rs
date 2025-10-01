@@ -309,23 +309,26 @@ pub(crate) async fn dirtylog_task(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
     use log::debug;
     use shvclient::client::ClientCommand;
     use shvproto::DateTime;
-    use shvrpc::RpcMessage;
+    use shvrpc::{rpcframe::RpcFrame, RpcMessage};
 
-    use crate::{datachange::DataChange, dirtylog::{dirtylog_task, DirtyLogCommand}, journalentry::JournalEntry, util::{init_logger, testing::{run_test, PrettyJoinError, TestStep}}, State};
+    use crate::{State, datachange::DataChange, dirtylog::{DirtyLogCommand, dirtylog_task}, journalentry::JournalEntry, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
 
     struct DirtylogTaskTestState {
-        sender: UnboundedSender<DirtyLogCommand>
+        sender: UnboundedSender<DirtyLogCommand>,
+        _sync_cmd_rx: DedupReceiver<SyncCommand>,
     }
 
     struct TestDirtyLogCommand(DirtyLogCommand);
 
     #[async_trait::async_trait]
     impl TestStep<DirtylogTaskTestState> for TestDirtyLogCommand {
-        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, state: &DirtylogTaskTestState) {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut DirtylogTaskTestState) {
             let cmd = match &self.0 {
                 DirtyLogCommand::ProcessNotification(msg) => DirtyLogCommand::ProcessNotification(msg.clone()),
                 DirtyLogCommand::Trim { site } => DirtyLogCommand::Trim { site: site.clone() },
@@ -343,7 +346,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TestStep<DirtylogTaskTestState> for TestGetDirtyLog {
-        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, state: &DirtylogTaskTestState) {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut DirtylogTaskTestState) {
             debug!(target: "test-driver", "Sending DirtyLogCommand::Get");
             let (sender, receiver) = futures::channel::oneshot::channel();
             state.sender.unbounded_send(DirtyLogCommand::Get { site: self.site.clone(), response_tx: sender }).expect("Sending DirtyLogCommands should succeed");
@@ -599,17 +602,19 @@ mod tests {
                 test_case.steps,
                 test_case.starting_files,
                 test_case.expected_file_paths,
-                |ccs, cer, state| {
+                |ccs, _ces, cer, _dirtylog_cmd_rx, _sync_cmd_rx, state| {
                     let (sender, receiver) = unbounded();
                     let task_state = DirtylogTaskTestState {
                         sender,
+                        _sync_cmd_rx,
                     };
                     let dirtylog_task = tokio::spawn(dirtylog_task(ccs, cer, state, receiver));
                     (dirtylog_task, task_state)
                 },
                 |state| {
                     state.sender.close_channel();
-                }
+                },
+                &[]
             ).await?;
         }
 

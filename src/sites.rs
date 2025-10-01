@@ -290,6 +290,8 @@ pub(crate) async fn sites_task(
                 _ => {
                     // TODO: Drain subscribers
 
+                    subscribers.clear();
+                    mntchng_subscribers.clear();
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Disable)
                         .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
@@ -340,13 +342,20 @@ pub(crate) async fn sites_task(
             complete => break,
         }
     }
+    eprintln!("task end");
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
 
-    use crate::sites::SiteInfo;
+    use async_broadcast::Sender;
+    use futures::{channel::mpsc::{UnboundedReceiver, UnboundedSender}, StreamExt};
+    use shvclient::{client::ClientCommand, ClientEvent};
+    use shvproto::RpcValue;
+    use shvrpc::rpcframe::RpcFrame;
+
+    use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
 
     #[test]
     fn collect_sites() {
@@ -373,6 +382,211 @@ mod tests {
         ]
         .into_iter()
         .collect::<BTreeMap<_,_>>());
+    }
+
+    #[async_trait::async_trait]
+    impl TestStep<SitesTaskTestState> for ClientEvent {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+            let x = state.sender.clone();
+            x.broadcast(self.clone()).await.expect("Sending ClientEvents must work");
+        }
+    }
+
+    #[derive(Debug)]
+    enum ExpectDirtylogCommand {
+        ProcessNotification,
+    }
+
+    #[async_trait::async_trait]
+    impl TestStep<SitesTaskTestState> for ExpectDirtylogCommand {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+            let event = state.dirtylog_cmd_rx.select_next_some().await;
+            match (event, self) {
+                (DirtyLogCommand::ProcessNotification(..), ExpectDirtylogCommand::ProcessNotification) => {
+                    log::debug!(target: "test-driver", "Got expected notification");
+                },
+                (got, expected) => {
+                    panic!("Unexpected dirtylog command: {got:?}, expected: {expected:?}")
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    enum ExpectSyncCommand {
+        SyncSite{expected_site: String},
+        SyncAll,
+    }
+
+    #[async_trait::async_trait]
+    impl TestStep<SitesTaskTestState> for ExpectSyncCommand {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+            let Some(event) = state.sync_cmd_rx.next().await else {
+                panic!("Expected a SyncCommand, but got none");
+            };
+
+            match (event, self) {
+                (SyncCommand::SyncSite(site), ExpectSyncCommand::SyncSite { expected_site }) => {
+                    assert_eq!(site, *expected_site);
+                    log::debug!(target: "test-driver", "Got expected SyncSite({site})");
+                },
+                (SyncCommand::SyncAll, ExpectSyncCommand::SyncAll) => {
+                    log::debug!(target: "test-driver", "Got expected SyncAll");
+                },
+                (got, expected) => {
+                    panic!("Unexpected dirtylog command: {got:?}, expected: {expected:?}")
+                }
+            }
+        }
+    }
+
+    struct SitesTaskTestState {
+        sender: Sender<ClientEvent>,
+        dirtylog_cmd_rx: UnboundedReceiver<DirtyLogCommand>,
+        sync_cmd_rx: DedupReceiver<SyncCommand>,
+    }
+
+    struct TestCase<'a> {
+        name: &'static str,
+        steps: &'a [Box<dyn TestStep<SitesTaskTestState>>],
+        starting_files: Vec<(&'static str, &'static str)>,
+        expected_file_paths: Vec<(&'static str, &'a str)>,
+        cleanup_steps: &'a [Box<dyn TestStep<SitesTaskTestState>>],
+    }
+
+    fn some_broker() -> RpcValue {
+        RpcValue::from_cpon(r#"{
+            "_meta":{
+                "HP3":{"type": "HP3"}
+            },
+            "node":{
+                "_meta":{
+                    "HP3":{"syncPath":".app/shvjournal"},
+                    "type":"DepotG2"
+                }
+            },
+            "pushlog_node":{
+                "_meta":{
+                    "HP3":{
+                        "pushLog": true
+                    }
+                }
+            },
+            "legacy_sync_path_device":{
+                "_meta":{
+                    "HP":{
+                    },
+                    "type": "some_type"
+                }
+            },
+            "node_with_hp_meta":{
+                "_meta":{
+                    "HP3":{
+                        "readLogChunkLimit": 1000,
+                        "syncPath": "test_sync_path"
+                    },
+                    "type": "some_type"
+                }
+            },
+        }"#).unwrap()
+    }
+
+    #[tokio::test]
+    async fn sites_task_test() -> std::result::Result<(), PrettyJoinError> {
+        init_logger();
+
+        let test_cases = [
+            TestCase {
+                name: "disconnected when uninitialized",
+                steps: &[
+                    Box::new(ClientEvent::Disconnected),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[],
+            },
+            TestCase {
+                name: "Empty sites",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(shvproto::Map::new().into()))),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[],
+            },
+            TestCase {
+                name: "Test everything",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
+                    Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(SendSignal("shv/node/*:*:chng".to_string(), "shv/node/some_value".to_string(), "chng".to_string(), RpcValue::null())),
+                    Box::new(ExpectDirtylogCommand::ProcessNotification),
+                    Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
+                    Box::new(ExpectSyncCommand::SyncSite { expected_site: "node".to_string() }),
+                    Box::new(ClientEvent::Disconnected),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                ],
+            },
+            TestCase {
+                name: "Periodic sync",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(shvproto::Map::new().into()))),
+                    Box::new(ExpectSyncCommand::SyncAll),
+                    Box::new(ExpectSyncCommand::SyncAll),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[],
+            },
+        ];
+
+
+        for test_case in test_cases {
+            run_test(
+                test_case.name,
+                test_case.steps,
+                test_case.starting_files,
+                test_case.expected_file_paths,
+                |ccs, ces, cer, dirtylog_cmd_rx, sync_cmd_rx, state| {
+                    let task_state = SitesTaskTestState {
+                        sender: ces,
+                        dirtylog_cmd_rx,
+                        sync_cmd_rx,
+                    };
+                    let sites_task = tokio::spawn(sites_task(ccs, cer, state));
+                    (sites_task, task_state)
+                },
+                |state| {
+                    state.sender.close();
+                },
+                test_case.cleanup_steps
+            ).await?;
+        }
+
+        Ok(())
     }
 }
 
