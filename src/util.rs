@@ -392,6 +392,7 @@ pub mod testing {
                 typeinfos: Default::default(),
             }),
             sync_info: Default::default(),
+            alarms: Default::default(),
         });
 
 

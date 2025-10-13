@@ -538,7 +538,7 @@ impl TypeDescriptionMethods for FieldDescription {
 }
 impl FieldDescriptionMethods for FieldDescription { }
 
-#[derive(Clone, Default)]
+#[derive(Clone,Default)]
 pub struct PropertyDescription {
     base: FieldDescription,
 }

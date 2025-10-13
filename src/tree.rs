@@ -32,6 +32,7 @@ use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
+const METH_ALARM_TABLE: &str = "alarmTable";
 const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod {
@@ -41,6 +42,16 @@ const META_METHOD_GET_LOG: MetaMethod = MetaMethod {
     param: "RpcValue",
     result: "RpcValue",
     signals: &[],
+    description: "",
+};
+
+const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod {
+    name: METH_ALARM_TABLE,
+    flags: 0,
+    access: shvrpc::metamethod::AccessLevel::Read,
+    param: "RpcValue",
+    result: "RpcValue",
+    signals: &[("alarmmod", Some("Null"))],
     description: "",
 };
 
@@ -899,6 +910,20 @@ async fn getlog_handler_rq(
     getlog_handler(site_path, params, app_state).await
 }
 
+async fn alarmtable_handler(
+    rq: RpcMessage,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let site_path = rq.shv_path().unwrap_or_default();
+    if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmTable path: {site_path}")));
+    }
+    match app_state.alarms.read().await.get(site_path) {
+        Some(alarms_for_site) => Ok(alarms_for_site.clone().into()),
+        None => Ok(Vec::<RpcValue>::new().into()),
+    }
+}
+
 type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
 struct GetLogResult {
@@ -1130,6 +1155,7 @@ async fn history_request_handler(
     match method {
         METH_LS => Ok(children.into()),
         METH_GET_LOG => getlog_handler_rq(rq, app_state).await,
+        METH_ALARM_TABLE => alarmtable_handler(rq, app_state).await,
         METH_PUSH_LOG => pushlog_handler(rq, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
     }
@@ -1207,7 +1233,7 @@ pub(crate) async fn methods_getter(
                     .is_some_and(|sub_hp_info| matches!(sub_hp_info, SubHpInfo::PushLog)) {
                         MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_PUSH_LOG])
                     } else {
-                        MetaMethods::from(&[&META_METHOD_GET_LOG])
+                        MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_ALARM_TABLE])
                     };
                 Some(meta_methods)
             } else {
