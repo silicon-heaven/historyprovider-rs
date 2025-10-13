@@ -466,7 +466,7 @@ async fn sync_file(
         remaining_bytes -= chunk_len;
 
         sync_logger.log(log::Level::Info,
-            format!("{}: got chunk of size: {}, remaining: {} ({:.2})",
+            format!("{}: got chunk of size: {}, remaining: {} ({:.2}%)",
                 file_path_remote,
                 chunk_len,
                 remaining_bytes,
