@@ -10,9 +10,12 @@ use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::{join_path, RpcMessageMetaTags};
 
+use crate::alarm::collect_alarms;
+use crate::journalrw::Log2Reader;
+use crate::tree::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
-use crate::{ClientCommandSender, State, Subscriber};
+use crate::{AlarmWithTimestamp, ClientCommandSender, State, Subscriber};
 
 
 #[derive(Clone,Default)]
@@ -151,6 +154,41 @@ fn collect_sub_hps(
 }
 
 const SIG_CMDLOG: &str = "cmdlog";
+
+fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> bool {
+    let new_alarms = collect_alarms(type_info, property_path, value);
+
+    let mut updated = false;
+
+    for new_alarm in new_alarms {
+        if new_alarm.is_active {
+            if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.path) {
+                if existing.alarm != new_alarm {
+                    *existing = AlarmWithTimestamp {
+                        alarm: new_alarm,
+                        timestamp,
+                    };
+                    updated = true;
+                }
+            } else {
+                alarms_for_site.push(AlarmWithTimestamp {
+                    alarm: new_alarm,
+                    timestamp,
+                });
+                updated = true;
+            }
+        } else {
+            let old_len = alarms_for_site.len();
+            alarms_for_site.retain(|a| a.alarm.path != new_alarm.path);
+            if alarms_for_site.len() != old_len {
+                updated = true;
+            }
+        }
+    }
+
+    updated
+
+}
 
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
@@ -313,8 +351,41 @@ pub(crate) async fn sites_task(
                         .collect::<BTreeMap<_, _>>()
                         .await;
 
-
+                    let sites = sites_info.keys().cloned().collect::<Vec<_>>();
                     *app_state.sites_data.write().await = SitesData { sites_info, sub_hps, typeinfos: Arc::new(typeinfos) };
+                    let params = crate::journalrw::GetLog2Params {
+                        since: crate::journalrw::GetLog2Since::LastEntry,
+                        with_snapshot: true,
+                        ..Default::default()
+                    };
+                    let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
+                    let typeinfos = &app_state.sites_data.read().await.typeinfos;
+                    for site_path in sites {
+                        let Ok(log) = getlog_handler(&site_path, params.clone(), app_state.clone()).await else {
+                            log::error!("couldn't init alarms: getlog failed");
+                            continue;
+                        };
+                        let Ok(reader) = Log2Reader::new(log) else {
+                            log::error!("couldn't init alarms: reader failed");
+                            continue;
+                        };
+
+                        let Some(Ok(type_info)) = typeinfos.get(&site_path) else {
+                            continue;
+                        };
+                        let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
+
+                        for entry in reader {
+                            let Ok(valid_entry) = entry else {
+                                log::warn!("skipping invalid entry");
+                                continue;
+                            };
+
+                            update_alarms(alarms_for_site, type_info, &valid_entry.path, &valid_entry.value, shvproto::DateTime::from_epoch_msec(valid_entry.epoch_msec));
+                        }
+                    }
+
+                    *app_state.alarms.write().await = alarms;
 
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
@@ -369,9 +440,42 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
+
                 app_state.dirtylog_cmd_tx
-                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(msg))
+                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(msg.clone()))
                     .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
+
+                let signal = msg.method().unwrap_or_default().to_string();
+                if signal != "chng" {
+                    continue;
+                }
+                let path = msg.shv_path().unwrap_or_default().to_string();
+
+                let Some(stripped_path) = path.strip_prefix("shv/") else {
+                    continue;
+                };
+                let Some((site_path, property_path)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
+                    continue;
+                };
+
+                let Some(value) = msg.param() else {
+                    continue;
+                };
+
+                let typeinfos = &app_state.sites_data.read().await.typeinfos;
+                let Some(Ok(type_info)) = typeinfos.get(site_path) else {
+                    continue;
+                };
+
+                let alarms = &mut *app_state.alarms.write().await;
+
+                let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
+
+                let updated = update_alarms(alarms_for_site, type_info, property_path, value, shvproto::DateTime::now());
+                if updated {
+                    client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(site_path, "alarmmod", None))
+                        .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
+                }
             }
             complete => break,
         }

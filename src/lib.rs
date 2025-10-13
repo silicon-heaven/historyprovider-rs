@@ -1,9 +1,14 @@
+use std::collections::BTreeMap;
+
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use log::info;
 use serde::Deserialize;
 use shvclient::AppState;
+use shvproto::ToRpcValue;
 use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;
+
+use crate::alarm::Alarm;
 
 use self::util::DedupSender;
 
@@ -43,9 +48,16 @@ impl HpConfig {
     }
 }
 
+#[derive(Clone,ToRpcValue)]
+struct AlarmWithTimestamp {
+    alarm: Alarm,
+    timestamp: shvproto::DateTime,
+}
+
 struct State {
     sites_data: RwLock<sites::SitesData>,
     sync_info: sync::SyncInfo,
+    alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     config: HpConfig,
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
@@ -65,6 +77,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     let app_state = AppState::new(State {
         sites_data: RwLock::default(),
         sync_info: Default::default(),
+        alarms: Default::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
         dirtylog_cmd_tx,
