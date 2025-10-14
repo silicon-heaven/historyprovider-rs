@@ -4,12 +4,13 @@ use std::sync::Arc;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
 use log::warn;
-use shvclient::client::{CallRpcMethodErrorKind, RpcCall};
+use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallLsList};
 use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
-use shvproto::RpcValue;
+use shvproto::{Blob, RpcValue};
 use shvrpc::{join_path, RpcMessageMetaTags};
 
+use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{ClientCommandSender, State, Subscriber};
 
@@ -18,6 +19,7 @@ use crate::{ClientCommandSender, State, Subscriber};
 pub(crate) struct SitesData {
     pub(crate) sites_info: Arc<BTreeMap<String, SiteInfo>>,
     pub(crate) sub_hps: Arc<BTreeMap<String, SubHpInfo>>,
+    pub(crate) typeinfos: Arc<BTreeMap<String, Result<TypeInfo, String>>>,
 }
 
 
@@ -280,7 +282,39 @@ pub(crate) async fn sites_task(
                         .collect::<SelectAll<_>>()
                         .await;
 
-                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
+                    let typeinfos = sites_info
+                        .keys()
+                        .map(|path| {
+                            let path = path.clone();
+                            async {
+                                let path = path;
+                                let result: Result<_, String> = async {
+                                    let files_path = join_path!("sites", &path, "_files");
+                                    let files = RpcCallLsList::new(files_path.as_str()).exec(&client_cmd_tx.clone())
+                                        .await
+                                        .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
+                                    let type_info_filename = files
+                                        .into_iter()
+                                        .find(|file| file == "typeInfo.cpon")
+                                        .ok_or_else(|| format!("No typeInfo.cpon found for site {path}"))?;
+                                    let type_info_filepath = join_path!(files_path, type_info_filename);
+                                    let type_info_file: RpcValue = RpcCall::new(type_info_filepath.as_str(), "read").exec(&client_cmd_tx.clone())
+                                        .await
+                                        .unwrap_or_else(|err| panic!("Retrieving {type_info_filepath} failed: {err}"));
+                                    let type_info = &RpcValue::from_cpon(String::from_utf8_lossy(type_info_file.as_blob())).map_err(|err| format!("Couldn't parse typeinfo file as cpon: {err}"))?;
+                                    let parsed_type_info: TypeInfo = type_info.try_into().map_err(|err| format!("Failed to parse typeinfo for {path}: {err}"))?;
+                                    Ok(parsed_type_info)
+                                }.await;
+
+                                (path, result)
+                            }
+                        })
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<BTreeMap<_, _>>()
+                        .await;
+
+
+                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps, typeinfos: Arc::new(typeinfos) };
 
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
