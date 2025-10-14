@@ -1029,6 +1029,13 @@ impl TryFrom<&RpcValue> for TypeInfo {
     }
 }
 
+impl TryFrom<RpcValue> for TypeInfo {
+    type Error = String;
+    fn try_from(value: RpcValue) -> Result<Self, Self::Error> {
+        (&value).try_into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use shvproto::RpcValue;

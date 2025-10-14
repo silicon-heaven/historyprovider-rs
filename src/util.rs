@@ -389,6 +389,7 @@ pub mod testing {
                         download_chunk_size: 1000000,
                     })
                 ])),
+                typeinfos: Default::default(),
             }),
             sync_info: Default::default(),
         });

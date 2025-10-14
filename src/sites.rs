@@ -4,12 +4,13 @@ use std::sync::Arc;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
 use log::warn;
-use shvclient::client::{CallRpcMethodErrorKind, RpcCall};
+use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallLsList};
 use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::{join_path, RpcMessageMetaTags};
 
+use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{ClientCommandSender, State, Subscriber};
 
@@ -18,6 +19,7 @@ use crate::{ClientCommandSender, State, Subscriber};
 pub(crate) struct SitesData {
     pub(crate) sites_info: Arc<BTreeMap<String, SiteInfo>>,
     pub(crate) sub_hps: Arc<BTreeMap<String, SubHpInfo>>,
+    pub(crate) typeinfos: Arc<BTreeMap<String, Result<TypeInfo, String>>>,
 }
 
 
@@ -280,7 +282,39 @@ pub(crate) async fn sites_task(
                         .collect::<SelectAll<_>>()
                         .await;
 
-                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps };
+                    let typeinfos = sites_info
+                        .keys()
+                        .map(|path| {
+                            let client_cmd_tx = client_cmd_tx.clone();
+                            async move {
+                                let result = 'result: {
+                                    let files_path = join_path!("sites", &path, "_files");
+                                    let files = RpcCallLsList::new(&files_path).exec(&client_cmd_tx)
+                                        .await
+                                        .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
+                                    let Some(type_info_filename) = files
+                                        .into_iter()
+                                        .find(|file| file == "typeInfo.cpon") else {
+                                            break 'result Err(format!("No typeInfo.cpon found for site {path}"));
+                                        };
+                                    let type_info_filepath = join_path!(files_path, type_info_filename);
+                                    let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read").exec(&client_cmd_tx)
+                                        .await
+                                        .unwrap_or_else(|err| panic!("Retrieving {type_info_filepath} failed: {err}"));
+                                    RpcValue::from_cpon(String::from_utf8_lossy(type_info_file.as_blob()))
+                                        .map_err(|err| format!("Couldn't parse typeinfo file as cpon: {err}"))
+                                        .and_then(|rv| rv.try_into().map_err(|err| format!("Failed to parse typeinfo for {path}: {err}")))
+                                };
+
+                                (path.clone(), result)
+                            }
+                        })
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<BTreeMap<_, _>>()
+                        .await;
+
+
+                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps, typeinfos: Arc::new(typeinfos) };
 
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
@@ -529,6 +563,9 @@ mod tests {
                     Box::new(ExpectSubscription("shv/node/*:*:cmdlog".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:chng".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectCall("sites/legacy_sync_path_device/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectCall("sites/node/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(SendSignal("shv/node/*:*:chng".to_string(), "shv/node/some_value".to_string(), "chng".to_string(), RpcValue::null())),
                     Box::new(ExpectDirtylogCommand::ProcessNotification),
                     Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
