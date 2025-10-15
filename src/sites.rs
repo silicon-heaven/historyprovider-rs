@@ -342,7 +342,7 @@ pub(crate) async fn sites_task(
             complete => break,
         }
     }
-    eprintln!("task end");
+    log::debug!("sites task finished");
 }
 
 #[cfg(test)]
