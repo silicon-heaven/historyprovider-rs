@@ -538,7 +538,7 @@ impl TypeDescriptionMethods for FieldDescription {
 }
 impl FieldDescriptionMethods for FieldDescription { }
 
-#[derive(Clone, Default)]
+#[derive(Clone,Default)]
 pub struct PropertyDescription {
     base: FieldDescription,
 }
@@ -1026,6 +1026,13 @@ impl TryFrom<&RpcValue> for TypeInfo {
         }
 
         Ok(res)
+    }
+}
+
+impl TryFrom<RpcValue> for TypeInfo {
+    type Error = String;
+    fn try_from(value: RpcValue) -> Result<Self, Self::Error> {
+        (&value).try_into()
     }
 }
 

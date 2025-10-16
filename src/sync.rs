@@ -739,7 +739,7 @@ pub(crate) async fn sync_task(
                 let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
                 let mut sync_tasks = vec![];
                 let sync_start = tokio::time::Instant::now();
-                let SitesData { sites_info, sub_hps } = app_state
+                let SitesData { sites_info, sub_hps, .. } = app_state
                     .sites_data
                     .read()
                     .await
@@ -825,7 +825,7 @@ pub(crate) async fn sync_task(
                 }
             }
             SyncCommand::SyncSite(site) => {
-                let SitesData { sites_info, sub_hps } = app_state
+                let SitesData { sites_info, sub_hps, .. } = app_state
                     .sites_data
                     .read()
                     .await
