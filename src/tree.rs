@@ -776,13 +776,11 @@ async fn pushlog_handler(
     ).into())
 }
 
-async fn getlog_handler(
-    rq: RpcMessage,
+pub async fn getlog_handler(
+    site_path: &str,
+    params: GetLog2Params,
     app_state: AppState<State>,
 ) -> RpcRequestResult {
-    let params = GetLog2Params::try_from(rq.param().unwrap_or_default())
-        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
-    let site_path = rq.shv_path().unwrap_or_default();
     if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));
     }
@@ -868,16 +866,58 @@ async fn getlog_handler(
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
 
-    Ok(getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, &params).await)
+    let getlog_result = getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, &params).await;
+    let (mut result, paths_dict) = journal_entries_to_rpcvalue(
+        getlog_result.entries.iter().map(Arc::as_ref),
+        params.with_paths_dict
+    );
+
+    result.meta = Some(Box::new(Log2Header {
+        record_count: getlog_result.record_count,
+        record_count_limit: getlog_result.record_count_limit,
+        record_count_limit_hit: getlog_result.record_count_limit_hit,
+        date_time: getlog_result.date_time,
+        since: getlog_result.since,
+        until: getlog_result.until,
+        with_paths_dict: getlog_result.with_paths_dict,
+        with_snapshot: getlog_result.with_snapshot,
+        paths_dict,
+        log_params: params.clone(),
+        log_version: 2,
+    }.into()));
+
+    Ok(result)
+}
+
+async fn getlog_handler_rq(
+    rq: RpcMessage,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let site_path = rq.shv_path().unwrap_or_default();
+    let params = GetLog2Params::try_from(rq.param().unwrap_or_default())
+        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
+    getlog_handler(site_path, params, app_state).await
 }
 
 type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
+
+struct GetLogResult {
+    record_count: i64,
+    record_count_limit: i64,
+    record_count_limit_hit: bool,
+    date_time: shvproto::DateTime,
+    since: shvproto::DateTime,
+    until: shvproto::DateTime,
+    with_paths_dict: bool,
+    with_snapshot: bool,
+    entries: Vec<Arc<JournalEntry>>,
+}
 
 async fn getlog_impl(
     journal_readers: impl IntoIterator<Item = JournalEntryStream>,
     dirty_log: impl IntoIterator<Item = JournalEntry>,
     params: &GetLog2Params
-) -> RpcValue
+) -> GetLogResult
 {
     const RECORD_COUNT_LIMIT_MAX: i64 = 100_000;
 
@@ -1018,21 +1058,17 @@ async fn getlog_impl(
     let snapshot_entries = if with_snapshot {
         context.snapshot
             .into_values()
-            .map(|entry| JournalEntry {
+            .map(|entry| Arc::new(JournalEntry {
                 epoch_msec: since_ms,
                 repeat: true,
                 ..(*entry).clone()
-            })
+            }))
             .collect::<Vec<_>>()
     } else {
         // Include all entries from the snapshot if their timestamp >= since
         context.snapshot
             .into_values()
-            .filter_map(|entry| (entry.epoch_msec >= since_ms)
-                .then(|| Arc::try_unwrap(entry)
-                    .unwrap_or_else(|entry| (*entry).clone())
-                )
-            )
+            .filter(|entry| entry.epoch_msec >= since_ms)
             .collect::<Vec<_>>()
     };
 
@@ -1066,13 +1102,11 @@ async fn getlog_impl(
     };
 
     let record_count = snapshot_entries.len() as i64 + context.entries.len() as i64;
-    let (mut result, paths_dict) = journal_entries_to_rpcvalue(
-        snapshot_entries.iter().chain(context.entries.iter().map(|arc_entry| arc_entry.as_ref())),
-        params.with_paths_dict
-    );
+    let entries = snapshot_entries.into_iter().chain(context.entries.into_iter()).collect::<Vec<_>>();
 
-    result.meta = Some(Box::new(Log2Header {
+    GetLogResult {
         record_count,
+        entries,
         record_count_limit: context.record_count_limit as _,
         record_count_limit_hit: context.record_count_limit_hit,
         date_time: current_datetime,
@@ -1080,13 +1114,7 @@ async fn getlog_impl(
         until: shvproto::DateTime::from_epoch_msec(until_ms),
         with_paths_dict: params.with_paths_dict,
         with_snapshot,
-        paths_dict,
-        log_params: params.clone(),
-        log_version: 2,
     }
-    .into()));
-
-    result
 }
 
 async fn history_request_handler(
@@ -1101,7 +1129,7 @@ async fn history_request_handler(
 
     match method {
         METH_LS => Ok(children.into()),
-        METH_GET_LOG => getlog_handler(rq, app_state).await,
+        METH_GET_LOG => getlog_handler_rq(rq, app_state).await,
         METH_PUSH_LOG => pushlog_handler(rq, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
     }
@@ -1237,7 +1265,7 @@ mod tests {
 
     use shvproto::{DateTime, RpcValue};
 
-    use crate::{journalrw::{GetLog2Params, GetLog2Since, Log2Header}, tree::JournalEntryStream};
+    use crate::{journalrw::{GetLog2Params, GetLog2Since}, tree::{GetLogResult, JournalEntryStream}};
 
     use super::{getlog_impl, JournalEntry};
 
@@ -1268,17 +1296,8 @@ mod tests {
         Box::pin(tokio_stream::iter(entries))
     }
 
-    async fn get_log_entries(readers: Vec<JournalEntryStream>, params: GetLog2Params) -> (Log2Header, Vec<(String, String, RpcValue)>) {
-        let log = getlog_impl(readers, [], &params).await;
-        let log_rd = crate::journalrw::Log2Reader::new(log).expect("Reader must work");
-        let log_header = log_rd.header.clone();
-        let log_entries = log_rd
-            .filter_map(Result::ok)
-            .map(|entry_val| {
-                (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path, entry_val.value)
-            })
-            .collect();
-        (log_header, log_entries)
+    async fn get_log_entries(readers: Vec<JournalEntryStream>, params: GetLog2Params) -> GetLogResult {
+        getlog_impl(readers, [], &params).await
     }
 
     #[tokio::test]
@@ -1726,17 +1745,17 @@ mod tests {
         ].into_iter().map(|test_case| (data_4 as fn() -> _, test_case)));
 
         for (data, case) in test_cases {
-            let (header, actual) = get_log_entries(data(), case.params).await;
+            let result = get_log_entries(data(), case.params).await;
             let expected = case.expected.into_iter().map(|(ts, path, val)| (ts.to_string(), path.to_string(), val)).collect::<Vec<_>>();
-            assert_eq!(actual, expected, "Test case failed: {}", case.name);
+            assert_eq!(result.entries.into_iter().map(|entry_val| (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path.clone(), entry_val.value.clone())).collect::<Vec<_>>(), expected, "Test case failed: {}", case.name);
             if let Some(expected_record_count_limit_hit) = case.expected_record_count_limit_hit {
-                assert_eq!(header.record_count_limit_hit, expected_record_count_limit_hit, "Test case failed: {}", case.name);
+                assert_eq!(result.record_count_limit_hit, expected_record_count_limit_hit, "Test case failed: {}", case.name);
             }
             if let Some(expected_since) = case.expected_since {
-                assert_eq!(header.since.to_iso_string(), expected_since, "Test case failed: {}", case.name);
+                assert_eq!(result.since.to_iso_string(), expected_since, "Test case failed: {}", case.name);
             }
             if let Some(expected_until) = case.expected_until {
-                assert_eq!(header.until.to_iso_string(), expected_until, "Test case failed: {}", case.name);
+                assert_eq!(result.until.to_iso_string(), expected_until, "Test case failed: {}", case.name);
             }
         }
     }
