@@ -7,7 +7,7 @@ use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
@@ -80,7 +80,7 @@ pub(crate) async fn dirtylog_task(
             Request::Append(journal_entry) => {
                 let journal_site_path = journal_dir.join(site);
                 if !journal_site_path.exists() {
-                    warn!("Ignoring notification while journal directory {journal_site_path} for the site does not exist",
+                    debug!("Ignoring notification while journal directory {journal_site_path} for the site does not exist",
                         journal_site_path = journal_site_path.to_string_lossy()
                     );
                     return;
