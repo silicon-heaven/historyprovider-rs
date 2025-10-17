@@ -1,14 +1,18 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
-use log::warn;
-use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallLsList};
-use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
+use log::{debug, trace, warn};
+use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList};
+use shvclient::clientnode::{find_longest_path_prefix, METH_DIR, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::RpcValue;
+use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{join_path, RpcMessageMetaTags};
+use tokio::time::timeout;
 
 use crate::alarm::collect_alarms;
 use crate::tree::getlog_handler;
@@ -16,6 +20,13 @@ use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, ClientCommandSender, State, Subscriber};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum SiteOnlineStatus {
+    #[default]
+    Unknown,
+    Offline,
+    Online,
+}
 
 #[derive(Clone,Default)]
 pub(crate) struct SitesData {
@@ -188,6 +199,63 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
     updated
 }
 
+fn online_status_worker(
+    site: impl Into<String>,
+    mut events: UnboundedReceiver<()>,
+    client_commands: ClientCommandSender,
+    app_state: AppState<State>
+) -> impl Future<Output = ()>
+{
+    const ONLINE_TIMER: Duration = Duration::from_secs(10);
+    let site = site.into();
+    async move {
+        loop {
+            match timeout(ONLINE_TIMER, events.next()).await {
+                // Received a message before timeout
+                Ok(Some(_msg)) => {
+                    trace!(target: "OnlineStatus", "[{site}] Message received, resetting timer.");
+                    if let Some(online_status) = app_state.online_states.write().await.get_mut(&site) {
+                        *online_status = SiteOnlineStatus::Online;
+                    }
+                    continue;
+                }
+
+                // Channel closed
+                Ok(None) => {
+                    debug!(target: "OnlineStatus", "[{site}] Channel closed, worker is ending.");
+                    if let Some(online_status) = app_state.online_states.write().await.get_mut(&site) {
+                        *online_status = SiteOnlineStatus::Unknown;
+                    }
+                    break;
+                }
+
+                // Timeout elapsed
+                Err(_) => {
+                    debug!(target: "OnlineStatus", "[{site}] Timer expired, checking the site status by an RPC call");
+                    let dir_result = RpcCallDirExists::new(&join_path!("shv", &site), METH_DIR)
+                        .timeout(ONLINE_TIMER)
+                        .exec(&client_commands)
+                        .await;
+                    if let Some(online_status) = app_state.online_states.write().await.get_mut(&site) {
+                        if dir_result.is_ok() {
+                            debug!(target: "OnlineStatus", "[{site}] ONLINE");
+                            *online_status = SiteOnlineStatus::Online;
+                        } else if let Err(err) = dir_result
+                            && let CallRpcMethodErrorKind::RpcError(RpcError { code, .. }) = err.error()
+                                && (*code == RpcErrorCode::MethodCallTimeout || *code == RpcErrorCode::MethodNotFound)
+                        {
+                            *online_status = SiteOnlineStatus::Offline;
+                            debug!(target: "OnlineStatus", "[{site}] OFFLINE");
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        debug!(target: "OnlineStatus", "[{site}] worker finished");
+    }
+}
+
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
@@ -197,6 +265,16 @@ pub(crate) async fn sites_task(
     let mut client_evt_rx = client_evt_rx.fuse();
     let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
     let mut subscribers = SelectAll::<Subscriber>::default();
+    let mut online_status_channels = BTreeMap::new();
+
+    fn parse_notification<'a>(msg: &'a shvrpc::RpcMessage, sites_data: &SitesData) -> Option<(String, String, String, &'a RpcValue)> {
+        let signal = msg.method().unwrap_or_default().to_string();
+        let path = msg.shv_path().unwrap_or_default().to_string();
+        let param = msg.param().unwrap_or_default();
+        let stripped_path = path.strip_prefix("shv/")?;
+        let (site_path, property_path) = find_longest_path_prefix(&*sites_data.sites_info, stripped_path)?;
+        Some((signal, site_path.to_string(), property_path.to_string(), param))
+    }
 
     enum PeriodicSyncCommand {
         Enable,
@@ -350,21 +428,25 @@ pub(crate) async fn sites_task(
 
                     let typeinfos = Arc::new(typeinfos);
 
-                    let sites = sites_info.keys().cloned().collect::<Vec<_>>();
-                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps, typeinfos: typeinfos.clone() };
+                    *app_state.sites_data.write().await = SitesData {
+                        sites_info: sites_info.clone(),
+                        sub_hps,
+                        typeinfos: typeinfos.clone()
+                    };
+
                     let params = crate::journalrw::GetLog2Params {
                         since: crate::journalrw::GetLog2Since::LastEntry,
                         with_snapshot: true,
                         ..Default::default()
                     };
                     let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
-                    for site_path in sites {
-                        let Some(Ok(type_info)) = typeinfos.get(&site_path) else {
+                    for site_path in sites_info.keys() {
+                        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
                             // No typeinfo for this site - skip
                             continue;
                         };
 
-                        let log = match getlog_handler(&site_path, &params, app_state.clone()).await {
+                        let log = match getlog_handler(site_path, &params, app_state.clone()).await {
                             Ok(log) => log,
                             Err(err) => {
                                 log::error!("couldn't init alarms: getlog failed: {err}");
@@ -381,6 +463,19 @@ pub(crate) async fn sites_task(
 
                     *app_state.alarms.write().await = alarms;
 
+                    let mut online_status_workers = Vec::new();
+                    for site in sites_info.keys() {
+                        let (tx, rx) = futures::channel::mpsc::unbounded();
+                        online_status_channels.insert(site.to_string(), tx);
+                        online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
+                    }
+                    tokio::spawn(async move {
+                        debug!(target: "OnlineStatus", "online status task starts");
+                        futures::future::join_all(online_status_workers).await;
+                        debug!(target: "OnlineStatus", "online status task finish");
+                    });
+                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
                         .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
@@ -391,6 +486,7 @@ pub(crate) async fn sites_task(
 
                     subscribers.clear();
                     mntchng_subscribers.clear();
+                    online_status_channels.clear();
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Disable)
                         .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
@@ -433,7 +529,14 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
+                let Some((_signal, site, _property, _param)) = parse_notification(&msg, &*app_state.sites_data.read().await) else {
+                    continue
+                };
+                if let Some(tx) = online_status_channels.get(&site) {
+                    tx.unbounded_send(()).ok();
+                }
 
+                // TODO: Change params of ProcessNotification so it is parsed only once
                 app_state.dirtylog_cmd_tx
                     .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(msg.clone()))
                     .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
