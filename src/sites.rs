@@ -256,6 +256,28 @@ fn online_status_worker(
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedNotification {
+    pub(crate) site_path: String,
+    pub(crate) property_path: String,
+    pub(crate) signal: String,
+    pub(crate) param: RpcValue,
+}
+
+pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_data: &SitesData) -> Option<ParsedNotification> {
+    let signal = msg.method().unwrap_or_default().to_string();
+    let path = msg.shv_path().unwrap_or_default().to_string();
+    let param = msg.param().unwrap_or_default();
+    let stripped_path = path.strip_prefix("shv/")?;
+    let (site_path, property_path) = find_longest_path_prefix(&*sites_data.sites_info, stripped_path)?;
+    Some(ParsedNotification {
+        site_path: site_path.to_string(),
+        property_path: property_path.to_string(),
+        signal: signal.to_string(),
+        param: param.clone(),
+    })
+}
+
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
@@ -266,15 +288,6 @@ pub(crate) async fn sites_task(
     let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
     let mut subscribers = SelectAll::<Subscriber>::default();
     let mut online_status_channels = BTreeMap::new();
-
-    fn parse_notification<'a>(msg: &'a shvrpc::RpcMessage, sites_data: &SitesData) -> Option<(String, String, String, &'a RpcValue)> {
-        let signal = msg.method().unwrap_or_default().to_string();
-        let path = msg.shv_path().unwrap_or_default().to_string();
-        let param = msg.param().unwrap_or_default();
-        let stripped_path = path.strip_prefix("shv/")?;
-        let (site_path, property_path) = find_longest_path_prefix(&*sites_data.sites_info, stripped_path)?;
-        Some((signal, site_path.to_string(), property_path.to_string(), param))
-    }
 
     enum PeriodicSyncCommand {
         Enable,
@@ -500,26 +513,24 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
-                let signal = msg.method().unwrap_or_default().to_string();
+                let Some(ParsedNotification { site_path, signal, param, .. }) = parse_notification(&msg, &*app_state.sites_data.read().await) else {
+                    continue
+                };
+
                 if signal != "mntchng" {
                     continue;
                 }
-                let path = msg.shv_path().unwrap_or_default().to_string();
-
-                let Some(stripped_path) = path.strip_prefix("shv/") else {
-                    continue;
-                };
-                let Some((site_path, _)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
-                    continue;
-                };
-                if !msg.param().is_some_and(RpcValue::as_bool) {
+                let mounted = param.as_bool();
+                if mounted {
+                    log::info!("Site mounted: {site_path}");
+                    app_state.sync_cmd_tx
+                        .send(crate::sync::SyncCommand::SyncSite(site_path.clone()))
+                        .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
+                    // TODO: send SiteOnline to online_status_channel
+                } else {
                     log::info!("Site unmounted: {site_path}");
-                    continue;
+                    // TODO: send SiteOffline to online_status_channel
                 }
-                log::info!("Site mounted: {site_path}");
-                app_state.sync_cmd_tx
-                    .send(crate::sync::SyncCommand::SyncSite(site_path.into()))
-                    .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
             notification_frame = subscribers.select_next_some() => {
                 let msg = match notification_frame.to_rpcmesage() {
@@ -529,48 +540,28 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
-                let Some((_signal, site, _property, _param)) = parse_notification(&msg, &*app_state.sites_data.read().await) else {
+                let Some(parsed_notification) = parse_notification(&msg, &*app_state.sites_data.read().await) else {
                     continue
                 };
-                if let Some(tx) = online_status_channels.get(&site) {
+                if let Some(tx) = online_status_channels.get(&parsed_notification.site_path) {
                     tx.unbounded_send(()).ok();
                 }
 
-                // TODO: Change params of ProcessNotification so it is parsed only once
                 app_state.dirtylog_cmd_tx
-                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(msg.clone()))
+                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
                     .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
 
-                let signal = msg.method().unwrap_or_default().to_string();
-                if signal != "chng" {
-                    continue;
-                }
-                let path = msg.shv_path().unwrap_or_default().to_string();
-
-                let Some(stripped_path) = path.strip_prefix("shv/") else {
-                    continue;
-                };
-
-                let Some((site_path, property_path)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
-                    continue;
-                };
-
                 let typeinfos = &app_state.sites_data.read().await.typeinfos;
-                let Some(Ok(type_info)) = typeinfos.get(site_path) else {
-                    continue;
-                };
-
-                let Some(value) = msg.param() else {
+                let Some(Ok(type_info)) = typeinfos.get(&parsed_notification.site_path) else {
                     continue;
                 };
 
                 let alarms = &mut *app_state.alarms.write().await;
+                let alarms_for_site = alarms.entry(parsed_notification.site_path.clone()).or_default();
 
-                let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
-
-                let updated = update_alarms(alarms_for_site, type_info, property_path, value, shvproto::DateTime::now());
+                let updated = update_alarms(alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
                 if updated {
-                    client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(site_path, "alarmmod", None))
+                    client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, "alarmmod", None))
                         .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                 }
             }

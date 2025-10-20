@@ -393,6 +393,7 @@ pub mod testing {
             }),
             sync_info: Default::default(),
             alarms: Default::default(),
+            online_states: Default::default(),
         });
 
 
