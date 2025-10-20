@@ -31,8 +31,8 @@ struct Opts {
     reconnect_interval: Option<String>,
     /// Client should ping broker with this interval. Broker will disconnect device, if ping is not received twice.
     /// Example values: 1s, 1h, etc.
-    #[arg(long, default_value = "1m")]
-    heartbeat_interval: String,
+    #[arg(long)]
+    heartbeat_interval: Option<String>,
     /// Verbose mode (module, .)
     #[arg(short, long)]
     verbose: Option<String>,
@@ -78,7 +78,10 @@ fn load_client_config(cli_opts: Opts) -> shvrpc::Result<ClientConfig> {
         || Ok(config.reconnect_interval),
         |interval_str| duration_str::parse(&interval_str).map(Some)
     )?;
-    config.heartbeat_interval = duration_str::parse(&cli_opts.heartbeat_interval)?;
+    config.heartbeat_interval = cli_opts.heartbeat_interval.map_or_else(
+        || Ok(config.heartbeat_interval),
+        |interval_str| duration_str::parse(&interval_str)
+    )?;
     Ok(config)
 }
 
