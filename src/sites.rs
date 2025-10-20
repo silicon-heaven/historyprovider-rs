@@ -437,7 +437,6 @@ pub(crate) async fn sites_task(
                 log::info!("Site mounted: {site_path}");
                 app_state.sync_cmd_tx
                     .send(crate::sync::SyncCommand::SyncSite(site_path.into()))
-                    .map(|_|())
                     .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
             notification_frame = subscribers.select_next_some() => {
