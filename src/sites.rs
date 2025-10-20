@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
-use log::{debug, trace, warn};
+use log::{debug, warn};
 use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList};
 use shvclient::clientnode::{find_longest_path_prefix, METH_DIR, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
@@ -199,33 +199,54 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
     updated
 }
 
+async fn set_online_status(
+    site: impl AsRef<str>,
+    new_status: SiteOnlineStatus,
+    client_commands: &ClientCommandSender,
+    app_state: &AppState<State>
+)
+{
+    let site = site.as_ref();
+    if let Some(online_status) = app_state.online_states.write().await.get_mut(site) {
+        let changed = if new_status != *online_status {
+            debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
+            *online_status = new_status;
+            true
+        } else {
+            false
+        };
+        if changed {
+            client_commands
+                .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
+                .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
+        }
+        // TODO: generate/remove a 'site-offline' alarm
+    }
+}
+
 fn online_status_worker(
     site: impl Into<String>,
-    mut events: UnboundedReceiver<()>,
+    mut events: UnboundedReceiver<SiteOnlineStatus>,
     client_commands: ClientCommandSender,
     app_state: AppState<State>
 ) -> impl Future<Output = ()>
 {
     const ONLINE_TIMER: Duration = Duration::from_secs(10);
     let site = site.into();
+
+    debug!(target: "OnlineStatus", "[{site}] Worker started");
     async move {
         loop {
             match timeout(ONLINE_TIMER, events.next()).await {
                 // Received a message before timeout
-                Ok(Some(_msg)) => {
-                    trace!(target: "OnlineStatus", "[{site}] Message received, resetting timer.");
-                    if let Some(online_status) = app_state.online_states.write().await.get_mut(&site) {
-                        *online_status = SiteOnlineStatus::Online;
-                    }
-                    continue;
+                Ok(Some(status)) => {
+                    set_online_status(&site, status, &client_commands, &app_state).await;
                 }
 
                 // Channel closed
                 Ok(None) => {
-                    debug!(target: "OnlineStatus", "[{site}] Channel closed, worker is ending.");
-                    if let Some(online_status) = app_state.online_states.write().await.get_mut(&site) {
-                        *online_status = SiteOnlineStatus::Unknown;
-                    }
+                    debug!(target: "OnlineStatus", "[{site}] Events channel closed");
+                    set_online_status(&site, SiteOnlineStatus::Unknown, &client_commands, &app_state).await;
                     break;
                 }
 
@@ -236,23 +257,18 @@ fn online_status_worker(
                         .timeout(ONLINE_TIMER)
                         .exec(&client_commands)
                         .await;
-                    if let Some(online_status) = app_state.online_states.write().await.get_mut(&site) {
-                        if dir_result.is_ok() {
-                            debug!(target: "OnlineStatus", "[{site}] ONLINE");
-                            *online_status = SiteOnlineStatus::Online;
-                        } else if let Err(err) = dir_result
-                            && let CallRpcMethodErrorKind::RpcError(RpcError { code, .. }) = err.error()
-                                && (*code == RpcErrorCode::MethodCallTimeout || *code == RpcErrorCode::MethodNotFound)
-                        {
-                            *online_status = SiteOnlineStatus::Offline;
-                            debug!(target: "OnlineStatus", "[{site}] OFFLINE");
-                        }
+                    if dir_result.is_ok() {
+                        set_online_status(&site, SiteOnlineStatus::Online, &client_commands, &app_state).await;
+                    } else if let Err(err) = dir_result
+                        && let CallRpcMethodErrorKind::RpcError(RpcError { code, .. }) = err.error()
+                        && (*code == RpcErrorCode::MethodCallTimeout || *code == RpcErrorCode::MethodNotFound)
+                    {
+                        set_online_status(&site, SiteOnlineStatus::Offline, &client_commands, &app_state).await;
                     }
-                    continue;
                 }
             }
         }
-        debug!(target: "OnlineStatus", "[{site}] worker finished");
+        debug!(target: "OnlineStatus", "[{site}] Worker finished");
     }
 }
 
@@ -443,7 +459,7 @@ pub(crate) async fn sites_task(
 
                     *app_state.sites_data.write().await = SitesData {
                         sites_info: sites_info.clone(),
-                        sub_hps,
+                        sub_hps: sub_hps.clone(),
                         typeinfos: typeinfos.clone()
                     };
 
@@ -477,7 +493,10 @@ pub(crate) async fn sites_task(
                     *app_state.alarms.write().await = alarms;
 
                     let mut online_status_workers = Vec::new();
-                    for site in sites_info.keys() {
+                    for (site, info) in sites_info.iter() {
+                        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
+                            continue
+                        };
                         let (tx, rx) = futures::channel::mpsc::unbounded();
                         online_status_channels.insert(site.to_string(), tx);
                         online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
@@ -526,10 +545,15 @@ pub(crate) async fn sites_task(
                     app_state.sync_cmd_tx
                         .send(crate::sync::SyncCommand::SyncSite(site_path.clone()))
                         .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
-                    // TODO: send SiteOnline to online_status_channel
+
+                    if let Some(tx) = online_status_channels.get(&site_path) {
+                        tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                    }
                 } else {
                     log::info!("Site unmounted: {site_path}");
-                    // TODO: send SiteOffline to online_status_channel
+                    if let Some(tx) = online_status_channels.get(&site_path) {
+                        tx.unbounded_send(SiteOnlineStatus::Offline).ok();
+                    }
                 }
             }
             notification_frame = subscribers.select_next_some() => {
@@ -544,7 +568,7 @@ pub(crate) async fn sites_task(
                     continue
                 };
                 if let Some(tx) = online_status_channels.get(&parsed_notification.site_path) {
-                    tx.unbounded_send(()).ok();
+                    tx.unbounded_send(SiteOnlineStatus::Online).ok();
                 }
 
                 app_state.dirtylog_cmd_tx
