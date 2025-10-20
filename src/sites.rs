@@ -256,8 +256,8 @@ pub(crate) async fn sites_task(
                         .exec(&client_cmd_tx)
                         .await;
 
-                    let (sites_info, sub_hps) = match sites
-                        .map(|sites: shvproto::Map| {
+                    let (sites_info, sub_hps) = match sites {
+                        Ok(sites) => {
                             let sub_hps = collect_sub_hps(&[], &sites);
                             let mut sites_info = collect_sites(&[], &sites);
                             for (path, site_info) in &mut sites_info {
@@ -269,19 +269,18 @@ pub(crate) async fn sites_task(
                                 }
                             }
                             (Arc::new(sites_info), Arc::new(sub_hps))
-                        }) {
-                            Ok(res) => res,
-                            Err(err) => match err.error() {
-                                CallRpcMethodErrorKind::ConnectionClosed => {
-                                    log::warn!("Connection closed while getting sites info");
-                                    continue
-                                }
-                                _ => {
-                                    log::error!("Get sites info error: {err}");
-                                    Default::default()
-                                }
+                        }
+                        Err(err) => match err.error() {
+                            CallRpcMethodErrorKind::ConnectionClosed => {
+                                log::warn!("Connection closed while getting sites info");
+                                continue
                             }
-                        };
+                            _ => {
+                                log::error!("Get sites info error: {err}");
+                                Default::default()
+                            }
+                        }
+                    };
 
                     log::info!("Loaded sites:\n{}", sites_info
                         .iter()
