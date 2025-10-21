@@ -358,22 +358,6 @@ mod tests {
                 starting_files: vec![],
                 expected_file_paths: vec![],
             },
-            // TestCase {
-            //     name: "ProcessNotification: non-shv/ notifications are skipped",
-            //     steps: &[
-            //         Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("something_else/site1/some_value_node", "chng", Some(20.into())))))
-            //     ],
-            //     starting_files: vec![],
-            //     expected_file_paths: vec![],
-            // },
-            // TestCase {
-            //     name: "ProcessNotification: notifications from unknown sites are skipped",
-            //     steps: &[
-            //         Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/unknown_site/some_value_node", "chng", Some(20.into())))))
-            //     ],
-            //     starting_files: vec![],
-            //     expected_file_paths: vec![],
-            // },
             TestCase {
                 name: "ProcessNotification: notifications get written to disk",
                 steps: &[
