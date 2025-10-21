@@ -857,6 +857,7 @@ mod tests {
                     Box::new(ExpectCall("sites/legacy_sync_path_device/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectCall("sites/node/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(SendSignal("shv/node/*:*:chng".to_string(), "shv/node/some_value".to_string(), "chng".to_string(), RpcValue::null())),
                     Box::new(ExpectDirtylogCommand::ProcessNotification),
                     Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
