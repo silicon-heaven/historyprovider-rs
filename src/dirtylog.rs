@@ -6,7 +6,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
 use futures::stream::FuturesUnordered;
-use futures::{StreamExt};
+use futures::StreamExt;
 use log::{debug, error, info, warn};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
@@ -298,7 +298,7 @@ mod tests {
     use log::debug;
     use shvclient::client::ClientCommand;
     use shvproto::DateTime;
-    use shvrpc::{rpcframe::RpcFrame};
+    use shvrpc::rpcframe::RpcFrame;
 
     use crate::{State, datachange::DataChange, dirtylog::{DirtyLogCommand, dirtylog_task}, journalentry::JournalEntry, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
 

@@ -318,6 +318,7 @@ fn online_status_worker(
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct ParsedNotification {
     pub(crate) site_path: String,
     pub(crate) property_path: String,
@@ -651,6 +652,35 @@ mod tests {
     use shvrpc::rpcframe::RpcFrame;
 
     use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
+
+    #[test]
+    fn parse_notification() {
+        let dummy_siteinfo = || SiteInfo { name: Default::default(), site_type: Default::default(), sub_hp: Default::default() };
+        let sites_info = BTreeMap::from([
+            ("foo/site1".to_string(), dummy_siteinfo()),
+            ("foo/site2".to_string(), dummy_siteinfo()),
+        ]);
+        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("something/site1/some_value_node", "chng", Some(20.into())), &sites_info), None);
+        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/bar/site1/some_value_node", "chng", Some(20.into())), &sites_info), None);
+        assert_eq!(
+            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site1/xyz/node", "chng", Some(20.into())), &sites_info),
+            Some(super::ParsedNotification {
+                site_path: "foo/site1".into(),
+                property_path: "xyz/node".into(),
+                signal: "chng".into(),
+                param: 20.into(),
+            })
+        );
+        assert_eq!(
+            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site2/none", "chng", None), &sites_info),
+            Some(super::ParsedNotification {
+                site_path: "foo/site2".into(),
+                property_path: "none".into(),
+                signal: "chng".into(),
+                param: RpcValue::null(),
+            })
+        );
+    }
 
     #[test]
     fn collect_sites() {
