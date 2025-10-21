@@ -325,12 +325,12 @@ pub(crate) struct ParsedNotification {
     pub(crate) param: RpcValue,
 }
 
-pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_data: &SitesData) -> Option<ParsedNotification> {
+pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap<String, SiteInfo>) -> Option<ParsedNotification> {
     let signal = msg.method().unwrap_or_default().to_string();
     let path = msg.shv_path().unwrap_or_default().to_string();
     let param = msg.param().unwrap_or_default();
     let stripped_path = path.strip_prefix("shv/")?;
-    let (site_path, property_path) = find_longest_path_prefix(&*sites_data.sites_info, stripped_path)?;
+    let (site_path, property_path) = find_longest_path_prefix(sites_info, stripped_path)?;
     Some(ParsedNotification {
         site_path: site_path.to_string(),
         property_path: property_path.to_string(),
@@ -577,7 +577,7 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
-                let Some(ParsedNotification { site_path, signal, param, .. }) = parse_notification(&msg, &*app_state.sites_data.read().await) else {
+                let Some(ParsedNotification { site_path, signal, param, .. }) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
                     continue
                 };
 
@@ -609,7 +609,7 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
-                let Some(parsed_notification) = parse_notification(&msg, &*app_state.sites_data.read().await) else {
+                let Some(parsed_notification) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
                     continue
                 };
                 if let Some(tx) = online_status_channels.get(&parsed_notification.site_path) {
