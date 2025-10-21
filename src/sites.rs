@@ -163,33 +163,31 @@ fn collect_sub_hps(
         .collect()
 }
 
-fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<Alarm> {
-    let new_alarms = collect_alarms(type_info, property_path, value);
+pub(crate) fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<AlarmWithTimestamp> {
+    let new_alarms = collect_alarms(type_info, property_path, value)
+        .into_iter()
+        .map(|alarm| AlarmWithTimestamp {
+            alarm,
+            timestamp,
+            stale: false,
+        });
 
     let mut updated_alarms = Vec::new();
 
     for new_alarm in new_alarms {
-        if new_alarm.is_active {
-            if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.path) {
-                if existing.alarm != new_alarm {
-                    *existing = AlarmWithTimestamp {
-                        alarm: new_alarm.clone(),
-                        timestamp,
-                        stale: false,
-                    };
+        if new_alarm.alarm.is_active {
+            if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.alarm.path) {
+                if existing.alarm != new_alarm.alarm {
+                    *existing = new_alarm.clone();
                     updated_alarms.push(new_alarm);
                 }
             } else {
-                alarms_for_site.push(AlarmWithTimestamp {
-                    alarm: new_alarm.clone(),
-                    timestamp,
-                    stale: false,
-                });
+                alarms_for_site.push(new_alarm.clone());
                 updated_alarms.push(new_alarm);
             }
         } else {
             let old_len = alarms_for_site.len();
-            alarms_for_site.retain(|a| a.alarm.path != new_alarm.path);
+            alarms_for_site.retain(|a| a.alarm.path != new_alarm.alarm.path);
             if alarms_for_site.len() != old_len {
                 updated_alarms.push(new_alarm);
             }

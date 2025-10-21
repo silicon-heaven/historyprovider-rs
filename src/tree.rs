@@ -12,7 +12,7 @@ use sha1::Digest;
 use shvclient::client::MetaMethods;
 use shvclient::clientnode::{children_on_path, ConstantNode, METH_LS};
 use shvclient::AppState;
-use shvproto::RpcValue;
+use shvproto::{FromRpcValue, RpcValue, ToRpcValue};
 use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
@@ -26,13 +26,14 @@ use crate::cleanup::collect_log2_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Header, Log2Reader};
-use crate::sites::SubHpInfo;
+use crate::sites::{update_alarms, SubHpInfo};
 use crate::util::{get_files, is_log2_file};
-use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
+use crate::{AlarmWithTimestamp, ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
 const METH_ALARM_TABLE: &str = "alarmTable";
+const METH_ALARM_LOG: &str = "alarmLog";
 const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod {
@@ -52,6 +53,16 @@ const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod {
     param: "RpcValue",
     result: "RpcValue",
     signals: &[("alarmmod", Some("Null"))],
+    description: "",
+};
+
+const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod {
+    name: METH_ALARM_LOG,
+    flags: 0,
+    access: shvrpc::metamethod::AccessLevel::Read,
+    param: "RpcValue",
+    result: "RpcValue",
+    signals: &[],
     description: "",
 };
 
@@ -925,6 +936,59 @@ async fn alarmtable_handler(
     }
 }
 
+#[derive(FromRpcValue)]
+struct AlarmLogParams {
+    since: shvproto::DateTime,
+    until: shvproto::DateTime,
+}
+
+async fn alarmlog_handler(
+    rq: RpcMessage,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let params = AlarmLogParams::try_from(rq.param().unwrap_or_default())
+        .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmLog parameters: {err}")))?;
+
+    let site_path = rq.shv_path().unwrap_or_default();
+
+    let getlog_params = GetLog2Params {
+        since: GetLog2Since::DateTime(params.since),
+        until: Some(params.until),
+        with_snapshot: true,
+        ..Default::default()
+    };
+
+    #[derive(ToRpcValue)]
+    struct AlarmLog {
+        snapshot: Vec<AlarmWithTimestamp>,
+        events: Vec<AlarmWithTimestamp>,
+    }
+
+    let typeinfos = &app_state.sites_data.read().await.typeinfos;
+    let Some(Ok(type_info)) = typeinfos.get(site_path) else {
+        return Ok(BTreeMap::from([(site_path.to_string(), RpcValue::from(shvproto::List::new()))]).into());
+    };
+
+    let mut tmp_alarms = Vec::<AlarmWithTimestamp>::new();
+
+    let log = getlog_handler(site_path, &getlog_params, app_state.clone()).await?;
+    for entry in log.snapshot_entries {
+        update_alarms(&mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+    }
+
+    let snapshot = tmp_alarms.clone();
+
+    let events = log.event_entries
+        .into_iter()
+        .flat_map(|entry| update_alarms(&mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec)))
+        .collect::<Vec<_>>();
+
+    Ok(AlarmLog {
+        events,
+        snapshot,
+    }.into())
+}
+
 type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
 pub(crate) struct GetLogResult {
@@ -1158,6 +1222,7 @@ async fn history_request_handler(
         METH_LS => Ok(children.into()),
         METH_GET_LOG => getlog_handler_rq(rq, app_state).await,
         METH_ALARM_TABLE => alarmtable_handler(rq, app_state).await,
+        METH_ALARM_LOG => alarmlog_handler(rq, app_state).await,
         METH_PUSH_LOG => pushlog_handler(rq, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
     }
@@ -1235,7 +1300,7 @@ pub(crate) async fn methods_getter(
                     .is_some_and(|sub_hp_info| matches!(sub_hp_info, SubHpInfo::PushLog)) {
                         MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_PUSH_LOG])
                     } else {
-                        MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_ALARM_TABLE])
+                        MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_ALARM_TABLE, &META_METHOD_ALARM_LOG])
                     };
                 Some(meta_methods)
             } else {
