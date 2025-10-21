@@ -789,9 +789,9 @@ async fn pushlog_handler(
 
 pub async fn getlog_handler(
     site_path: &str,
-    params: GetLog2Params,
+    params: &GetLog2Params,
     app_state: AppState<State>,
-) -> RpcRequestResult {
+) -> Result<GetLogResult, RpcError> {
     if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));
     }
@@ -877,7 +877,17 @@ pub async fn getlog_handler(
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
 
-    let getlog_result = getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, &params).await;
+    Ok(getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, params).await)
+}
+
+async fn getlog_handler_rq(
+    rq: RpcMessage,
+    app_state: AppState<State>,
+) -> RpcRequestResult {
+    let site_path = rq.shv_path().unwrap_or_default();
+    let params = GetLog2Params::try_from(rq.param().unwrap_or_default())
+        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
+    let getlog_result = getlog_handler(site_path, &params, app_state).await?;
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
         getlog_result.entries.iter().map(Arc::as_ref),
         params.with_paths_dict
@@ -893,21 +903,11 @@ pub async fn getlog_handler(
         with_paths_dict: getlog_result.with_paths_dict,
         with_snapshot: getlog_result.with_snapshot,
         paths_dict,
-        log_params: params.clone(),
+        log_params: params,
         log_version: 2,
     }.into()));
 
     Ok(result)
-}
-
-async fn getlog_handler_rq(
-    rq: RpcMessage,
-    app_state: AppState<State>,
-) -> RpcRequestResult {
-    let site_path = rq.shv_path().unwrap_or_default();
-    let params = GetLog2Params::try_from(rq.param().unwrap_or_default())
-        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
-    getlog_handler(site_path, params, app_state).await
 }
 
 async fn alarmtable_handler(
@@ -926,7 +926,7 @@ async fn alarmtable_handler(
 
 type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
-struct GetLogResult {
+pub(crate) struct GetLogResult {
     record_count: i64,
     record_count_limit: i64,
     record_count_limit_hit: bool,
@@ -935,7 +935,7 @@ struct GetLogResult {
     until: shvproto::DateTime,
     with_paths_dict: bool,
     with_snapshot: bool,
-    entries: Vec<Arc<JournalEntry>>,
+    pub(crate) entries: Vec<Arc<JournalEntry>>,
 }
 
 async fn getlog_impl(
