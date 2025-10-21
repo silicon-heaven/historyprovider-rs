@@ -5,16 +5,17 @@ use std::time::Duration;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList};
 use shvclient::clientnode::{find_longest_path_prefix, METH_DIR, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
-use shvproto::RpcValue;
+use shvproto::{DateTime, RpcValue};
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio::time::timeout;
 
-use crate::alarm::collect_alarms;
+use crate::alarm::{collect_alarms, Alarm};
+use crate::journalrw::Log2Reader;
 use crate::tree::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
@@ -177,6 +178,7 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
                     *existing = AlarmWithTimestamp {
                         alarm: new_alarm,
                         timestamp,
+                        stale: false,
                     };
                     updated = true;
                 }
@@ -184,6 +186,7 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
                 alarms_for_site.push(AlarmWithTimestamp {
                     alarm: new_alarm,
                     timestamp,
+                    stale: false,
                 });
                 updated = true;
             }
@@ -207,20 +210,63 @@ async fn set_online_status(
 )
 {
     let site = site.as_ref();
-    if let Some(online_status) = app_state.online_states.write().await.get_mut(site) {
-        let changed = if new_status != *online_status {
-            debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
-            *online_status = new_status;
-            true
-        } else {
-            false
-        };
-        if changed {
-            client_commands
-                .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
-                .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
+    let mut online_states = app_state.online_states.write().await;
+    let Some(online_status) = online_states.get_mut(site) else {
+        error!(target: "OnlineStatus", "No onlineStatus for site {site}");
+        return
+    };
+    if *online_status == new_status {
+        return;
+    }
+
+    debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
+    *online_status = new_status;
+
+	static SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
+
+    let mut alarms = app_state.alarms.write().await;
+    let Some(site_alarms) = alarms.get_mut(site) else {
+        error!(target: "OnlineStatus", "No alarms for site {site}");
+        return;
+    };
+
+    let offline_alarm_idx = site_alarms
+        .iter()
+        .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY);
+
+    let emit_alarmmod = if new_status == SiteOnlineStatus::Offline  {
+        site_alarms.iter_mut().for_each(|alarm_with_ts| alarm_with_ts.stale = true);
+        if offline_alarm_idx.is_none() {
+            site_alarms.push(AlarmWithTimestamp {
+                alarm: Alarm {
+                    path: SITE_OFFLINE_ALARM_KEY.into(),
+                    is_active: true,
+                    description: "Site is offline".into(),
+                    label: "Offline".into(),
+                    level: 0,
+                    severity: crate::alarm::Severity::Error,
+                },
+                timestamp: DateTime::now(),
+                stale: false,
+            });
         }
-        // TODO: generate/remove a 'site-offline' alarm
+        true
+    } else if new_status == SiteOnlineStatus::Online && let Some(idx) = offline_alarm_idx {
+        site_alarms.remove(idx);
+        true
+    } else {
+        false
+    };
+
+
+    client_commands
+        .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
+        .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
+
+    if emit_alarmmod {
+        client_commands
+            .send_message(shvrpc::RpcMessage::new_signal(site, "alarmmod", None))
+            .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'alarmmod' signal: {err}"));
     }
 }
 

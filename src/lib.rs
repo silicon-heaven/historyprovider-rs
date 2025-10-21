@@ -52,12 +52,14 @@ impl HpConfig {
 struct AlarmWithTimestamp {
     alarm: Alarm,
     timestamp: shvproto::DateTime,
+    stale: bool,
 }
 
 impl From<AlarmWithTimestamp> for RpcValue {
     fn from(value: AlarmWithTimestamp) -> Self {
         let mut alarm_map = value.alarm.into_rpc_map(true);
         alarm_map.insert("timestamp".to_string(), value.timestamp.into());
+        alarm_map.insert("stale".to_string(), value.stale.into());
         alarm_map.into()
     }
 }
