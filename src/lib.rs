@@ -9,7 +9,7 @@ use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;
 
 use crate::alarm::Alarm;
-
+use self::sites::SiteOnlineStatus;
 use self::util::DedupSender;
 
 mod sites;
@@ -52,12 +52,14 @@ impl HpConfig {
 struct AlarmWithTimestamp {
     alarm: Alarm,
     timestamp: shvproto::DateTime,
+    stale: bool,
 }
 
 impl From<AlarmWithTimestamp> for RpcValue {
     fn from(value: AlarmWithTimestamp) -> Self {
         let mut alarm_map = value.alarm.into_rpc_map(true);
         alarm_map.insert("timestamp".to_string(), value.timestamp.into());
+        alarm_map.insert("stale".to_string(), value.stale.into());
         alarm_map.into()
     }
 }
@@ -66,6 +68,7 @@ struct State {
     sites_data: RwLock<sites::SitesData>,
     sync_info: sync::SyncInfo,
     alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
+    online_states: RwLock<BTreeMap<String, SiteOnlineStatus>>,
     config: HpConfig,
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
@@ -86,6 +89,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         sites_data: RwLock::default(),
         sync_info: Default::default(),
         alarms: Default::default(),
+        online_states: Default::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
         dirtylog_cmd_tx,

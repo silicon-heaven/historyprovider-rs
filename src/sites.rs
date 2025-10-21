@@ -1,21 +1,32 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
-use log::warn;
-use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallLsList};
-use shvclient::clientnode::{find_longest_path_prefix, SIG_CHNG};
+use log::{debug, error, warn};
+use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList};
+use shvclient::clientnode::{find_longest_path_prefix, METH_DIR, SIG_CHNG};
 use shvclient::{AppState, ClientEventsReceiver};
-use shvproto::RpcValue;
+use shvproto::{DateTime, RpcValue};
+use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{join_path, RpcMessageMetaTags};
+use tokio::time::timeout;
 
-use crate::alarm::collect_alarms;
+use crate::alarm::{collect_alarms, Alarm};
 use crate::tree::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, ClientCommandSender, State, Subscriber};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum SiteOnlineStatus {
+    #[default]
+    Unknown,
+    Offline,
+    Online,
+}
 
 #[derive(Clone,Default)]
 pub(crate) struct SitesData {
@@ -166,6 +177,7 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
                     *existing = AlarmWithTimestamp {
                         alarm: new_alarm,
                         timestamp,
+                        stale: false,
                     };
                     updated = true;
                 }
@@ -173,6 +185,7 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
                 alarms_for_site.push(AlarmWithTimestamp {
                     alarm: new_alarm,
                     timestamp,
+                    stale: false,
                 });
                 updated = true;
             }
@@ -188,6 +201,145 @@ fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &Type
     updated
 }
 
+async fn set_online_status(
+    site: impl AsRef<str>,
+    new_status: SiteOnlineStatus,
+    client_commands: &ClientCommandSender,
+    app_state: &AppState<State>
+)
+{
+    let site = site.as_ref();
+    let mut online_states = app_state.online_states.write().await;
+    let Some(online_status) = online_states.get_mut(site) else {
+        error!(target: "OnlineStatus", "No onlineStatus for site {site}");
+        return
+    };
+    if *online_status == new_status {
+        return;
+    }
+
+    debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
+    *online_status = new_status;
+
+	static SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
+
+    let mut alarms = app_state.alarms.write().await;
+    let Some(site_alarms) = alarms.get_mut(site) else {
+        error!(target: "OnlineStatus", "No alarms for site {site}");
+        return;
+    };
+
+    let offline_alarm_idx = site_alarms
+        .iter()
+        .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY);
+
+    let emit_alarmmod = if new_status == SiteOnlineStatus::Offline  {
+        site_alarms.iter_mut().for_each(|alarm_with_ts| alarm_with_ts.stale = true);
+        if offline_alarm_idx.is_none() {
+            site_alarms.push(AlarmWithTimestamp {
+                alarm: Alarm {
+                    path: SITE_OFFLINE_ALARM_KEY.into(),
+                    is_active: true,
+                    description: "Site is offline".into(),
+                    label: "Offline".into(),
+                    level: 0,
+                    severity: crate::alarm::Severity::Error,
+                },
+                timestamp: DateTime::now(),
+                stale: false,
+            });
+        }
+        true
+    } else if new_status == SiteOnlineStatus::Online && let Some(idx) = offline_alarm_idx {
+        site_alarms.remove(idx);
+        true
+    } else {
+        false
+    };
+
+
+    client_commands
+        .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
+        .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
+
+    if emit_alarmmod {
+        client_commands
+            .send_message(shvrpc::RpcMessage::new_signal(site, "alarmmod", None))
+            .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'alarmmod' signal: {err}"));
+    }
+}
+
+fn online_status_worker(
+    site: impl Into<String>,
+    mut events: UnboundedReceiver<SiteOnlineStatus>,
+    client_commands: ClientCommandSender,
+    app_state: AppState<State>
+) -> impl Future<Output = ()>
+{
+    const ONLINE_TIMER: Duration = Duration::from_secs(10);
+    let site = site.into();
+
+    debug!(target: "OnlineStatus", "[{site}] Worker started");
+    async move {
+        loop {
+            match timeout(ONLINE_TIMER, events.next()).await {
+                // Received a message before timeout
+                Ok(Some(status)) => {
+                    set_online_status(&site, status, &client_commands, &app_state).await;
+                }
+
+                // Channel closed
+                Ok(None) => {
+                    debug!(target: "OnlineStatus", "[{site}] Events channel closed");
+                    set_online_status(&site, SiteOnlineStatus::Unknown, &client_commands, &app_state).await;
+                    break;
+                }
+
+                // Timeout elapsed
+                Err(_) => {
+                    debug!(target: "OnlineStatus", "[{site}] Timer expired, checking the site status by an RPC call");
+                    let dir_result = RpcCallDirExists::new(&join_path!("shv", &site), METH_DIR)
+                        .timeout(ONLINE_TIMER)
+                        .exec(&client_commands)
+                        .await;
+                    if dir_result.is_ok() {
+                        set_online_status(&site, SiteOnlineStatus::Online, &client_commands, &app_state).await;
+                    } else if let Err(err) = dir_result
+                        && let CallRpcMethodErrorKind::RpcError(RpcError { code, .. }) = err.error()
+                        && (*code == RpcErrorCode::MethodCallTimeout || *code == RpcErrorCode::MethodNotFound)
+                    {
+                        set_online_status(&site, SiteOnlineStatus::Offline, &client_commands, &app_state).await;
+                    }
+                }
+            }
+        }
+        debug!(target: "OnlineStatus", "[{site}] Worker finished");
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
+pub(crate) struct ParsedNotification {
+    pub(crate) site_path: String,
+    pub(crate) property_path: String,
+    pub(crate) signal: String,
+    pub(crate) param: RpcValue,
+}
+
+pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap<String, SiteInfo>) -> Option<ParsedNotification> {
+    let signal = msg.method().unwrap_or_default().to_string();
+    let path = msg.shv_path().unwrap_or_default().to_string();
+    let param = msg.param().unwrap_or_default();
+    let stripped_path = path.strip_prefix("shv/")?;
+    let (site_path, property_path) = find_longest_path_prefix(sites_info, stripped_path)?;
+    Some(ParsedNotification {
+        site_path: site_path.to_string(),
+        property_path: property_path.to_string(),
+        signal: signal.to_string(),
+        param: param.clone(),
+    })
+}
+
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
@@ -197,6 +349,7 @@ pub(crate) async fn sites_task(
     let mut client_evt_rx = client_evt_rx.fuse();
     let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
     let mut subscribers = SelectAll::<Subscriber>::default();
+    let mut online_status_channels = BTreeMap::new();
 
     enum PeriodicSyncCommand {
         Enable,
@@ -350,21 +503,25 @@ pub(crate) async fn sites_task(
 
                     let typeinfos = Arc::new(typeinfos);
 
-                    let sites = sites_info.keys().cloned().collect::<Vec<_>>();
-                    *app_state.sites_data.write().await = SitesData { sites_info, sub_hps, typeinfos: typeinfos.clone() };
+                    *app_state.sites_data.write().await = SitesData {
+                        sites_info: sites_info.clone(),
+                        sub_hps: sub_hps.clone(),
+                        typeinfos: typeinfos.clone()
+                    };
+
                     let params = crate::journalrw::GetLog2Params {
                         since: crate::journalrw::GetLog2Since::LastEntry,
                         with_snapshot: true,
                         ..Default::default()
                     };
                     let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
-                    for site_path in sites {
-                        let Some(Ok(type_info)) = typeinfos.get(&site_path) else {
+                    for site_path in sites_info.keys() {
+                        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
                             // No typeinfo for this site - skip
                             continue;
                         };
 
-                        let log = match getlog_handler(&site_path, &params, app_state.clone()).await {
+                        let log = match getlog_handler(site_path, &params, app_state.clone()).await {
                             Ok(log) => log,
                             Err(err) => {
                                 log::error!("couldn't init alarms: getlog failed: {err}");
@@ -381,6 +538,22 @@ pub(crate) async fn sites_task(
 
                     *app_state.alarms.write().await = alarms;
 
+                    let mut online_status_workers = Vec::new();
+                    for (site, info) in sites_info.iter() {
+                        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
+                            continue
+                        };
+                        let (tx, rx) = futures::channel::mpsc::unbounded();
+                        online_status_channels.insert(site.to_string(), tx);
+                        online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
+                    }
+                    tokio::spawn(async move {
+                        debug!(target: "OnlineStatus", "online status task starts");
+                        futures::future::join_all(online_status_workers).await;
+                        debug!(target: "OnlineStatus", "online status task finish");
+                    });
+                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
                         .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
@@ -391,6 +564,7 @@ pub(crate) async fn sites_task(
 
                     subscribers.clear();
                     mntchng_subscribers.clear();
+                    online_status_channels.clear();
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Disable)
                         .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
@@ -404,26 +578,29 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
-                let signal = msg.method().unwrap_or_default().to_string();
+                let Some(ParsedNotification { site_path, signal, param, .. }) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
+                    continue
+                };
+
                 if signal != "mntchng" {
                     continue;
                 }
-                let path = msg.shv_path().unwrap_or_default().to_string();
+                let mounted = param.as_bool();
+                if mounted {
+                    log::info!("Site mounted: {site_path}");
+                    app_state.sync_cmd_tx
+                        .send(crate::sync::SyncCommand::SyncSite(site_path.clone()))
+                        .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
 
-                let Some(stripped_path) = path.strip_prefix("shv/") else {
-                    continue;
-                };
-                let Some((site_path, _)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
-                    continue;
-                };
-                if !msg.param().is_some_and(RpcValue::as_bool) {
+                    if let Some(tx) = online_status_channels.get(&site_path) {
+                        tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                    }
+                } else {
                     log::info!("Site unmounted: {site_path}");
-                    continue;
+                    if let Some(tx) = online_status_channels.get(&site_path) {
+                        tx.unbounded_send(SiteOnlineStatus::Offline).ok();
+                    }
                 }
-                log::info!("Site mounted: {site_path}");
-                app_state.sync_cmd_tx
-                    .send(crate::sync::SyncCommand::SyncSite(site_path.into()))
-                    .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
             }
             notification_frame = subscribers.select_next_some() => {
                 let msg = match notification_frame.to_rpcmesage() {
@@ -433,41 +610,28 @@ pub(crate) async fn sites_task(
                         continue;
                     }
                 };
+                let Some(parsed_notification) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
+                    continue
+                };
+                if let Some(tx) = online_status_channels.get(&parsed_notification.site_path) {
+                    tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                }
 
                 app_state.dirtylog_cmd_tx
-                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(msg.clone()))
+                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
                     .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
 
-                let signal = msg.method().unwrap_or_default().to_string();
-                if signal != "chng" {
-                    continue;
-                }
-                let path = msg.shv_path().unwrap_or_default().to_string();
-
-                let Some(stripped_path) = path.strip_prefix("shv/") else {
-                    continue;
-                };
-
-                let Some((site_path, property_path)) = find_longest_path_prefix(&*app_state.sites_data.read().await.sites_info, stripped_path) else {
-                    continue;
-                };
-
                 let typeinfos = &app_state.sites_data.read().await.typeinfos;
-                let Some(Ok(type_info)) = typeinfos.get(site_path) else {
-                    continue;
-                };
-
-                let Some(value) = msg.param() else {
+                let Some(Ok(type_info)) = typeinfos.get(&parsed_notification.site_path) else {
                     continue;
                 };
 
                 let alarms = &mut *app_state.alarms.write().await;
+                let alarms_for_site = alarms.entry(parsed_notification.site_path.clone()).or_default();
 
-                let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
-
-                let updated = update_alarms(alarms_for_site, type_info, property_path, value, shvproto::DateTime::now());
+                let updated = update_alarms(alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
                 if updated {
-                    client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(site_path, "alarmmod", None))
+                    client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, "alarmmod", None))
                         .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                 }
             }
@@ -488,6 +652,35 @@ mod tests {
     use shvrpc::rpcframe::RpcFrame;
 
     use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
+
+    #[test]
+    fn parse_notification() {
+        let dummy_siteinfo = || SiteInfo { name: Default::default(), site_type: Default::default(), sub_hp: Default::default() };
+        let sites_info = BTreeMap::from([
+            ("foo/site1".to_string(), dummy_siteinfo()),
+            ("foo/site2".to_string(), dummy_siteinfo()),
+        ]);
+        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("something/site1/some_value_node", "chng", Some(20.into())), &sites_info), None);
+        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/bar/site1/some_value_node", "chng", Some(20.into())), &sites_info), None);
+        assert_eq!(
+            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site1/xyz/node", "chng", Some(20.into())), &sites_info),
+            Some(super::ParsedNotification {
+                site_path: "foo/site1".into(),
+                property_path: "xyz/node".into(),
+                signal: "chng".into(),
+                param: 20.into(),
+            })
+        );
+        assert_eq!(
+            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site2/none", "chng", None), &sites_info),
+            Some(super::ParsedNotification {
+                site_path: "foo/site2".into(),
+                property_path: "none".into(),
+                signal: "chng".into(),
+                param: RpcValue::null(),
+            })
+        );
+    }
 
     #[test]
     fn collect_sites() {

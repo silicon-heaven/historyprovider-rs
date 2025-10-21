@@ -6,25 +6,24 @@ use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot::Sender as OneshotSender;
 use futures::io::BufReader;
 use futures::stream::FuturesUnordered;
-use futures::{StreamExt};
+use futures::StreamExt;
 use log::{debug, error, info, warn};
 use shvclient::{AppState, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
-use shvrpc::{RpcMessage, RpcMessageMetaTags};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::datachange::DataChange;
 use crate::journalentry::JournalEntry;
 use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_SPONTANEOUS_BIT};
+use crate::sites::ParsedNotification;
 use crate::util::{get_files, is_log2_file};
 use crate::{ClientCommandSender, State};
 
-use shvclient::clientnode::find_longest_path_prefix;
 
 #[derive(Debug)]
 pub(crate) enum DirtyLogCommand {
-    ProcessNotification(RpcMessage),
+    ProcessNotification(ParsedNotification),
     Trim {
         site: String
     },
@@ -265,27 +264,11 @@ pub(crate) async fn dirtylog_task(
                 DirtyLogCommand::Get { site, response_tx } => {
                     request_scheduler.schedule_new(site, Request::Get(response_tx));
                 }
-                DirtyLogCommand::ProcessNotification(msg) => {
-                    let signal = msg.method().unwrap_or_default().to_string();
-                    let path = msg.shv_path().unwrap_or_default().to_string();
-                    let param = msg.param().unwrap_or_default();
-
-                    let Some(stripped_path) = path.strip_prefix("shv/") else {
-                        continue;
-                    };
-                    let sites_data = app_state
-                        .sites_data
-                        .read()
-                        .await;
-                    let Some((site_path, property_path)) = find_longest_path_prefix(&*sites_data.sites_info, stripped_path) else {
-                        continue;
-                    };
-                    drop(sites_data);
-
-                    let data_change = DataChange::from(param.clone());
+                DirtyLogCommand::ProcessNotification(ParsedNotification { site_path, property_path, signal, param }) => {
+                    let data_change = DataChange::from(param);
                     let journal_entry = JournalEntry {
                         epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
-                        path: property_path.to_string(),
+                        path: property_path,
                         signal,
                         source: Default::default(),
                         value: data_change.value,
@@ -296,7 +279,7 @@ pub(crate) async fn dirtylog_task(
                         provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
                     };
                     // Schedule next task
-                    request_scheduler.schedule_new(site_path.into(), Request::Append(journal_entry));
+                    request_scheduler.schedule_new(site_path, Request::Append(journal_entry));
                 }
             },
             site = request_scheduler.inflight.select_next_some() => {
@@ -315,7 +298,7 @@ mod tests {
     use log::debug;
     use shvclient::client::ClientCommand;
     use shvproto::DateTime;
-    use shvrpc::{rpcframe::RpcFrame, RpcMessage};
+    use shvrpc::rpcframe::RpcFrame;
 
     use crate::{State, datachange::DataChange, dirtylog::{DirtyLogCommand, dirtylog_task}, journalentry::JournalEntry, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
 
@@ -370,23 +353,7 @@ mod tests {
             TestCase {
                 name: "ProcessNotification: journaldir doesn't exist",
                 steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/site1/some_value_node", "chng", Some(20.into())))))
-                ],
-                starting_files: vec![],
-                expected_file_paths: vec![],
-            },
-            TestCase {
-                name: "ProcessNotification: non-shv/ notifications are skipped",
-                steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("something_else/site1/some_value_node", "chng", Some(20.into())))))
-                ],
-                starting_files: vec![],
-                expected_file_paths: vec![],
-            },
-            TestCase {
-                name: "ProcessNotification: notifications from unknown sites are skipped",
-                steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/unknown_site/some_value_node", "chng", Some(20.into())))))
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), param: 20.into() })))
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
@@ -394,12 +361,12 @@ mod tests {
             TestCase {
                 name: "ProcessNotification: notifications get written to disk",
                 steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(RpcMessage::new_signal("shv/site1/some_value_node", "chng", Some(DataChange{
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), param: DataChange{
                         value: 20.into(),
                         date_time: Some(DateTime::from_iso_str("2022-07-07T00:00:00.000").expect("DateTime must work")),
                         value_flags: 0,
                         short_time: None,
-                    }.into()))))),
+                    }.into() }))),
                 ],
                 starting_files: vec![("site1/2022-07-07T18-06-15-000.log2", "")],
                 expected_file_paths: vec![
