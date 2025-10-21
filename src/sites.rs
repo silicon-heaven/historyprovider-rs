@@ -11,7 +11,6 @@ use shvproto::RpcValue;
 use shvrpc::{join_path, RpcMessageMetaTags};
 
 use crate::alarm::collect_alarms;
-use crate::journalrw::Log2Reader;
 use crate::tree::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
@@ -365,7 +364,7 @@ pub(crate) async fn sites_task(
                             continue;
                         };
 
-                        let log = match getlog_handler(&site_path, params.clone(), app_state.clone()).await {
+                        let log = match getlog_handler(&site_path, &params, app_state.clone()).await {
                             Ok(log) => log,
                             Err(err) => {
                                 log::error!("couldn't init alarms: getlog failed: {err}");
@@ -373,23 +372,10 @@ pub(crate) async fn sites_task(
                             }
                         };
 
-                        let reader = match Log2Reader::new(log) {
-                            Ok(reader) => reader,
-                            Err(err) => {
-                                log::error!("couldn't init alarms: reader failed: {err}");
-                                continue;
-                            }
-                        };
-
                         let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
 
-                        for entry in reader {
-                            let Ok(valid_entry) = entry else {
-                                log::warn!("skipping invalid entry");
-                                continue;
-                            };
-
-                            update_alarms(alarms_for_site, type_info, &valid_entry.path, &valid_entry.value, shvproto::DateTime::from_epoch_msec(valid_entry.epoch_msec));
+                        for entry in log.entries {
+                            update_alarms(alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
                         }
                     }
 
