@@ -163,42 +163,38 @@ fn collect_sub_hps(
         .collect()
 }
 
-const SIG_CMDLOG: &str = "cmdlog";
+pub(crate) fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<AlarmWithTimestamp> {
+    let new_alarms = collect_alarms(type_info, property_path, value)
+        .into_iter()
+        .map(|alarm| AlarmWithTimestamp {
+            alarm,
+            timestamp,
+            stale: false,
+        });
 
-fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> bool {
-    let new_alarms = collect_alarms(type_info, property_path, value);
-
-    let mut updated = false;
+    let mut updated_alarms = Vec::new();
 
     for new_alarm in new_alarms {
-        if new_alarm.is_active {
-            if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.path) {
-                if existing.alarm != new_alarm {
-                    *existing = AlarmWithTimestamp {
-                        alarm: new_alarm,
-                        timestamp,
-                        stale: false,
-                    };
-                    updated = true;
+        if new_alarm.alarm.is_active {
+            if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.alarm.path) {
+                if existing.alarm != new_alarm.alarm {
+                    *existing = new_alarm.clone();
+                    updated_alarms.push(new_alarm);
                 }
             } else {
-                alarms_for_site.push(AlarmWithTimestamp {
-                    alarm: new_alarm,
-                    timestamp,
-                    stale: false,
-                });
-                updated = true;
+                alarms_for_site.push(new_alarm.clone());
+                updated_alarms.push(new_alarm);
             }
         } else {
             let old_len = alarms_for_site.len();
-            alarms_for_site.retain(|a| a.alarm.path != new_alarm.path);
+            alarms_for_site.retain(|a| a.alarm.path != new_alarm.alarm.path);
             if alarms_for_site.len() != old_len {
-                updated = true;
+                updated_alarms.push(new_alarm);
             }
         }
     }
 
-    updated
+    updated_alarms
 }
 
 async fn set_online_status(
@@ -458,11 +454,13 @@ pub(crate) async fn sites_task(
                         .collect::<SelectAll<_>>()
                         .await;
 
+
                     subscribers = sites_info
                         .keys()
                         .flat_map(|path| {
                             let shv_path = join_path!("shv", path);
                             let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
+                            const SIG_CMDLOG: &str = "cmdlog";
                             let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
                             [sub_chng, sub_cmdlog]
                         })
@@ -531,7 +529,8 @@ pub(crate) async fn sites_task(
 
                         let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
 
-                        for entry in log.entries {
+                        let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
+                        for entry in chained_entries  {
                             update_alarms(alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
                         }
                     }
@@ -630,7 +629,7 @@ pub(crate) async fn sites_task(
                 let alarms_for_site = alarms.entry(parsed_notification.site_path.clone()).or_default();
 
                 let updated = update_alarms(alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
-                if updated {
+                if !updated.is_empty() {
                     client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, "alarmmod", None))
                         .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                 }
