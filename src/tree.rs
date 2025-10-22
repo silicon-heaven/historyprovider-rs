@@ -888,8 +888,9 @@ async fn getlog_handler_rq(
     let params = GetLog2Params::try_from(rq.param().unwrap_or_default())
         .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
     let getlog_result = getlog_handler(site_path, &params, app_state).await?;
+    let chained_entries = getlog_result.snapshot_entries.iter().map(Arc::as_ref).chain(getlog_result.event_entries.iter().map(Arc::as_ref));
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
-        getlog_result.entries.iter().map(Arc::as_ref),
+        chained_entries,
         params.with_paths_dict
     );
 
@@ -935,7 +936,8 @@ pub(crate) struct GetLogResult {
     until: shvproto::DateTime,
     with_paths_dict: bool,
     with_snapshot: bool,
-    pub(crate) entries: Vec<Arc<JournalEntry>>,
+    pub(crate) snapshot_entries: Vec<Arc<JournalEntry>>,
+    pub(crate) event_entries: Vec<Arc<JournalEntry>>,
 }
 
 async fn getlog_impl(
@@ -1127,11 +1129,11 @@ async fn getlog_impl(
     };
 
     let record_count = snapshot_entries.len() as i64 + context.entries.len() as i64;
-    let entries = snapshot_entries.into_iter().chain(context.entries.into_iter()).collect::<Vec<_>>();
 
     GetLogResult {
         record_count,
-        entries,
+        snapshot_entries,
+        event_entries: context.entries.into_iter().collect(),
         record_count_limit: context.record_count_limit as _,
         record_count_limit_hit: context.record_count_limit_hit,
         date_time: current_datetime,
@@ -1772,8 +1774,9 @@ mod tests {
 
         for (data, case) in test_cases {
             let result = get_log_entries(data(), case.params).await;
+            let chained_entries = result.snapshot_entries.into_iter().chain(result.event_entries.into_iter()).collect::<Vec<_>>();
             let expected = case.expected.into_iter().map(|(ts, path, val)| (ts.to_string(), path.to_string(), val)).collect::<Vec<_>>();
-            assert_eq!(result.entries.into_iter().map(|entry_val| (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path.clone(), entry_val.value.clone())).collect::<Vec<_>>(), expected, "Test case failed: {}", case.name);
+            assert_eq!(chained_entries.into_iter().map(|entry_val| (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path.clone(), entry_val.value.clone())).collect::<Vec<_>>(), expected, "Test case failed: {}", case.name);
             if let Some(expected_record_count_limit_hit) = case.expected_record_count_limit_hit {
                 assert_eq!(result.record_count_limit_hit, expected_record_count_limit_hit, "Test case failed: {}", case.name);
             }

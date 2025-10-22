@@ -531,7 +531,8 @@ pub(crate) async fn sites_task(
 
                         let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
 
-                        for entry in log.entries {
+                        let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
+                        for entry in chained_entries  {
                             update_alarms(alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
                         }
                     }
