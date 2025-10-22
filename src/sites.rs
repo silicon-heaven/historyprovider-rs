@@ -165,40 +165,40 @@ fn collect_sub_hps(
 
 const SIG_CMDLOG: &str = "cmdlog";
 
-fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> bool {
+fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<Alarm> {
     let new_alarms = collect_alarms(type_info, property_path, value);
 
-    let mut updated = false;
+    let mut updated_alarms = Vec::new();
 
     for new_alarm in new_alarms {
         if new_alarm.is_active {
             if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.path) {
                 if existing.alarm != new_alarm {
                     *existing = AlarmWithTimestamp {
-                        alarm: new_alarm,
+                        alarm: new_alarm.clone(),
                         timestamp,
                         stale: false,
                     };
-                    updated = true;
+                    updated_alarms.push(new_alarm);
                 }
             } else {
                 alarms_for_site.push(AlarmWithTimestamp {
-                    alarm: new_alarm,
+                    alarm: new_alarm.clone(),
                     timestamp,
                     stale: false,
                 });
-                updated = true;
+                updated_alarms.push(new_alarm);
             }
         } else {
             let old_len = alarms_for_site.len();
             alarms_for_site.retain(|a| a.alarm.path != new_alarm.path);
             if alarms_for_site.len() != old_len {
-                updated = true;
+                updated_alarms.push(new_alarm);
             }
         }
     }
 
-    updated
+    updated_alarms
 }
 
 async fn set_online_status(
@@ -630,7 +630,7 @@ pub(crate) async fn sites_task(
                 let alarms_for_site = alarms.entry(parsed_notification.site_path.clone()).or_default();
 
                 let updated = update_alarms(alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
-                if updated {
+                if !updated.is_empty() {
                     client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, "alarmmod", None))
                         .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                 }
