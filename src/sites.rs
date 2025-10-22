@@ -163,8 +163,6 @@ fn collect_sub_hps(
         .collect()
 }
 
-const SIG_CMDLOG: &str = "cmdlog";
-
 fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<Alarm> {
     let new_alarms = collect_alarms(type_info, property_path, value);
 
@@ -458,11 +456,13 @@ pub(crate) async fn sites_task(
                         .collect::<SelectAll<_>>()
                         .await;
 
+
                     subscribers = sites_info
                         .keys()
                         .flat_map(|path| {
                             let shv_path = join_path!("shv", path);
                             let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
+                            const SIG_CMDLOG: &str = "cmdlog";
                             let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
                             [sub_chng, sub_cmdlog]
                         })
