@@ -217,11 +217,14 @@ async fn set_online_status(
     debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
     *online_status = new_status;
 
-	static SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
+    client_commands
+        .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
+        .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
+
+    const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
 
     let mut alarms = app_state.alarms.write().await;
     let Some(site_alarms) = alarms.get_mut(site) else {
-        error!(target: "OnlineStatus", "No alarms for site {site}");
         return;
     };
 
@@ -252,11 +255,6 @@ async fn set_online_status(
     } else {
         false
     };
-
-
-    client_commands
-        .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
-        .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
 
     if emit_alarmmod {
         client_commands
@@ -650,7 +648,7 @@ mod tests {
     use shvproto::RpcValue;
     use shvrpc::rpcframe::RpcFrame;
 
-    use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
+    use crate::{dirtylog::DirtyLogCommand, sites::{sites_task, SiteInfo}, sync::SyncCommand, util::{init_logger, testing::{run_test, ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep}, DedupReceiver}, State};
 
     #[test]
     fn parse_notification() {
@@ -860,6 +858,7 @@ mod tests {
                     Box::new(SendSignal("shv/node/*:*:chng".to_string(), "shv/node/some_value".to_string(), "chng".to_string(), RpcValue::null())),
                     Box::new(ExpectDirtylogCommand::ProcessNotification),
                     Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
+                    Box::new(ExpectSignal("node", "onlinestatuschng", 2.into())),
                     Box::new(ExpectSyncCommand::SyncSite { expected_site: "node".to_string() }),
                     Box::new(ClientEvent::Disconnected),
                 ],
