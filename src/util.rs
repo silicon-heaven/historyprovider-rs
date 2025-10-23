@@ -289,6 +289,35 @@ pub mod testing {
         }
     }
 
+    pub struct ExpectSignal(pub &'static str, pub &'static str, pub RpcValue);
+    #[async_trait::async_trait]
+    impl<TestState> TestStep<TestState> for ExpectSignal {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+            let ExpectSignal(path, method, param) = self;
+            expect_signal(client_command_receiver, path, method, param).await;
+            pub async fn expect_signal(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, expected_shv_path: &str, expected_method: &str, expected_param: &RpcValue) {
+                let Some(event) = client_command_receiver.next().await else {
+                    panic!("got unexpected event");
+                };
+                match event {
+                    ClientCommand::SendMessage { message} => {
+                        let shv_path = message.shv_path().expect("shv path should exist");
+                        let method = message.method().expect("shv path should exist");
+                        let param = message.param().unwrap_or_default();
+                        debug!(target: "test-driver", "<== {shv_path}:{method}, param: {param}");
+                        assert!(message.is_signal());
+                        assert_eq!(shv_path, expected_shv_path);
+                        assert_eq!(method, expected_method);
+                        assert_eq!(param, expected_param);
+                    },
+                    _ => {
+                        panic!("got unexpected event other than SendMessage: {}", print_client_command(event));
+                    }
+                }
+            }
+        }
+    }
+
     pub struct ExpectCallParam(pub &'static str, pub &'static str, pub RpcValue, pub Result<RpcValue, RpcError>);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectCallParam {
