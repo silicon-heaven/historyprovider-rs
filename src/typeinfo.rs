@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use log::debug;
 use log::warn;
+use shvclient::clientnode::METH_DIR;
+use shvclient::clientnode::METH_LS;
 use shvproto::MetaMap;
 use shvproto::RpcValue;
 use shvproto::Map as RpcMap;
@@ -488,7 +490,7 @@ impl TryFrom<&RpcValue> for TypeDescription {
 //     }
 // }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct FieldDescription {
     data: RpcMap,
 }
@@ -540,7 +542,7 @@ impl TypeDescriptionMethods for FieldDescription {
 }
 impl FieldDescriptionMethods for FieldDescription { }
 
-#[derive(Clone,Default)]
+#[derive(Clone,Default,PartialEq)]
 pub struct PropertyDescription {
     base: FieldDescription,
 }
@@ -694,8 +696,7 @@ impl TryFrom<RpcValue> for MethodDescription {
                         .unwrap_or_default(),
                     extra: map.get(KEY_TAGS)
                         .map(RpcValue::as_map)
-                        .cloned()
-                        .unwrap_or_default(),
+                        .cloned(),
                 })
             }
             shvproto::Value::IMap(imap) => {
@@ -757,7 +758,7 @@ impl From<MethodDescription> for RpcValue {
             .into()
         );
         let mut extra = shvproto::make_map!("description" => value.description);
-        if let Some(extra_map) = &value.extra {
+        if let Some(extra_map) = value.extra {
             for (k, v) in extra_map {
                 extra.entry(k).or_insert(v);
             }
@@ -767,7 +768,7 @@ impl From<MethodDescription> for RpcValue {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DeviceDescription {
     properties: Vec<PropertyDescription>,
     // restriction_of_device: String,
@@ -854,8 +855,7 @@ pub struct TypeInfo {
 }
 
 #[derive(Default)]
-pub struct PathInfo
-{
+pub struct PathInfo {
     pub device_path: String,
     pub device_type: String,
     pub property_description: PropertyDescription,
@@ -984,10 +984,11 @@ impl TypeInfo {
     // pub fn property_description_for_path(shv_path: impl AsRef<str>, std::string *p_field_name) const
 
     pub fn set_blacklist(&mut self, shv_path: impl AsRef<str>, blacklist: &RpcValue) {
+        let shv_path = shv_path.as_ref();
         match &blacklist.value {
             shvproto::Value::List(list) => {
                 for path in list.as_ref() {
-                    self.blacklisted_paths.insert(join_path(shv_path, path.as_str()), Default::default());
+                    self.blacklisted_paths.insert(join_path(shv_path, path.as_str()), RpcValue::null());
                 }
             }
             shvproto::Value::Map(map) => {
@@ -1050,8 +1051,26 @@ impl TryFrom<&RpcValue> for TypeInfo {
             }
         }
         else {
-            // res = from_nodes_tree(v);
-            // TODO
+            let types: RpcMap = value.meta
+                .as_ref()
+                .and_then(|m| m.get("typeInfo"))
+                .and_then(|ty| ty.as_map().get(Self::TYPES))
+                .and_then(|rv| rv.try_into().ok())
+                .unwrap_or_default();
+            for (name, descr) in types {
+                let mut descr = TypeDescription::from_rpc_map(descr.try_into().unwrap_or_default());
+                if descr.type_name().is_none_or(str::is_empty) {
+                    descr.set_type_name(&name);
+                }
+                res.types.insert(name, descr);
+            }
+            let node_types: RpcMap = value.meta
+                .as_ref()
+                .and_then(|m| m.get("nodeTypes"))
+                .and_then(|rv| rv.try_into().ok())
+                .unwrap_or_default();
+
+            from_nodes_tree_helper(&node_types, value, Default::default(), Default::default(), Default::default(), None, &mut res);
         }
 
         if res.system_paths_roots.is_empty() {
@@ -1066,6 +1085,159 @@ impl TryFrom<RpcValue> for TypeInfo {
     type Error = String;
     fn try_from(value: RpcValue) -> Result<Self, Self::Error> {
         (&value).try_into()
+    }
+}
+
+fn from_nodes_tree_helper(
+    node_types: &RpcMap,
+    node: &RpcValue,
+    device_type: &str,
+    device_path: &str,
+    property_path: &str,
+    device_description: Option<&mut DeviceDescription>,
+    out: &mut TypeInfo,
+) {
+    let node_map: RpcMap = node.try_into().unwrap_or_default();
+    let meta_map_opt = node.meta.as_ref().map(Box::as_ref);
+
+    // If both meta is none and map empty, treat the node as "invalid".
+    if node_map.is_empty() && meta_map_opt.is_none_or(MetaMap::is_empty) {
+        return;
+    }
+
+    if let Some(ref_str) = meta_map_opt.and_then(|m| m.get("nodeTypeRef").map(RpcValue::as_str))
+        && !ref_str.is_empty()
+        && let Some(ref_node) = node_types.get(ref_str)
+    {
+        from_nodes_tree_helper(
+            node_types,
+            ref_node,
+            device_type,
+            device_path,
+            property_path,
+            device_description,
+            out,
+        );
+        return;
+    }
+
+    // current state
+    let mut current_device_type = device_type.to_string();
+    let mut current_device_path = device_path.to_string();
+    let mut current_property_path = property_path.to_string();
+
+    let mut new_device_type_entered = device_description.is_none();
+    let mut new_device_description = DeviceDescription::default();
+    let mut current_device_description = device_description.unwrap_or(&mut new_device_description);
+
+    // collect property description tags merged from metadata tags and methods
+    let mut property_descr_map = RpcMap::new();
+    use shvproto::rpcvalue::List as RpcList;
+    let mut property_methods = RpcList::new();
+
+    // gather methods from node.meta.methods (skip ls/dir)
+    if let Some(methods) = meta_map_opt.and_then(|m| m.get(KEY_METHODS).map(RpcValue::as_list)) {
+        for mm in methods {
+            let Ok(mm) = MethodDescription::try_from(mm) else {
+                continue
+            };
+            if mm.name == METH_LS || mm.name == METH_DIR {
+                continue
+            }
+            property_methods.push(RpcValue::from(mm.clone()));
+            // if method has extra tags, stash them into extra_tags with path "property_path/method/<methodname>"
+            if let Some(extra) = mm.extra && !extra.is_empty() {
+                let key = shvrpc::join_path!(property_path, "method", mm.name);
+                out.extra_tags.insert(key, extra.into());
+            }
+        }
+    }
+    let node_tags = meta_map_opt.and_then(|m| m.get(KEY_TAGS).map(RpcValue::as_map).cloned()).unwrap_or_default();
+    if !node_tags.is_empty() {
+        if let Some(device_type) = node_tags.get(KEY_DEVICE_TYPE).map(RpcValue::as_str) && !device_type.is_empty() {
+            current_device_type = device_type.into();
+            current_device_path = join_path(device_path, property_path);
+            current_property_path = "".into();
+            current_device_description = &mut new_device_description;
+            new_device_type_entered = true;
+        }
+        for (k, v) in &node_tags {
+            property_descr_map.entry(k.into()).or_insert(v.into());
+        }
+    }
+    // Erase shvgate obsolete tag
+    property_descr_map.remove("createFromTypeName");
+    if !property_methods.is_empty() {
+        property_descr_map.insert(KEY_METHODS.to_string(), property_methods.into());
+    }
+    let mut property_descr = PropertyDescription::default();
+    if !property_descr_map.is_empty() {
+        let (descr, mut extra_tags) = PropertyDescription::from_rpc_map(property_descr_map);
+        property_descr = descr;
+        if property_descr.is_valid() {
+            property_descr.set_name(&current_property_path);
+            current_device_description.properties.push(property_descr.clone());
+        }
+        let system_path = extra_tags.remove("systemPath").and_then(|v| String::try_from(v).ok());
+        if let Some(system_path) = system_path && !system_path.is_empty() {
+            let shv_path = join_path(&current_device_path, &current_property_path);
+            out.system_paths_roots.insert(shv_path, system_path);
+        }
+        let blacklist = extra_tags.remove(KEY_BLACKLIST);
+        if let Some(blacklist) = blacklist {
+            let shv_path = join_path(&current_device_path, &current_property_path);
+            out.set_blacklist(shv_path, &blacklist);
+        }
+        if !extra_tags.is_empty() {
+            let shv_path = join_path(&current_device_path, &current_property_path);
+            out.extra_tags.insert(shv_path, extra_tags.into());
+        }
+    }
+    if property_descr.type_name().is_none_or(str::is_empty) && !node_tags.contains_key("createFromTypeName") {
+        // property with type-name defined cannot have child properties
+        for (child_name, child_node) in &node_map {
+            if child_name.is_empty() {
+                continue;
+            }
+            let child_property_path = join_path(&current_property_path, child_name);
+            from_nodes_tree_helper(node_types, child_node, &current_device_type, &current_device_path, &child_property_path, Some(current_device_description), out);
+        }
+    }
+
+    // handle finished device type: if we entered a new device type, register device path and device description
+    if new_device_type_entered {
+        // set device path
+        out.device_paths.insert(current_device_path.clone(), current_device_type.clone());
+
+        // merge new_device_description into out.device_descriptions, checking for deviations
+        if let Some(existing_device_descr) = out.device_descriptions.get_mut(&current_device_type) {
+            // compare existing properties with new ones
+            // for each existing prop, if not in new -> add empty deviation; if in both compare and set deviation if different
+            for existing_property_descr in &existing_device_descr.properties {
+                if let Some(new_property_descr) = new_device_description.find_property(existing_property_descr.name()) {
+                    // defined in both definitions, compare them
+                    if new_property_descr != existing_property_descr {
+                        // they are not the same, create deviation
+                        let shv_path = join_path(&current_device_path, existing_property_descr.name());
+                        out.property_deviations.insert(shv_path, new_property_descr.clone());
+                    }
+                    let new_property_descr = new_property_descr.clone();
+                    new_device_description.properties.retain(|descr| new_property_descr != *descr);
+                } else {
+					// property defined only in previous definition, add it as empty to deviations
+                    let shv_path = join_path(&current_device_path, existing_property_descr.name());
+                    out.property_deviations.insert(shv_path, Default::default());
+                }
+            }
+			// check remaining property paths in new definition
+            for new_property_descr in &new_device_description.properties {
+                let shv_path = join_path(&current_device_path, new_property_descr.name());
+                out.property_deviations.insert(shv_path, new_property_descr.clone());
+            }
+        } else {
+            // device type defined first time
+            out.device_descriptions.insert(current_device_type, new_device_description);
+        }
     }
 }
 
