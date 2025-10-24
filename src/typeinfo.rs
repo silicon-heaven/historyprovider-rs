@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 
 use log::debug;
 use log::warn;
+use shvproto::MetaMap;
 use shvproto::RpcValue;
 use shvproto::Map as RpcMap;
 use shvrpc::metamethod::AccessLevel;
 use shvrpc::metamethod::DirAttribute;
+use shvrpc::util::join_path;
 
 pub const KEY_DEVICE_TYPE: &str = "deviceType";
 pub const KEY_TYPE_NAME: &str = "typeName";
@@ -642,6 +644,7 @@ pub struct MethodDescription {
     pub result: String,
     pub signals: Vec::<(String, Option<String>)>,
     pub description: String,
+    pub extra: Option<RpcMap>,
 }
 
 impl Default for MethodDescription {
@@ -654,6 +657,7 @@ impl Default for MethodDescription {
             result: Default::default(),
             signals: Default::default(),
             description: Default::default(),
+            extra: Default::default(),
         }
     }
 }
@@ -685,12 +689,17 @@ impl TryFrom<RpcValue> for MethodDescription {
                             })
                             .collect()
                     },
-                    description: map.get("description")
+                    description: map.get(KEY_DESCRIPTION)
                         .map(|d| d.as_str().to_string())
+                        .unwrap_or_default(),
+                    extra: map.get(KEY_TAGS)
+                        .map(RpcValue::as_map)
+                        .cloned()
                         .unwrap_or_default(),
                 })
             }
             shvproto::Value::IMap(imap) => {
+                let extra = imap.get(&IKEY_EXTRA);
                 Ok(Self {
                     name: imap.get(&(DirAttribute::Name as _)).map(|rv| rv.as_str().to_string()).unwrap_or_default(),
                     flags: imap.get(&(DirAttribute::Flags as _)).map(|rv| rv.as_u32()).unwrap_or_default(),
@@ -710,11 +719,13 @@ impl TryFrom<RpcValue> for MethodDescription {
                             })
                             .collect()
                     },
-                    description: imap.get(&IKEY_EXTRA)
+                    description: extra
                         .and_then(|extra| extra
                             .get("description")
                             .and_then(|d| d.try_into().ok())
                         ).unwrap_or_default(),
+                    extra: extra.map(RpcValue::as_map).cloned(),
+
                 })
             }
             _ => Err(format!("Unexpected type: {type}", type = value.type_name())),
@@ -745,7 +756,13 @@ impl From<MethodDescription> for RpcValue {
             .collect::<BTreeMap<_,_>>()
             .into()
         );
-        res.insert(IKEY_EXTRA, shvproto::make_map!("description" => value.description).into());
+        let mut extra = shvproto::make_map!("description" => value.description);
+        if let Some(extra_map) = &value.extra {
+            for (k, v) in extra_map {
+                extra.entry(k).or_insert(v);
+            }
+        }
+        res.insert(IKEY_EXTRA, extra.into());
         res.into()
     }
 }
