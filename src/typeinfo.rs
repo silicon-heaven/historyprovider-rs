@@ -982,6 +982,22 @@ impl TypeInfo {
 
     // NOTE: Users should just use path_info and extract only values field_path and property_description
     // pub fn property_description_for_path(shv_path: impl AsRef<str>, std::string *p_field_name) const
+
+    pub fn set_blacklist(&mut self, shv_path: impl AsRef<str>, blacklist: &RpcValue) {
+        match &blacklist.value {
+            shvproto::Value::List(list) => {
+                for path in list.as_ref() {
+                    self.blacklisted_paths.insert(join_path(shv_path, path.as_str()), Default::default());
+                }
+            }
+            shvproto::Value::Map(map) => {
+                for (path, val) in map.as_ref() {
+                    self.blacklisted_paths.insert(join_path(shv_path, path), val.into());
+                }
+            }
+            _ => { }
+        }
+    }
 }
 
 impl TryFrom<&RpcValue> for TypeInfo {
