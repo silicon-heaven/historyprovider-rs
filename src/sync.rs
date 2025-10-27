@@ -545,7 +545,7 @@ async fn sync_site_legacy(
     fn msec_to_log2_filename(msec: i64) -> String {
         shvproto::DateTime::from_epoch_msec(msec)
             .to_chrono_datetime()
-            .format("%Y-%m-%dT%H:%M:%S.log2")
+            .format("%Y-%m-%dT%H-%M-%S-%3f.log2")
             .to_string()
     }
 
