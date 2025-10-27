@@ -874,6 +874,7 @@ mod tests {
                     Box::new(ExpectUnsubscription),
                     Box::new(ExpectUnsubscription),
                     Box::new(ExpectUnsubscription),
+                    Box::new(ExpectSignal("node", "onlinestatuschng", 0.into())),
                 ],
             },
             TestCase {
