@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_compression::tokio::write::GzipEncoder;
+use chrono::TimeZone;
 use futures::io::{BufReader, BufWriter};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{error, info, warn};
@@ -798,6 +799,17 @@ async fn pushlog_handler(
     ).into())
 }
 
+fn file_name_to_file_msec(filename: &str) -> Result<i64, String> {
+    let without_ext = filename
+        .strip_suffix(".log2")
+        .ok_or_else(|| format!("Invalid file extension in '{filename}'"))?;
+
+    let datetime = chrono::NaiveDateTime::parse_from_str(without_ext, "%Y-%m-%dT%H-%M-%S-%3f")
+        .map_err(|e| format!("Failed to parse '{filename}': {e}"))?;
+
+    Ok(chrono::Utc.from_utc_datetime(&datetime).timestamp_millis())
+}
+
 pub async fn getlog_handler(
     site_path: &str,
     params: &GetLog2Params,
@@ -844,17 +856,13 @@ pub async fn getlog_handler(
             match &params.since {
                 GetLog2Since::DateTime(date_time) => {
                     let since_ms = date_time.epoch_msec();
-                    let file_name_to_msec = |file_name: &str| file_name
-                        .strip_suffix(".log2")
-                        .and_then(|file| shvproto::DateTime::from_iso_str(file).ok().as_ref().map(shvproto::DateTime::epoch_msec))
-                        .unwrap_or(i64::MAX);
 
                     log_files
                         .iter()
                         .map(DirEntry::file_name)
                         .enumerate()
                         .rev()
-                        .find(|(_,file)| file_name_to_msec(&file.to_string_lossy()) < since_ms)
+                        .find(|(_,file)| file_name_to_file_msec(&file.to_string_lossy()).is_ok_and(|ms| ms < since_ms))
                         .map(|(idx, _)| idx)
                         .unwrap_or(0)
                 }
