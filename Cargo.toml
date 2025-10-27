@@ -26,6 +26,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.17", features = ["fs"] }
 time = { version = "0.3.41", features = ["formatting"] }
+chrono = "0.4.42"
 
 # [patch."https://github.com/silicon-heaven/libshvclient-rs"]
 # shvclient = { path = "../libshvclient-rs" }
