@@ -398,7 +398,7 @@ impl SampleType {
     }
 }
 
-
+#[derive(Debug)]
 pub struct TypeDescription {
     data: RpcMap,
 }
@@ -490,7 +490,7 @@ impl TryFrom<&RpcValue> for TypeDescription {
 //     }
 // }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct FieldDescription {
     data: RpcMap,
 }
@@ -542,7 +542,7 @@ impl TypeDescriptionMethods for FieldDescription {
 }
 impl FieldDescriptionMethods for FieldDescription { }
 
-#[derive(Clone,Default,PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct PropertyDescription {
     base: FieldDescription,
 }
@@ -768,7 +768,7 @@ impl From<MethodDescription> for RpcValue {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct DeviceDescription {
     properties: Vec<PropertyDescription>,
     // restriction_of_device: String,
@@ -830,7 +830,7 @@ impl TryFrom<&RpcValue> for DeviceDescription {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct TypeInfo {
     /// type-name -> type-description
     types: BTreeMap<String, TypeDescription>,
@@ -1316,11 +1316,92 @@ mod tests {
 }
 "#;
 
+    const NODES_TREE: &str = r#"
+<
+	"nodeTypes":{
+        "Device1@0":<
+            "tags": {"deviceType": "device1"}
+        >{
+            "status1":<
+                "tags":{"description":"A bitfield", "typeName": "BitField"},
+				"methods":[
+					{"access":"rd", "name":"chng", "signature":"VoidParam"},
+					{"access":"rd", "name":"get", "signature":"RetParam"}
+				]
+            >{},
+            "status2":<
+                "tags":{"description":"An enum", "typeName": "Enum"},
+				"methods":[
+					{"access":"rd", "name":"chng", "signature":"VoidParam"},
+					{"access":"rd", "name":"get", "signature":"RetParam"}
+				]
+            >{},
+        }
+    },
+	"tags":{"systemPath":"system/xyz"},
+	"typeInfo":{
+        "types":{
+            "BitField":{
+                "fields":[
+                    {"tags":{"alarm":"warning", "description":"Alarm 1", "label":"Alarm 1 label"}, "name":"field1", "value": [0,7] },
+                    {"tags":{"alarm":"error", "description":"Alarm 2", "label":"Alarm 2 label"}, "name":"field2", "value": 24 },
+                    {"name":"field3", "value": [25, 26] },
+                ],
+                "type":"BitField"
+            },
+            "Map":{
+                "fields":[
+                    {"description":"Description 1", "label":"Label 1", "name":"mapField1", "typeName":"Int"},
+                    {"description":"Description 2", "label":"Label 2", "name":"mapField2", "typeName":"String"},
+                ],
+                "type":"Map",
+            },
+            "Enum":{
+                "fields":[
+                    {"tags":{"description":"", "label":""}, "name":"Unknown", "value":0},
+                    {"tags":{"description":"", "label":""}, "name":"Normal", "value":1},
+                    {
+                        "tags":{
+                            "alarm":"warning",
+                            "alarmLevel":50,
+                            "description":"",
+                            "label":""
+                        },
+                        "name":"Warning",
+                        "value":2
+                    },
+                    {
+                        "tags":{
+                            "alarm":"error",
+                            "alarmLevel":100,
+                            "description":"",
+                            "label":""
+                        },
+                        "name":"Error",
+                        "value":3
+                    }
+                ],
+                "type":"Enum"
+            },
+        }
+    }
+>{
+	"foo":{
+		"bar":<"nodeTypeRef":"Device1@0">{},
+		"baz":<"nodeTypeRef":"Device1@0">{},
+		//"bar":<"tags":{"deviceType":"device1"}>{},
+		//"baz":<"tags":{"deviceType":"device1"}>{},
+	}
+}
+"#;
+
     #[test]
     fn parse_type_info() {
         init_logger();
         let rv = RpcValue::from_cpon(TYPE_INFO).unwrap_or_else(|e| panic!("Cannot parse typeInfo: {e}"));
         let type_info = TypeInfo::try_from(&rv).unwrap_or_else(|e| panic!("Cannot convert RpcValue to TypeInfo: {e}"));
+
+        log::info!("type info: {type_info:#?}");
 
         let type_descr = type_info.type_description_for_path("foo/bar/status1").unwrap();
         assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
@@ -1343,6 +1424,37 @@ mod tests {
         assert!(map_type_descr.field_value(&vehicle_data, "noMapField").is_none());
 
         let enum_type_descr = type_info.find_type_description("Enum").unwrap();
+        assert!(matches!(enum_type_descr.type_id(), Some(Type::Enum)));
+        assert!(enum_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Continuous)));
+        assert_eq!(enum_type_descr.field_value((), "Warning").unwrap().as_u32(), 2);
+        let field_alarms = BTreeMap::from([
+            ("Unknown", (None, None)),
+            ("Normal", (None, None)),
+            ("Warning", (Some("warning"), Some(50))),
+            ("Error", (Some("error"), Some(100))),
+        ]);
+        for fld in &enum_type_descr.fields() {
+            assert!(field_alarms.get(fld.name()).is_some_and(|(alarm, level)| alarm == &fld.alarm() && level == &fld.alarm_level()));
+        }
+    }
+
+    #[test]
+    fn parse_nodes_tree() {
+        init_logger();
+        let rv = RpcValue::from_cpon(NODES_TREE).unwrap_or_else(|e| panic!("Cannot parse typeInfo: {e}"));
+        let type_info = TypeInfo::try_from(&rv).unwrap_or_else(|e| panic!("Cannot convert RpcValue to TypeInfo: {e}"));
+        log::info!("type info from nodes tree: {type_info:#?}");
+
+        let type_descr = type_info.type_description_for_path("foo/bar/status1").unwrap();
+        assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
+        assert!(type_descr.field_value(0x1234, "field1").is_some_and(|v| v.as_u32() == 0x34));
+
+        let type_descr = type_info.type_description_for_path("foo/baz/status1").unwrap();
+        assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
+        assert!(type_descr.field_value(0x1234, "field1").is_some_and(|v| v.as_u32() == 0x34));
+
+        let enum_type_descr = type_info.type_description_for_path("foo/baz/status2").unwrap();
+        // let enum_type_descr = type_info.find_type_description("Enum").unwrap();
         assert!(matches!(enum_type_descr.type_id(), Some(Type::Enum)));
         assert!(enum_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Continuous)));
         assert_eq!(enum_type_descr.field_value((), "Warning").unwrap().as_u32(), 2);
