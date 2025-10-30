@@ -398,12 +398,25 @@ pub(crate) async fn sites_task(
                 shvclient::ClientEvent::Connected(shv_api_version) => {
                     log::info!("Getting sites info");
 
-                    let sites = RpcCall::new("sites", "getSites")
+                    let sites: Result<shvproto::Map, _> = RpcCall::new("sites", "getSites")
                         .exec(&client_cmd_tx)
                         .await;
 
                     let (sites_info, sub_hps) = match sites {
                         Ok(sites) => {
+                            eprintln!("sites = '{:?}'", sites);
+                            if sites
+                                .get("_meta")
+                                .map(RpcValue::as_map)
+                                .and_then(|map| map.get("HP3"))
+                                .map(RpcValue::as_map)
+                                .and_then(|map| map.get("type"))
+                                .map(RpcValue::as_str)
+                                .is_none_or(|type_str| type_str != "HP3")
+                            {
+                                eprintln!("This site's _meta does NOT include an HP3 node. Refusing to continue. Add an HP3 node to the site's _meta, otherwise this HP instance will not be visible to parent HPs.");
+                                std::process::abort();
+                            }
                             let sub_hps = collect_sub_hps(&[], &sites);
                             let mut sites_info = collect_sites(&[], &sites);
                             for (path, site_info) in &mut sites_info {
@@ -776,6 +789,14 @@ mod tests {
         cleanup_steps: &'a [Box<dyn TestStep<SitesTaskTestState>>],
     }
 
+    fn no_sites() -> RpcValue {
+        RpcValue::from_cpon(r#"{
+            "_meta":{
+                "HP3":{"type": "HP3"}
+            },
+        }"#).unwrap()
+    }
+
     fn some_broker() -> RpcValue {
         RpcValue::from_cpon(r#"{
             "_meta":{
@@ -831,7 +852,7 @@ mod tests {
                 name: "Empty sites",
                 steps: &[
                     Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
-                    Box::new(ExpectCall("sites", "getSites", Ok(shvproto::Map::new().into()))),
+                    Box::new(ExpectCall("sites", "getSites", Ok(no_sites()))),
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
@@ -881,7 +902,7 @@ mod tests {
                 name: "Periodic sync",
                 steps: &[
                     Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
-                    Box::new(ExpectCall("sites", "getSites", Ok(shvproto::Map::new().into()))),
+                    Box::new(ExpectCall("sites", "getSites", Ok(no_sites()))),
                     Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(ExpectSyncCommand::SyncAll),
                 ],
