@@ -399,11 +399,20 @@ pub(crate) async fn sites_task(
                     log::info!("Getting sites info");
 
                     let sites = RpcCall::new("sites", "getSites")
-                        .exec(&client_cmd_tx)
+                        .exec::<_, BTreeMap::<_,_>, _>(&client_cmd_tx)
                         .await;
 
                     let (sites_info, sub_hps) = match sites {
                         Ok(sites) => {
+                            if sites
+                                .get("_meta")
+                                .map(RpcValue::as_map)
+                                .and_then(|map| map.get("type"))
+                                .map(RpcValue::as_str)
+                                .is_some_and(|type_str| type_str == "HP3")
+                            {
+                                panic!("This site's _meta does NOT include an HP3 node. Refusing to continue. Add an HP3 node to the site's _meta, otherwise this HP instance will not be visible to parent HPs.");
+                            }
                             let sub_hps = collect_sub_hps(&[], &sites);
                             let mut sites_info = collect_sites(&[], &sites);
                             for (path, site_info) in &mut sites_info {
