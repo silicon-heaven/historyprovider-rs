@@ -2,10 +2,14 @@ use std::collections::BTreeMap;
 
 use log::debug;
 use log::warn;
+use shvclient::clientnode::METH_DIR;
+use shvclient::clientnode::METH_LS;
+use shvproto::MetaMap;
 use shvproto::RpcValue;
 use shvproto::Map as RpcMap;
 use shvrpc::metamethod::AccessLevel;
 use shvrpc::metamethod::DirAttribute;
+use shvrpc::util::join_path;
 
 pub const KEY_DEVICE_TYPE: &str = "deviceType";
 pub const KEY_TYPE_NAME: &str = "typeName";
@@ -394,7 +398,7 @@ impl SampleType {
     }
 }
 
-
+#[derive(Debug)]
 pub struct TypeDescription {
     data: RpcMap,
 }
@@ -486,7 +490,7 @@ impl TryFrom<&RpcValue> for TypeDescription {
 //     }
 // }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct FieldDescription {
     data: RpcMap,
 }
@@ -538,7 +542,7 @@ impl TypeDescriptionMethods for FieldDescription {
 }
 impl FieldDescriptionMethods for FieldDescription { }
 
-#[derive(Clone,Default)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct PropertyDescription {
     base: FieldDescription,
 }
@@ -642,6 +646,7 @@ pub struct MethodDescription {
     pub result: String,
     pub signals: Vec::<(String, Option<String>)>,
     pub description: String,
+    pub extra: Option<RpcMap>,
 }
 
 impl Default for MethodDescription {
@@ -654,6 +659,7 @@ impl Default for MethodDescription {
             result: Default::default(),
             signals: Default::default(),
             description: Default::default(),
+            extra: Default::default(),
         }
     }
 }
@@ -685,12 +691,16 @@ impl TryFrom<RpcValue> for MethodDescription {
                             })
                             .collect()
                     },
-                    description: map.get("description")
+                    description: map.get(KEY_DESCRIPTION)
                         .map(|d| d.as_str().to_string())
                         .unwrap_or_default(),
+                    extra: map.get(KEY_TAGS)
+                        .map(RpcValue::as_map)
+                        .cloned(),
                 })
             }
             shvproto::Value::IMap(imap) => {
+                let extra = imap.get(&IKEY_EXTRA);
                 Ok(Self {
                     name: imap.get(&(DirAttribute::Name as _)).map(|rv| rv.as_str().to_string()).unwrap_or_default(),
                     flags: imap.get(&(DirAttribute::Flags as _)).map(|rv| rv.as_u32()).unwrap_or_default(),
@@ -710,11 +720,13 @@ impl TryFrom<RpcValue> for MethodDescription {
                             })
                             .collect()
                     },
-                    description: imap.get(&IKEY_EXTRA)
+                    description: extra
                         .and_then(|extra| extra
                             .get("description")
                             .and_then(|d| d.try_into().ok())
                         ).unwrap_or_default(),
+                    extra: extra.map(RpcValue::as_map).cloned(),
+
                 })
             }
             _ => Err(format!("Unexpected type: {type}", type = value.type_name())),
@@ -745,12 +757,18 @@ impl From<MethodDescription> for RpcValue {
             .collect::<BTreeMap<_,_>>()
             .into()
         );
-        res.insert(IKEY_EXTRA, shvproto::make_map!("description" => value.description).into());
+        let mut extra = shvproto::make_map!("description" => value.description);
+        if let Some(extra_map) = value.extra {
+            for (k, v) in extra_map {
+                extra.entry(k).or_insert(v);
+            }
+        }
+        res.insert(IKEY_EXTRA, extra.into());
         res.into()
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct DeviceDescription {
     properties: Vec<PropertyDescription>,
     // restriction_of_device: String,
@@ -812,7 +830,7 @@ impl TryFrom<&RpcValue> for DeviceDescription {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct TypeInfo {
     /// type-name -> type-description
     types: BTreeMap<String, TypeDescription>,
@@ -837,8 +855,7 @@ pub struct TypeInfo {
 }
 
 #[derive(Default)]
-pub struct PathInfo
-{
+pub struct PathInfo {
     pub device_path: String,
     pub device_type: String,
     pub property_description: PropertyDescription,
@@ -965,6 +982,23 @@ impl TypeInfo {
 
     // NOTE: Users should just use path_info and extract only values field_path and property_description
     // pub fn property_description_for_path(shv_path: impl AsRef<str>, std::string *p_field_name) const
+
+    pub fn set_blacklist(&mut self, shv_path: impl AsRef<str>, blacklist: &RpcValue) {
+        let shv_path = shv_path.as_ref();
+        match &blacklist.value {
+            shvproto::Value::List(list) => {
+                for path in list.as_ref() {
+                    self.blacklisted_paths.insert(join_path(shv_path, path.as_str()), RpcValue::null());
+                }
+            }
+            shvproto::Value::Map(map) => {
+                for (path, val) in map.as_ref() {
+                    self.blacklisted_paths.insert(join_path(shv_path, path), val.into());
+                }
+            }
+            _ => { }
+        }
+    }
 }
 
 impl TryFrom<&RpcValue> for TypeInfo {
@@ -1017,8 +1051,26 @@ impl TryFrom<&RpcValue> for TypeInfo {
             }
         }
         else {
-            // res = from_nodes_tree(v);
-            // TODO
+            let types: RpcMap = value.meta
+                .as_ref()
+                .and_then(|m| m.get("typeInfo"))
+                .and_then(|ty| ty.as_map().get(Self::TYPES))
+                .and_then(|rv| rv.try_into().ok())
+                .unwrap_or_default();
+            for (name, descr) in types {
+                let mut descr = TypeDescription::from_rpc_map(descr.try_into().unwrap_or_default());
+                if descr.type_name().is_none_or(str::is_empty) {
+                    descr.set_type_name(&name);
+                }
+                res.types.insert(name, descr);
+            }
+            let node_types: RpcMap = value.meta
+                .as_ref()
+                .and_then(|m| m.get("nodeTypes"))
+                .and_then(|rv| rv.try_into().ok())
+                .unwrap_or_default();
+
+            from_nodes_tree_helper(&node_types, value, Default::default(), Default::default(), Default::default(), None, &mut res);
         }
 
         if res.system_paths_roots.is_empty() {
@@ -1033,6 +1085,159 @@ impl TryFrom<RpcValue> for TypeInfo {
     type Error = String;
     fn try_from(value: RpcValue) -> Result<Self, Self::Error> {
         (&value).try_into()
+    }
+}
+
+fn from_nodes_tree_helper(
+    node_types: &RpcMap,
+    node: &RpcValue,
+    device_type: &str,
+    device_path: &str,
+    property_path: &str,
+    device_description: Option<&mut DeviceDescription>,
+    out: &mut TypeInfo,
+) {
+    let node_map: RpcMap = node.try_into().unwrap_or_default();
+    let meta_map_opt = node.meta.as_ref().map(Box::as_ref);
+
+    // If both meta is none and map empty, treat the node as "invalid".
+    if node_map.is_empty() && meta_map_opt.is_none_or(MetaMap::is_empty) {
+        return;
+    }
+
+    if let Some(ref_str) = meta_map_opt.and_then(|m| m.get("nodeTypeRef").map(RpcValue::as_str))
+        && !ref_str.is_empty()
+        && let Some(ref_node) = node_types.get(ref_str)
+    {
+        from_nodes_tree_helper(
+            node_types,
+            ref_node,
+            device_type,
+            device_path,
+            property_path,
+            device_description,
+            out,
+        );
+        return;
+    }
+
+    // current state
+    let mut current_device_type = device_type.to_string();
+    let mut current_device_path = device_path.to_string();
+    let mut current_property_path = property_path.to_string();
+
+    let mut new_device_type_entered = device_description.is_none();
+    let mut new_device_description = DeviceDescription::default();
+    let mut current_device_description = device_description.unwrap_or(&mut new_device_description);
+
+    // collect property description tags merged from metadata tags and methods
+    let mut property_descr_map = RpcMap::new();
+    use shvproto::rpcvalue::List as RpcList;
+    let mut property_methods = RpcList::new();
+
+    // gather methods from node.meta.methods (skip ls/dir)
+    if let Some(methods) = meta_map_opt.and_then(|m| m.get(KEY_METHODS).map(RpcValue::as_list)) {
+        for mm in methods {
+            let Ok(mm) = MethodDescription::try_from(mm) else {
+                continue
+            };
+            if mm.name == METH_LS || mm.name == METH_DIR {
+                continue
+            }
+            property_methods.push(RpcValue::from(mm.clone()));
+            // if method has extra tags, stash them into extra_tags with path "property_path/method/<methodname>"
+            if let Some(extra) = mm.extra && !extra.is_empty() {
+                let key = shvrpc::join_path!(property_path, "method", mm.name);
+                out.extra_tags.insert(key, extra.into());
+            }
+        }
+    }
+    let node_tags = meta_map_opt.and_then(|m| m.get(KEY_TAGS).map(RpcValue::as_map).cloned()).unwrap_or_default();
+    if !node_tags.is_empty() {
+        if let Some(device_type) = node_tags.get(KEY_DEVICE_TYPE).map(RpcValue::as_str) && !device_type.is_empty() {
+            current_device_type = device_type.into();
+            current_device_path = join_path(device_path, property_path);
+            current_property_path = "".into();
+            current_device_description = &mut new_device_description;
+            new_device_type_entered = true;
+        }
+        for (k, v) in &node_tags {
+            property_descr_map.entry(k.into()).or_insert(v.into());
+        }
+    }
+    // Erase shvgate obsolete tag
+    property_descr_map.remove("createFromTypeName");
+    if !property_methods.is_empty() {
+        property_descr_map.insert(KEY_METHODS.to_string(), property_methods.into());
+    }
+    let mut property_descr = PropertyDescription::default();
+    if !property_descr_map.is_empty() {
+        let (descr, mut extra_tags) = PropertyDescription::from_rpc_map(property_descr_map);
+        property_descr = descr;
+        if property_descr.is_valid() {
+            property_descr.set_name(&current_property_path);
+            current_device_description.properties.push(property_descr.clone());
+        }
+        let system_path = extra_tags.remove("systemPath").and_then(|v| String::try_from(v).ok());
+        if let Some(system_path) = system_path && !system_path.is_empty() {
+            let shv_path = join_path(&current_device_path, &current_property_path);
+            out.system_paths_roots.insert(shv_path, system_path);
+        }
+        let blacklist = extra_tags.remove(KEY_BLACKLIST);
+        if let Some(blacklist) = blacklist {
+            let shv_path = join_path(&current_device_path, &current_property_path);
+            out.set_blacklist(shv_path, &blacklist);
+        }
+        if !extra_tags.is_empty() {
+            let shv_path = join_path(&current_device_path, &current_property_path);
+            out.extra_tags.insert(shv_path, extra_tags.into());
+        }
+    }
+    if property_descr.type_name().is_none_or(str::is_empty) && !node_tags.contains_key("createFromTypeName") {
+        // property with type-name defined cannot have child properties
+        for (child_name, child_node) in &node_map {
+            if child_name.is_empty() {
+                continue;
+            }
+            let child_property_path = join_path(&current_property_path, child_name);
+            from_nodes_tree_helper(node_types, child_node, &current_device_type, &current_device_path, &child_property_path, Some(current_device_description), out);
+        }
+    }
+
+    // handle finished device type: if we entered a new device type, register device path and device description
+    if new_device_type_entered {
+        // set device path
+        out.device_paths.insert(current_device_path.clone(), current_device_type.clone());
+
+        // merge new_device_description into out.device_descriptions, checking for deviations
+        if let Some(existing_device_descr) = out.device_descriptions.get_mut(&current_device_type) {
+            // compare existing properties with new ones
+            // for each existing prop, if not in new -> add empty deviation; if in both compare and set deviation if different
+            for existing_property_descr in &existing_device_descr.properties {
+                if let Some(new_property_descr) = new_device_description.find_property(existing_property_descr.name()) {
+                    // defined in both definitions, compare them
+                    if new_property_descr != existing_property_descr {
+                        // they are not the same, create deviation
+                        let shv_path = join_path(&current_device_path, existing_property_descr.name());
+                        out.property_deviations.insert(shv_path, new_property_descr.clone());
+                    }
+                    let new_property_descr = new_property_descr.clone();
+                    new_device_description.properties.retain(|descr| new_property_descr != *descr);
+                } else {
+					// property defined only in previous definition, add it as empty to deviations
+                    let shv_path = join_path(&current_device_path, existing_property_descr.name());
+                    out.property_deviations.insert(shv_path, Default::default());
+                }
+            }
+			// check remaining property paths in new definition
+            for new_property_descr in &new_device_description.properties {
+                let shv_path = join_path(&current_device_path, new_property_descr.name());
+                out.property_deviations.insert(shv_path, new_property_descr.clone());
+            }
+        } else {
+            // device type defined first time
+            out.device_descriptions.insert(current_device_type, new_device_description);
+        }
     }
 }
 
@@ -1111,11 +1316,92 @@ mod tests {
 }
 "#;
 
+    const NODES_TREE: &str = r#"
+<
+	"nodeTypes":{
+        "Device1@0":<
+            "tags": {"deviceType": "device1"}
+        >{
+            "status1":<
+                "tags":{"description":"A bitfield", "typeName": "BitField"},
+				"methods":[
+					{"access":"rd", "name":"chng", "signature":"VoidParam"},
+					{"access":"rd", "name":"get", "signature":"RetParam"}
+				]
+            >{},
+            "status2":<
+                "tags":{"description":"An enum", "typeName": "Enum"},
+				"methods":[
+					{"access":"rd", "name":"chng", "signature":"VoidParam"},
+					{"access":"rd", "name":"get", "signature":"RetParam"}
+				]
+            >{},
+        }
+    },
+	"tags":{"systemPath":"system/xyz"},
+	"typeInfo":{
+        "types":{
+            "BitField":{
+                "fields":[
+                    {"tags":{"alarm":"warning", "description":"Alarm 1", "label":"Alarm 1 label"}, "name":"field1", "value": [0,7] },
+                    {"tags":{"alarm":"error", "description":"Alarm 2", "label":"Alarm 2 label"}, "name":"field2", "value": 24 },
+                    {"name":"field3", "value": [25, 26] },
+                ],
+                "type":"BitField"
+            },
+            "Map":{
+                "fields":[
+                    {"description":"Description 1", "label":"Label 1", "name":"mapField1", "typeName":"Int"},
+                    {"description":"Description 2", "label":"Label 2", "name":"mapField2", "typeName":"String"},
+                ],
+                "type":"Map",
+            },
+            "Enum":{
+                "fields":[
+                    {"tags":{"description":"", "label":""}, "name":"Unknown", "value":0},
+                    {"tags":{"description":"", "label":""}, "name":"Normal", "value":1},
+                    {
+                        "tags":{
+                            "alarm":"warning",
+                            "alarmLevel":50,
+                            "description":"",
+                            "label":""
+                        },
+                        "name":"Warning",
+                        "value":2
+                    },
+                    {
+                        "tags":{
+                            "alarm":"error",
+                            "alarmLevel":100,
+                            "description":"",
+                            "label":""
+                        },
+                        "name":"Error",
+                        "value":3
+                    }
+                ],
+                "type":"Enum"
+            },
+        }
+    }
+>{
+	"foo":{
+		"bar":<"nodeTypeRef":"Device1@0">{},
+		"baz":<"nodeTypeRef":"Device1@0">{},
+		//"bar":<"tags":{"deviceType":"device1"}>{},
+		//"baz":<"tags":{"deviceType":"device1"}>{},
+	}
+}
+"#;
+
     #[test]
     fn parse_type_info() {
         init_logger();
         let rv = RpcValue::from_cpon(TYPE_INFO).unwrap_or_else(|e| panic!("Cannot parse typeInfo: {e}"));
         let type_info = TypeInfo::try_from(&rv).unwrap_or_else(|e| panic!("Cannot convert RpcValue to TypeInfo: {e}"));
+
+        log::info!("type info: {type_info:#?}");
 
         let type_descr = type_info.type_description_for_path("foo/bar/status1").unwrap();
         assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
@@ -1138,6 +1424,37 @@ mod tests {
         assert!(map_type_descr.field_value(&vehicle_data, "noMapField").is_none());
 
         let enum_type_descr = type_info.find_type_description("Enum").unwrap();
+        assert!(matches!(enum_type_descr.type_id(), Some(Type::Enum)));
+        assert!(enum_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Continuous)));
+        assert_eq!(enum_type_descr.field_value((), "Warning").unwrap().as_u32(), 2);
+        let field_alarms = BTreeMap::from([
+            ("Unknown", (None, None)),
+            ("Normal", (None, None)),
+            ("Warning", (Some("warning"), Some(50))),
+            ("Error", (Some("error"), Some(100))),
+        ]);
+        for fld in &enum_type_descr.fields() {
+            assert!(field_alarms.get(fld.name()).is_some_and(|(alarm, level)| alarm == &fld.alarm() && level == &fld.alarm_level()));
+        }
+    }
+
+    #[test]
+    fn parse_nodes_tree() {
+        init_logger();
+        let rv = RpcValue::from_cpon(NODES_TREE).unwrap_or_else(|e| panic!("Cannot parse typeInfo: {e}"));
+        let type_info = TypeInfo::try_from(&rv).unwrap_or_else(|e| panic!("Cannot convert RpcValue to TypeInfo: {e}"));
+        log::info!("type info from nodes tree: {type_info:#?}");
+
+        let type_descr = type_info.type_description_for_path("foo/bar/status1").unwrap();
+        assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
+        assert!(type_descr.field_value(0x1234, "field1").is_some_and(|v| v.as_u32() == 0x34));
+
+        let type_descr = type_info.type_description_for_path("foo/baz/status1").unwrap();
+        assert!(matches!(type_descr.type_id(), Some(Type::BitField)));
+        assert!(type_descr.field_value(0x1234, "field1").is_some_and(|v| v.as_u32() == 0x34));
+
+        let enum_type_descr = type_info.type_description_for_path("foo/baz/status2").unwrap();
+        // let enum_type_descr = type_info.find_type_description("Enum").unwrap();
         assert!(matches!(enum_type_descr.type_id(), Some(Type::Enum)));
         assert!(enum_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Continuous)));
         assert_eq!(enum_type_descr.field_value((), "Warning").unwrap().as_u32(), 2);
