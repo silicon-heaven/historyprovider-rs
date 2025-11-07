@@ -15,7 +15,7 @@ use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio::time::timeout;
 
 use crate::alarm::{collect_alarms, Alarm};
-use crate::tree::getlog_handler;
+use crate::getlog::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, ClientCommandSender, State, Subscriber};

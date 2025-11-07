@@ -12,6 +12,9 @@ use crate::alarm::Alarm;
 use self::sites::SiteOnlineStatus;
 use self::util::DedupSender;
 
+mod getlog;
+mod alarmlog;
+mod pushlog;
 mod sites;
 mod tree;
 mod sync;
