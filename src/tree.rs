@@ -69,6 +69,7 @@ const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod {
 };
 
 // Root node methods
+const METH_VERSION: &str = "version";
 const METH_UPTIME: &str = "uptime";
 const METH_RELOAD_SITES: &str = "reloadSites";
 
@@ -218,7 +219,6 @@ async fn shvjournal_methods_getter(path: impl AsRef<str>, app_state: AppState<St
     // probe the path on the fs
     let path_meta = tokio::fs::metadata(path).await.ok()?;
     if path_meta.is_dir() {
-        // TODO: mkfile, mkdir, rmdir
         Some(MetaMethods::from(&[
                 &MetaMethod {
                     name: METH_LS_FILES,
@@ -301,6 +301,8 @@ async fn root_request_handler(
 
     const ROOT_PATH: &str = "";
     match method {
+        METH_VERSION => Ok(env!("CARGO_PKG_VERSION").into()),
+        METH_UPTIME => Ok(humantime::format_duration(std::time::Duration::from_secs(app_state.start_time.elapsed().as_secs())).to_string().into()),
         METH_LS => {
             let mut nodes = vec![
                 ".app".to_string(),
@@ -762,6 +764,15 @@ pub(crate) async fn methods_getter(
         NodeType::Root =>
             Some(MetaMethods::from(&[
                     &MetaMethod {
+                        name: METH_VERSION,
+                        flags: 0,
+                        access: shvrpc::metamethod::AccessLevel::Read,
+                        param: "Null",
+                        result: "String",
+                        signals: &[],
+                        description: "",
+                    },
+                    &MetaMethod {
                         name: METH_UPTIME,
                         flags: 0,
                         access: shvrpc::metamethod::AccessLevel::Read,
@@ -785,11 +796,9 @@ pub(crate) async fn methods_getter(
                     // appName
                     // deviceId
                     // deviceType
-                    // version
                     // gitCommit
                     // shvVersion
                     // shvGitCommit
-                    // uptime
                     // reloadSites (wr) -> Bool
         ])),
         NodeType::History => {
@@ -816,7 +825,6 @@ pub(crate) async fn methods_getter(
             }
         }
     }
-    // TODO: put the processed data to a request cache in the app state: path -> children
 }
 
 pub(crate) async fn request_handler(

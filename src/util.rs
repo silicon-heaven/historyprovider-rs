@@ -396,6 +396,7 @@ pub mod testing {
         }
 
         let state = AppState::new(State {
+            start_time: std::time::Instant::now(),
             config: crate::HpConfig {
                 journal_dir: journal_dir.path().to_str().expect("path must work").to_string(),
                 max_sync_tasks: None,

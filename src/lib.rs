@@ -68,6 +68,7 @@ impl From<AlarmWithTimestamp> for RpcValue {
 }
 
 struct State {
+    start_time: std::time::Instant,
     sites_data: RwLock<sites::SitesData>,
     sync_info: sync::SyncInfo,
     alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
@@ -89,6 +90,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded();
 
     let app_state = AppState::new(State {
+        start_time: std::time::Instant::now(),
         sites_data: RwLock::default(),
         sync_info: Default::default(),
         alarms: Default::default(),
