@@ -570,8 +570,6 @@ pub(crate) async fn sites_task(
 
                 }
                 _ => {
-                    // TODO: Drain subscribers
-
                     subscribers.clear();
                     mntchng_subscribers.clear();
                     online_status_channels.clear();

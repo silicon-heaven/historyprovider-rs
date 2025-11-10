@@ -805,7 +805,7 @@ pub(crate) async fn sync_task(
                             sync_tasks.push(sync_task);
                         }
                         SubHpInfo::PushLog => {
-                            // TODO
+                            // No op
                         }
                     }
                 }
@@ -876,7 +876,7 @@ pub(crate) async fn sync_task(
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::PushLog => {
-                            // TODO
+                            // No op
                         }
                     }
                     app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
