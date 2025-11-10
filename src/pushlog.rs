@@ -84,7 +84,7 @@ pub(crate) async fn pushlog_impl(
     };
     let local_latest_entry_msec = local_latest_entries.first().map_or(0, |entry| entry.epoch_msec);
 
-    let journal_file_path = local_journal_path.join(since.to_iso_string() + ".log2");
+    let journal_file_path = local_journal_path.join(since.to_chrono_datetime().format("%Y-%m-%dT%H-%M-%S-%3f.log2").to_string());
     let journal_file = match tokio::fs::OpenOptions::new()
         .write(true)
         .append(true)
