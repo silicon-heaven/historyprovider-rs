@@ -142,11 +142,11 @@ impl AlarmGetter for StateAlarm {
     }
 }
 
-pub fn collect_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
+pub fn collect_alarms(type_info: &TypeInfo, shv_path: &str, value: &RpcValue) -> Vec<Alarm> {
     impl_collect_alarms::<CommonAlarm>(type_info, shv_path, value)
 }
 
-pub fn collect_state_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
+pub fn collect_state_alarms(type_info: &TypeInfo, shv_path: &str, value: &RpcValue) -> Vec<Alarm> {
     impl_collect_alarms::<StateAlarm>(type_info, shv_path, value)
 }
 
