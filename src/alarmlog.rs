@@ -8,6 +8,7 @@ use shvclient::AppState;
 use shvproto::{FromRpcValue, ToRpcValue};
 use tokio::sync::Semaphore;
 
+use crate::alarm::collect_alarms;
 use crate::getlog::getlog_handler;
 use crate::journalrw::{GetLog2Params, GetLog2Since};
 use crate::sites::update_alarms;
@@ -84,14 +85,14 @@ pub(crate) async fn alarmlog_impl(
         .map(|(site_path, log, type_info)| {
             let mut tmp_alarms = Vec::<AlarmWithTimestamp>::new();
             for entry in log.snapshot_entries {
-                update_alarms(&mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+                update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
             }
 
             let snapshot = tmp_alarms.clone();
 
             let events = log.event_entries
                 .into_iter()
-                .flat_map(|entry| update_alarms(&mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec)))
+                .flat_map(|entry| update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec)))
                 .collect::<Vec<_>>();
 
             (site_path.to_string(), AlarmLog {

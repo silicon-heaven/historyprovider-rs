@@ -14,7 +14,7 @@ use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio::time::timeout;
 
-use crate::alarm::{collect_alarms, Alarm};
+use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
 use crate::getlog::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
@@ -163,8 +163,9 @@ fn collect_sub_hps(
         .collect()
 }
 
-pub(crate) fn update_alarms(alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<AlarmWithTimestamp> {
-    let new_alarms = collect_alarms(type_info, property_path, value)
+type AlarmCollector = fn(type_info: &TypeInfo, shv_path: &str, value: &RpcValue) -> Vec<Alarm>;
+pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<AlarmWithTimestamp> {
+    let new_alarms = alarms_colector(type_info, property_path, value)
         .into_iter()
         .map(|alarm| AlarmWithTimestamp {
             alarm,
@@ -524,6 +525,7 @@ pub(crate) async fn sites_task(
                         ..Default::default()
                     };
                     let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
+                    let mut state_alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
                     for site_path in sites_info.keys() {
                         let Some(Ok(type_info)) = typeinfos.get(site_path) else {
                             // No typeinfo for this site - skip
@@ -538,15 +540,21 @@ pub(crate) async fn sites_task(
                             }
                         };
 
-                        let alarms_for_site = alarms.entry(site_path.to_string()).or_default();
-
                         let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
-                        for entry in chained_entries  {
-                            update_alarms(alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
-                        }
+                        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
+                            let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
+
+                            for entry in chained_entries.clone()  {
+                                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+                            }
+                        };
+
+                        impl_update_alarms(&mut alarms, collect_alarms);
+                        impl_update_alarms(&mut state_alarms, collect_state_alarms);
                     }
 
                     *app_state.alarms.write().await = alarms;
+                    *app_state.state_alarms.write().await = state_alarms;
 
                     let mut online_status_workers = Vec::new();
                     for (site, info) in sites_info.iter() {
@@ -634,14 +642,18 @@ pub(crate) async fn sites_task(
                     continue;
                 };
 
-                let alarms = &mut *app_state.alarms.write().await;
-                let alarms_for_site = alarms.entry(parsed_notification.site_path.clone()).or_default();
+                let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector, signal_name| {
+                    let alarms_for_site = alarm_table.entry(parsed_notification.site_path.clone()).or_default();
 
-                let updated = update_alarms(alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
-                if !updated.is_empty() {
-                    client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, "alarmmod", None))
-                        .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
-                }
+                    let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
+                    if !updated.is_empty() {
+                        client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name, None))
+                            .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
+                    }
+                };
+
+                impl_update_alarms(&mut *app_state.alarms.write().await, collect_alarms, "alarmmod");
+                impl_update_alarms(&mut *app_state.state_alarms.write().await, collect_state_alarms, "statealarmmod");
             }
             complete => break,
         }

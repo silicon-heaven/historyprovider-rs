@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_compression::tokio::write::GzipEncoder;
@@ -11,6 +12,7 @@ use shvrpc::metamethod::MetaMethod;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::RwLockReadGuard;
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 
@@ -20,11 +22,12 @@ use crate::getlog::getlog_handler;
 use crate::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
 use crate::pushlog::pushlog_impl;
 use crate::sites::SubHpInfo;
-use crate::{ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
+use crate::{AlarmWithTimestamp, ClientCommandSender, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
 const METH_ALARM_TABLE: &str = "alarmTable";
+const METH_STATE_ALARM_TABLE: &str = "stateAlarmTable";
 const METH_ALARM_LOG: &str = "alarmLog";
 const METH_PUSH_LOG: &str = "pushLog";
 
@@ -45,6 +48,16 @@ const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod {
     param: "RpcValue",
     result: "RpcValue",
     signals: &[("alarmmod", Some("Null"))],
+    description: "",
+};
+
+const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod {
+    name: METH_STATE_ALARM_TABLE,
+    flags: 0,
+    access: shvrpc::metamethod::AccessLevel::Read,
+    param: "RpcValue",
+    result: "RpcValue",
+    signals: &[("statealarmmod", Some("Null"))],
     description: "",
 };
 
@@ -688,14 +701,33 @@ async fn getlog_handler_rq(
     Ok(result)
 }
 
-async fn alarmtable_handler(
+trait AlarmGetter {
+    async fn alarm_getter(f: &State) -> RwLockReadGuard<'_, BTreeMap<String, Vec<AlarmWithTimestamp>>>;
+}
+
+struct CommonAlarm;
+impl AlarmGetter for CommonAlarm {
+    async fn alarm_getter(f: &State) -> RwLockReadGuard<'_, BTreeMap<String, Vec<AlarmWithTimestamp>>> {
+        f.alarms.read().await
+    }
+}
+
+struct StateAlarm;
+impl AlarmGetter for StateAlarm {
+    async fn alarm_getter(f: &State) -> RwLockReadGuard<'_, BTreeMap<String, Vec<AlarmWithTimestamp>>> {
+        f.state_alarms.read().await
+    }
+}
+
+async fn alarmtable_handler<Getter: AlarmGetter>(
     site_path: &str,
     app_state: AppState<State>,
 ) -> RpcRequestResult {
     if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmTable path: {site_path}")));
     }
-    match app_state.alarms.read().await.get(site_path) {
+
+    match Getter::alarm_getter(&app_state).await.get(site_path) {
         Some(alarms_for_site) => Ok(alarms_for_site.clone().into()),
         None => Ok(Vec::<RpcValue>::new().into()),
     }
@@ -725,7 +757,8 @@ async fn history_request_handler(
     match method {
         METH_LS => Ok(children.into()),
         METH_GET_LOG => getlog_handler_rq(path, &param, app_state).await,
-        METH_ALARM_TABLE => alarmtable_handler(path, app_state).await,
+        METH_ALARM_TABLE => alarmtable_handler::<CommonAlarm>(path, app_state).await,
+        METH_STATE_ALARM_TABLE => alarmtable_handler::<StateAlarm>(path, app_state).await,
         METH_ALARM_LOG => alarmlog_handler(path, &param, app_state).await,
         METH_PUSH_LOG => pushlog_handler(path, param, app_state).await,
         _ => Err(rpc_error_unknown_method(method)),
@@ -815,7 +848,7 @@ pub(crate) async fn methods_getter(
                 }
 
                 if sites_data.typeinfos.get(&path).is_some_and(Result::is_ok) {
-                    Some(MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_ALARM_TABLE, &META_METHOD_ALARM_LOG]))
+                    Some(MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_ALARM_TABLE, &META_METHOD_STATE_ALARM_TABLE, &META_METHOD_ALARM_LOG]))
                 } else {
                     Some(MetaMethods::from(&[&META_METHOD_GET_LOG, &META_METHOD_ALARM_LOG]))
                 }

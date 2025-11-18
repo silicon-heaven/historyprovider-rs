@@ -30,6 +30,7 @@ pub const KEY_BLACKLIST: &str = "blacklist";
 pub const KEY_DEC_PLACES: &str = "decPlaces";
 pub const KEY_VISUAL_STYLE: &str = "visualStyle";
 pub const KEY_ALARM: &str = "alarm";
+pub const KEY_STATE_ALARM: &str = "stateAlarm";
 pub const KEY_ALARM_LEVEL: &str = "alarmLevel";
 
 fn merge_tags(mut map: RpcMap) -> RpcMap {
@@ -289,6 +290,12 @@ pub trait FieldDescriptionMethods: TypeDescriptionMethods {
     }
     fn set_alarm(&mut self, alarm: impl AsRef<str>) {
         set_data_value(self, KEY_ALARM, alarm.as_ref());
+    }
+    fn state_alarm(&self) -> Option<&str> {
+        self.data_value(KEY_STATE_ALARM).map(RpcValue::as_str)
+    }
+    fn set_state_alarm(&mut self, alarm: impl AsRef<str>) {
+        set_data_value(self, KEY_STATE_ALARM, alarm.as_ref());
     }
     fn alarm_level(&self) -> Option<i32> {
         self.data_value(KEY_ALARM_LEVEL).map(RpcValue::as_i32)
@@ -565,6 +572,7 @@ impl PropertyDescription {
             "monitorOptions",
             KEY_SAMPLE_TYPE,
             KEY_ALARM,
+            KEY_STATE_ALARM,
             KEY_ALARM_LEVEL,
         ];
 
@@ -1278,6 +1286,7 @@ mod tests {
                 {"alarm":"warning", "description":"Alarm 1", "label":"Alarm 1 label", "name":"field1", "value": [0,7] },
                 {"alarm":"error", "description":"Alarm 2", "label":"Alarm 2 label", "name":"field2", "value": 24 },
                 {"name":"field3", "value": [25, 26] },
+                {"stateAlarm":"error", "description":"State alarm 1", "label":"State alarm 1 label", "name":"field4", "value": 27 },
             ],
             "typeName":"BitField"
         },
@@ -1303,6 +1312,7 @@ mod tests {
                 },
                 {
                     "alarm":"error",
+                    "stateAlarm":"error",
                     "alarmLevel":100,
                     "description":"",
                     "label":"",
@@ -1416,6 +1426,8 @@ mod tests {
         assert_eq!(bitfield_type_descr.field_value(0x7effffff, "field2").unwrap().as_u32(), 0);
         assert_eq!(bitfield_type_descr.field_value(0x1cffffff, "field3").unwrap().as_u32(), 2);
 
+        assert_eq!(bitfield_type_descr.field("field4").as_ref().and_then(FieldDescriptionMethods::state_alarm), Some("error"));
+
         let map_type_descr = type_info.find_type_description("Map").unwrap();
         assert!(matches!(map_type_descr.type_id(), Some(Type::Map)));
         assert!(map_type_descr.sample_type().is_some_and(|st| matches!(st, SampleType::Discrete)));
@@ -1436,6 +1448,8 @@ mod tests {
         for fld in &enum_type_descr.fields() {
             assert!(field_alarms.get(fld.name()).is_some_and(|(alarm, level)| alarm == &fld.alarm() && level == &fld.alarm_level()));
         }
+
+        assert_eq!(enum_type_descr.field("Error").as_ref().and_then(FieldDescriptionMethods::state_alarm), Some("error"));
     }
 
     #[test]
