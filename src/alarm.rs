@@ -124,29 +124,33 @@ impl From<Alarm> for RpcValue {
     }
 }
 
-
-#[derive(Clone,Copy)]
-enum AlarmType {
-    Alarm,
-    StateAlarm,
+trait AlarmGetter {
+    fn alarm_getter(f: &impl FieldDescriptionMethods) -> Option<&str>;
 }
 
-pub fn collect_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
-    impl_collect_alarms(AlarmType::Alarm, type_info, shv_path, value)
-}
-
-pub fn collect_state_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
-    impl_collect_alarms(AlarmType::StateAlarm, type_info, shv_path, value)
-}
-
-fn alarm_getter(x: &impl FieldDescriptionMethods, alarm_type: AlarmType) -> Option<&str> {
-    match alarm_type {
-        AlarmType::Alarm => x.alarm(),
-        AlarmType::StateAlarm => x.state_alarm(),
+struct CommonAlarm;
+impl AlarmGetter for CommonAlarm {
+    fn alarm_getter(f: &impl FieldDescriptionMethods) -> Option<&str> {
+        f.alarm()
     }
 }
 
-fn impl_collect_alarms(alarm_type: AlarmType, type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
+struct StateAlarm;
+impl AlarmGetter for StateAlarm {
+    fn alarm_getter(f: &impl FieldDescriptionMethods) -> Option<&str> {
+        f.state_alarm()
+    }
+}
+
+pub fn collect_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
+    impl_collect_alarms::<CommonAlarm>(type_info, shv_path, value)
+}
+
+pub fn collect_state_alarms(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
+    impl_collect_alarms::<StateAlarm>(type_info, shv_path, value)
+}
+
+fn impl_collect_alarms<Getter: AlarmGetter>(type_info: &TypeInfo, shv_path: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
     if value.is_null() {
         // value not available, keep previous alarms active
         return vec![];
@@ -158,7 +162,7 @@ fn impl_collect_alarms(alarm_type: AlarmType, type_info: &TypeInfo, shv_path: im
         return vec![];
     }
 
-    if let Some(alarm) = alarm_getter(&property_description, alarm_type) && !alarm.is_empty() {
+    if let Some(alarm) = Getter::alarm_getter(&property_description) && !alarm.is_empty() {
         vec![
             Alarm {
                 path: shv_path.into(),
@@ -170,11 +174,11 @@ fn impl_collect_alarms(alarm_type: AlarmType, type_info: &TypeInfo, shv_path: im
             }
         ]
     } else {
-        collect_alarms_for_type(alarm_type, type_info, shv_path, property_description.type_name().unwrap_or_default(), value)
+        collect_alarms_for_type::<Getter>(type_info, shv_path, property_description.type_name().unwrap_or_default(), value)
     }
 }
 
-fn collect_alarms_for_type(alarm_type: AlarmType, type_info: &TypeInfo, shv_path: impl AsRef<str>, type_name: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
+fn collect_alarms_for_type<Getter: AlarmGetter>(type_info: &TypeInfo, shv_path: impl AsRef<str>, type_name: impl AsRef<str>, value: &RpcValue) -> Vec<Alarm> {
     let Some(type_descr) = type_info.find_type_description(type_name).filter(|descr| descr.is_valid()) else {
         return vec![]
     };
@@ -186,7 +190,7 @@ fn collect_alarms_for_type(alarm_type: AlarmType, type_info: &TypeInfo, shv_path
                 .flat_map(|fld_descr| {
                     let sub_path = format!("{shv_path}/{fld_descr_name}", fld_descr_name = fld_descr.name());
                     let bitfield_value = fld_descr.bitfield_value(value.as_u64());
-                    if let Some(alarm) = alarm_getter(fld_descr, alarm_type).filter(|alarm| !alarm.is_empty()) {
+                    if let Some(alarm) = Getter::alarm_getter(fld_descr).filter(|alarm| !alarm.is_empty()) {
                         vec![
                             Alarm {
                                 path: sub_path,
@@ -198,8 +202,7 @@ fn collect_alarms_for_type(alarm_type: AlarmType, type_info: &TypeInfo, shv_path
                             }
                         ]
                     } else {
-                        collect_alarms_for_type(
-                            alarm_type,
+                        collect_alarms_for_type::<Getter>(
                             type_info,
                             sub_path,
                             fld_descr.type_name().unwrap_or_default(),
@@ -214,7 +217,7 @@ fn collect_alarms_for_type(alarm_type: AlarmType, type_info: &TypeInfo, shv_path
 
             let has_alarm_definition = fields
                 .iter()
-                .any(|field| alarm_getter(field, alarm_type)
+                .any(|field| Getter::alarm_getter(field)
                     .is_some_and(|f| !f.is_empty())
                 );
             if !has_alarm_definition {
@@ -223,7 +226,7 @@ fn collect_alarms_for_type(alarm_type: AlarmType, type_info: &TypeInfo, shv_path
 
             let active_alarm_field = fields
                 .into_iter()
-                .find(|field| alarm_getter(field, alarm_type).is_some_and(|alarm| !alarm.is_empty())
+                .find(|field| Getter::alarm_getter(field).is_some_and(|alarm| !alarm.is_empty())
                     && field.bit_range().is_some_and(|bit_range| bit_range.as_u64() == value.as_u64()));
             match active_alarm_field {
                 Some(field) => vec![
@@ -233,7 +236,7 @@ fn collect_alarms_for_type(alarm_type: AlarmType, type_info: &TypeInfo, shv_path
                         description: field.description().unwrap_or_default().into(),
                         label: field.label().unwrap_or_default().into(),
                         level: field.alarm_level().unwrap_or_default(),
-                        severity: alarm_getter(&field, alarm_type).unwrap_or_default().into(),
+                        severity: Getter::alarm_getter(&field).unwrap_or_default().into(),
                     }
                 ],
                 None => vec![
