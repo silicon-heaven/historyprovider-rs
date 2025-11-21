@@ -1,0 +1,75 @@
+# vim: sw=2
+name: Misc
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  check-version-bump:
+    name: Check version bump
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Check version bump
+        id: version-check
+        continue-on-error: ${{startsWith(github.head_ref, 'dependabot/')}}
+        uses: silicon-heaven/rust-check-version-bump@v1.0.1
+
+      - name: Check if Cargo.lock was changed
+        continue-on-error: ${{startsWith(github.head_ref, 'dependabot/')}}
+        run: |
+          cargo update --workspace
+          if ! git diff --exit-code; then
+            echo "Error: No version bump detected in Cargo.lock"
+            exit 1
+          fi
+
+      - name: Fetch Dependabot metadata
+        id: dependabot-metadata
+        if: steps.version-check.outcome == 'failure'
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+
+      - name: Checkout code
+        if: steps.version-check.outcome == 'failure'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{github.head_ref}}
+
+      - name: Bump version
+        if: steps.version-check.outcome == 'failure'
+        run: |
+          echo "Bumping version by patch"
+          cargo install cargo-bump
+          cargo bump patch
+          cargo update --workspace
+
+      - name: Commit changes
+        if: steps.version-check.outcome == 'failure'
+        run: |
+          git diff
+          git config --global user.name "Login will be determined by the Github API based on the creator of the token"
+          git config --global user.email ""
+          git commit -am '[dependabot-skip] Bump version'
+
+      - name: Push changes
+        if: steps.version-check.outcome == 'failure'
+        uses: Asana/push-signed-commits@v1
+        with:
+          github-token: ${{secrets.DEPENDABOT_GITHUB_TOKEN}}
+          local_branch_name: ${{github.head_ref}}
+          remote_branch_name: ${{github.head_ref}}
