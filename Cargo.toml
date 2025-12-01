@@ -21,7 +21,7 @@ duration-str = "0.17"
 sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.17", features = ["io"] }
-async-compression = { version = "0.4.33", features = ["gzip", "tokio"] }
+async-compression = { version = "0.4.34", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.17", features = ["fs"] }
