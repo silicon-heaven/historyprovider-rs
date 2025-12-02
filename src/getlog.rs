@@ -8,7 +8,6 @@ use chrono::TimeZone;
 use futures::io::BufReader;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{error, info, warn};
-use shvclient::AppState;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use tokio::fs::DirEntry;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -47,7 +46,7 @@ fn file_name_to_file_msec(filename: &str) -> Result<i64, String> {
 pub(crate) async fn getlog_handler(
     site_path: &str,
     params: &GetLog2Params,
-    app_state: AppState<State>,
+    app_state: Arc<State>,
 ) -> Result<GetLogResult, RpcError> {
     if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));

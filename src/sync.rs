@@ -8,9 +8,9 @@ use futures::io::{BufReader, BufWriter};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use log::{debug, error, info, warn};
-use shvclient::client::RpcCall;
+use shvclient::clientapi::RpcCall;
 use shvclient::clientnode::METH_DIR;
-use shvclient::{AppState, ClientEventsReceiver};
+use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::join_path;
 use time::format_description::well_known::Iso8601;
@@ -25,7 +25,7 @@ use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWr
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{get_files, is_log2_file, DedupReceiver};
-use crate::{ClientCommandSender, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
+use crate::{State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
@@ -292,7 +292,7 @@ async fn sync_site_by_download(
     let file_list = match file_list {
         Some(file_list) => file_list,
         None => &RpcCall::new(remote_journal_path, "lsfiles")
-            .exec::<_, Vec<LsFilesEntry>, _>(&client_cmd_tx)
+            .exec::<Vec<LsFilesEntry>, _>(&client_cmd_tx)
             .await
             .map(|file_list| file_list.into_iter().filter(|file| matches!(file.ftype, FileType::File) && file.name.ends_with(".log2")).collect::<Vec<_>>())
             .map(|mut file_list| { file_list.sort_by(|file_a, file_b| file_a.name.cmp(&file_b.name)); file_list })
@@ -702,7 +702,7 @@ const MAX_SYNC_TASKS_DEFAULT: usize = 8;
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
-    app_state: AppState<State>,
+    app_state: Arc<State>,
     mut sync_cmd_rx: DedupReceiver<SyncCommand>,
 )
 {

@@ -6,13 +6,12 @@ use std::pin::Pin;
 use std::task::Poll;
 
 use futures::{Stream, StreamExt, TryStreamExt};
-use shvclient::client::ShvApiVersion;
+use shvclient::clientapi::{ShvApiVersion, Subscriber};
+use shvclient::ClientCommandSender;
 use shvrpc::join_path;
 use shvrpc::rpc::ShvRI;
 use tokio::fs::DirEntry;
 use tokio_stream::wrappers::ReadDirStream;
-
-use crate::{ClientCommandSender, Subscriber};
 
 #[cfg(test)]
 use std::sync::Once;
@@ -140,7 +139,7 @@ pub mod testing {
     use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesData, SubHpInfo}, sync::SyncCommand, util::{DedupReceiver, dedup_channel}};
     use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
-    use shvclient::{client::{ClientCommand, ClientEventsReceiver}, AppState, ClientCommandSender};
+    use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
     use shvproto::RpcValue;
     use shvrpc::{rpcframe::RpcFrame, rpcmessage::RpcError, RpcMessage, RpcMessageMetaTags};
     use std::{collections::{BTreeMap, HashMap}, path::{Path, PathBuf}, sync::Arc};
@@ -202,7 +201,7 @@ pub mod testing {
         res
     }
 
-    pub async fn expect_rpc_call(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, expected_shv_path: &str, expected_method: &str, expected_param: Option<RpcValue>, return_val: Result<RpcValue, RpcError>) {
+    pub async fn expect_rpc_call(client_command_receiver: &mut UnboundedReceiver<ClientCommand>, expected_shv_path: &str, expected_method: &str, expected_param: Option<RpcValue>, return_val: Result<RpcValue, RpcError>) {
         let Some(event) = client_command_receiver.next().await else {
             panic!("got unexpected event");
         };
@@ -231,19 +230,17 @@ pub mod testing {
         }
     }
 
-    pub fn print_client_command<T>(cmd: ClientCommand<T>) -> String {
+    pub fn print_client_command(cmd: ClientCommand) -> String {
         match cmd {
             ClientCommand::SendMessage { message } => format!("SendMessage({})", message.to_cpon()),
             ClientCommand::RpcCall { request, .. } => format!("RpcCall({:?}, {:?}, {:?})", request.shv_path(), request.method(), request.param()),
             ClientCommand::Subscribe { ri, subscription_id, .. } => format!("Subscribe({ri}) -> {subscription_id}"),
             ClientCommand::Unsubscribe { subscription_id } => format!("Unsubscribe({subscription_id})"),
-            ClientCommand::MountNode { path, .. } => format!("MountNode({path})"),
-            ClientCommand::UnmountNode { path } => format!("UnmountNode({path})"),
             ClientCommand::TerminateClient => "TerminateClient".to_string(),
         }
     }
 
-    pub async fn expect_subscription(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, expected_ri: &shvrpc::rpc::ShvRI) -> UnboundedSender<RpcFrame> {
+    pub async fn expect_subscription(client_command_receiver: &mut UnboundedReceiver<ClientCommand>, expected_ri: &shvrpc::rpc::ShvRI) -> UnboundedSender<RpcFrame> {
         let Some(event) = client_command_receiver.next().await else {
             panic!("expected event, but got none");
         };
@@ -261,7 +258,7 @@ pub mod testing {
         }
     }
 
-    pub async fn expect_unsubscription(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>) {
+    pub async fn expect_unsubscription(client_command_receiver: &mut UnboundedReceiver<ClientCommand>) {
         let Some(event) = client_command_receiver.next().await else {
             panic!("expected event, but got none");
         };
@@ -277,13 +274,13 @@ pub mod testing {
 
     #[async_trait::async_trait]
     pub trait TestStep<TestState> {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut TestState);
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut TestState);
     }
 
     pub struct ExpectCall(pub &'static str, pub &'static str, pub Result<RpcValue, RpcError>);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectCall {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let ExpectCall(path, method, ret_val) = self;
             expect_rpc_call(client_command_receiver, path, method, None, ret_val.clone()).await;
         }
@@ -292,10 +289,10 @@ pub mod testing {
     pub struct ExpectSignal(pub &'static str, pub &'static str, pub RpcValue);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectSignal {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let ExpectSignal(path, method, param) = self;
             expect_signal(client_command_receiver, path, method, param).await;
-            pub async fn expect_signal(client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, expected_shv_path: &str, expected_method: &str, expected_param: &RpcValue) {
+            pub async fn expect_signal(client_command_receiver: &mut UnboundedReceiver<ClientCommand>, expected_shv_path: &str, expected_method: &str, expected_param: &RpcValue) {
                 let Some(event) = client_command_receiver.next().await else {
                     panic!("got unexpected event");
                 };
@@ -321,7 +318,7 @@ pub mod testing {
     pub struct ExpectCallParam(pub &'static str, pub &'static str, pub RpcValue, pub Result<RpcValue, RpcError>);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectCallParam {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let ExpectCallParam(path, method, param, ret_val) = self;
             expect_rpc_call(client_command_receiver, path, method, Some(param.clone()), ret_val.clone()).await;
         }
@@ -330,7 +327,7 @@ pub mod testing {
     pub struct ExpectSubscription(pub shvrpc::rpc::ShvRI);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectSubscription {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let sub_id = self.0.to_string();
             let notifications_tx = expect_subscription(client_command_receiver, &self.0).await;
             subscriptions.insert(sub_id, notifications_tx);
@@ -340,7 +337,7 @@ pub mod testing {
     pub struct SendSignal(pub String, pub String, pub String, pub RpcValue);
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for SendSignal {
-        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             let sub_id = self.0.to_string();
             let (_, sender)  = subscriptions.iter().find(|(id, _)| **id == sub_id).expect("Sub must exist");
             let shv_path = self.1.as_str();
@@ -354,7 +351,7 @@ pub mod testing {
     pub struct ExpectUnsubscription;
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for ExpectUnsubscription {
-        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
+        async fn exec(&self, client_command_receiver: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
             expect_unsubscription(client_command_receiver).await;
         }
     }
@@ -364,13 +361,13 @@ pub mod testing {
         steps: &[Box<dyn TestStep<TestState>>],
         starting_files: Vec<(&str, &str)>,
         expected_file_paths: Vec<(&str, &str)>,
-        create_task: impl FnOnce(ClientCommandSender<State>, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, UnboundedReceiver<DirtyLogCommand>, DedupReceiver<SyncCommand>, AppState<State>) -> (tokio::task::JoinHandle<()>, TestState),
+        create_task: impl FnOnce(ClientCommandSender, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, UnboundedReceiver<DirtyLogCommand>, DedupReceiver<SyncCommand>, Arc<State>) -> (tokio::task::JoinHandle<()>, TestState),
         destroy_task: impl FnOnce(&mut TestState),
         cleanup_steps: &[Box<dyn TestStep<TestState>>]
     ) -> std::result::Result<(), PrettyJoinError> {
         debug!(target: "test-driver", "Running test '{test_name}'");
         let (client_command_sender, mut client_command_receiver) = unbounded();
-        let client_command_sender: ClientCommandSender<State> = ClientCommandSender::from_raw(client_command_sender);
+        let client_command_sender: ClientCommandSender = ClientCommandSender::from_raw(client_command_sender);
         let (client_events_sender, client_events_rx) = async_broadcast::broadcast(10);
         let (dedup_sender, dedup_receiver) = dedup_channel::<SyncCommand>();
         let client_events_receiver = ClientEventsReceiver::from_raw(client_events_rx.clone());
@@ -395,7 +392,7 @@ pub mod testing {
                 .map_err(|e| PrettyJoinError(format!("Cannot write to {starting_file_name}: {e}")))?;
         }
 
-        let state = AppState::new(State {
+        let state = Arc::new(State {
             start_time: std::time::Instant::now(),
             config: crate::HpConfig {
                 journal_dir: journal_dir.path().to_str().expect("path must work").to_string(),

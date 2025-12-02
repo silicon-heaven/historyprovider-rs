@@ -4,7 +4,6 @@ use std::sync::Arc;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use log::warn;
-use shvclient::AppState;
 use shvproto::{FromRpcValue, ToRpcValue};
 use tokio::sync::Semaphore;
 
@@ -30,7 +29,7 @@ pub(crate) struct AlarmLog {
 pub(crate) async fn alarmlog_impl(
     site_path_prefix: &str,
     params: &AlarmLogParams,
-    app_state: AppState<State>,
+    app_state: Arc<State>,
 ) -> BTreeMap<String, AlarmLog>
 {
     let typeinfos = app_state.sites_data.read().await.typeinfos.clone();

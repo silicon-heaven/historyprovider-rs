@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot::Sender as OneshotSender;
@@ -8,7 +9,7 @@ use futures::io::BufReader;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use log::{debug, error, info, warn};
-use shvclient::{AppState, ClientEventsReceiver};
+use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -18,7 +19,7 @@ use crate::journalentry::JournalEntry;
 use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_SPONTANEOUS_BIT};
 use crate::sites::ParsedNotification;
 use crate::util::{get_files, is_log2_file};
-use crate::{ClientCommandSender, State};
+use crate::State;
 
 
 #[derive(Debug)]
@@ -36,7 +37,7 @@ pub(crate) enum DirtyLogCommand {
 pub(crate) async fn dirtylog_task(
     _client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
-    app_state: AppState<State>,
+    app_state: Arc<State>,
     mut cmd_rx: UnboundedReceiver<DirtyLogCommand>,
 ) {
     // Per site request
@@ -296,11 +297,11 @@ mod tests {
 
     use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
     use log::debug;
-    use shvclient::client::ClientCommand;
+    use shvclient::clientapi::ClientCommand;
     use shvproto::DateTime;
     use shvrpc::rpcframe::RpcFrame;
 
-    use crate::{State, datachange::DataChange, dirtylog::{DirtyLogCommand, dirtylog_task}, journalentry::JournalEntry, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
+    use crate::{datachange::DataChange, dirtylog::{DirtyLogCommand, dirtylog_task}, journalentry::JournalEntry, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
 
     struct DirtylogTaskTestState {
         sender: UnboundedSender<DirtyLogCommand>,
@@ -311,7 +312,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TestStep<DirtylogTaskTestState> for TestDirtyLogCommand {
-        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut DirtylogTaskTestState) {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut DirtylogTaskTestState) {
             let cmd = match &self.0 {
                 DirtyLogCommand::ProcessNotification(msg) => DirtyLogCommand::ProcessNotification(msg.clone()),
                 DirtyLogCommand::Trim { site } => DirtyLogCommand::Trim { site: site.clone() },
@@ -329,7 +330,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TestStep<DirtylogTaskTestState> for TestGetDirtyLog {
-        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut DirtylogTaskTestState) {
+        async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut DirtylogTaskTestState) {
             debug!(target: "test-driver", "Sending DirtyLogCommand::Get");
             let (sender, receiver) = futures::channel::oneshot::channel();
             state.sender.unbounded_send(DirtyLogCommand::Get { site: self.site.clone(), response_tx: sender }).expect("Sending DirtyLogCommands should succeed");

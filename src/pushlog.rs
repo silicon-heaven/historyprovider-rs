@@ -1,9 +1,9 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use futures::io::{BufReader, BufWriter};
 use futures::StreamExt as _;
 use log::{error, info, warn};
-use shvclient::AppState;
 use shvproto::RpcValue;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 
@@ -30,7 +30,7 @@ impl From<PushLogResult> for RpcValue {
 pub(crate) async fn pushlog_impl(
     log_reader: Log2Reader,
     site_path: &str,
-    app_state: AppState<State>,
+    app_state: Arc<State>,
 ) -> PushLogResult
 {
     info!("pushLog handler, site: {site_path}, log header: {header}", header = log_reader.header);

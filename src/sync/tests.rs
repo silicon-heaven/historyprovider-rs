@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::dirtylog::DirtyLogCommand;
 use crate::util::{dedup_channel, testing::*};
-use crate::{sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}, State};
+use crate::{sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::debug;
-use shvclient::client::ClientCommand;
+use shvclient::clientapi::ClientCommand;
 use shvproto::{make_list, make_map, RpcValue};
 use shvrpc::rpcframe::RpcFrame;
 use shvrpc::rpcmessage::RpcError;
@@ -17,7 +17,7 @@ struct SyncTaskTestState {
 
 #[async_trait::async_trait]
 impl TestStep<SyncTaskTestState> for SyncCommand {
-    async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
+    async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
         let cmd = self.clone();
         debug!(target: "test-driver", "Sending SyncCommand::{cmd:?}");
         state.dedup_sender.send(cmd).expect("Sending SyncCommands should succeed");

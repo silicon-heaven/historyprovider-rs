@@ -6,11 +6,12 @@ use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
 use log::{debug, error, warn};
-use shvclient::client::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList};
-use shvclient::clientnode::{find_longest_path_prefix, METH_DIR, SIG_CHNG};
-use shvclient::{AppState, ClientEventsReceiver};
+use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList, Subscriber};
+use shvclient::clientnode::{METH_DIR, SIG_CHNG};
+use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
+use shvrpc::util::find_longest_path_prefix;
 use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio::time::timeout;
 
@@ -18,7 +19,7 @@ use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
 use crate::getlog::getlog_handler;
 use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
-use crate::{AlarmWithTimestamp, ClientCommandSender, State, Subscriber};
+use crate::{AlarmWithTimestamp, State};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum SiteOnlineStatus {
@@ -202,7 +203,7 @@ async fn set_online_status(
     site: impl AsRef<str>,
     new_status: SiteOnlineStatus,
     client_commands: &ClientCommandSender,
-    app_state: &AppState<State>
+    app_state: &Arc<State>
 )
 {
     let site = site.as_ref();
@@ -268,7 +269,7 @@ fn online_status_worker(
     site: impl Into<String>,
     mut events: UnboundedReceiver<SiteOnlineStatus>,
     client_commands: ClientCommandSender,
-    app_state: AppState<State>
+    app_state: Arc<State>
 ) -> impl Future<Output = ()>
 {
     const ONLINE_TIMER: Duration = Duration::from_secs(10);
@@ -301,7 +302,7 @@ fn online_status_worker(
                         set_online_status(&site, SiteOnlineStatus::Online, &client_commands, &app_state).await;
                     } else if let Err(err) = dir_result
                         && let CallRpcMethodErrorKind::RpcError(RpcError { code, .. }) = err.error()
-                        && (*code == RpcErrorCode::MethodCallTimeout || *code == RpcErrorCode::MethodNotFound)
+                        && (*code == RpcErrorCode::MethodCallTimeout.into() || *code == RpcErrorCode::MethodNotFound.into())
                     {
                         set_online_status(&site, SiteOnlineStatus::Offline, &client_commands, &app_state).await;
                     }
@@ -338,7 +339,7 @@ pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
-    app_state: AppState<State>,
+    app_state: Arc<State>,
 )
 {
     let mut client_evt_rx = client_evt_rx.fuse();
@@ -667,11 +668,11 @@ mod tests {
 
     use async_broadcast::Sender;
     use futures::{channel::mpsc::{UnboundedReceiver, UnboundedSender}, StreamExt};
-    use shvclient::{client::ClientCommand, ClientEvent};
+    use shvclient::{clientapi::ClientCommand, ClientEvent};
     use shvproto::RpcValue;
     use shvrpc::rpcframe::RpcFrame;
 
-    use crate::{dirtylog::DirtyLogCommand, sites::{sites_task, SiteInfo}, sync::SyncCommand, util::{init_logger, testing::{run_test, ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep}, DedupReceiver}, State};
+    use crate::{dirtylog::DirtyLogCommand, sites::{sites_task, SiteInfo}, sync::SyncCommand, util::{init_logger, testing::{run_test, ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep}, DedupReceiver}};
 
     #[test]
     fn parse_notification() {
@@ -731,7 +732,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TestStep<SitesTaskTestState> for ClientEvent {
-        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
             let x = state.sender.clone();
             x.broadcast(self.clone()).await.expect("Sending ClientEvents must work");
         }
@@ -744,7 +745,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TestStep<SitesTaskTestState> for ExpectDirtylogCommand {
-        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
             let event = state.dirtylog_cmd_rx.select_next_some().await;
             match (event, self) {
                 (DirtyLogCommand::ProcessNotification(..), ExpectDirtylogCommand::ProcessNotification) => {
@@ -765,7 +766,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TestStep<SitesTaskTestState> for ExpectSyncCommand {
-        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand<State>>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
             let Some(event) = state.sync_cmd_rx.next().await else {
                 panic!("Expected a SyncCommand, but got none");
             };
@@ -861,7 +862,7 @@ mod tests {
             TestCase {
                 name: "Empty sites",
                 steps: &[
-                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
                     Box::new(ExpectCall("sites", "getSites", Ok(no_sites()))),
                 ],
                 starting_files: vec![],
@@ -871,7 +872,7 @@ mod tests {
             TestCase {
                 name: "Test everything",
                 steps: &[
-                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
                     Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
                     Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:mntchng".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node/*:*:mntchng".try_into().unwrap())),
@@ -911,7 +912,7 @@ mod tests {
             TestCase {
                 name: "Periodic sync",
                 steps: &[
-                    Box::new(ClientEvent::Connected(shvclient::client::ShvApiVersion::V3)),
+                    Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
                     Box::new(ExpectCall("sites", "getSites", Ok(no_sites()))),
                     Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(ExpectSyncCommand::SyncAll),

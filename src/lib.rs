@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use log::info;
 use serde::Deserialize;
-use shvclient::AppState;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;
@@ -79,9 +79,6 @@ struct State {
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
 }
 
-type ClientCommandSender = shvclient::ClientCommandSender<State>;
-type Subscriber = shvclient::client::Subscriber<State>;
-
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
     info!("Setting up journal dir: {}", &hp_config.journal_dir);
     std::fs::create_dir_all(&hp_config.journal_dir)?;
@@ -90,7 +87,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     let (sync_cmd_tx, sync_cmd_rx) = crate::util::dedup_channel();
     let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded();
 
-    let app_state = AppState::new(State {
+    let app_state = Arc::new(State {
         start_time: std::time::Instant::now(),
         sites_data: RwLock::default(),
         sync_info: Default::default(),
@@ -103,11 +100,11 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
     });
 
     shvclient::Client::new()
-        .mount_dynamic("",
-            shvclient::MethodsGetter::new(tree::methods_getter),
-            shvclient::RequestHandler::stateful(tree::request_handler)
-        )
-        .with_app_state(app_state.clone())
+        .mount_dynamic("", {
+            let app_state = app_state.clone();
+            move |rq, cmd_sender|
+                tree::request_handler(rq, cmd_sender, app_state.clone())
+        })
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
             tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
             tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
