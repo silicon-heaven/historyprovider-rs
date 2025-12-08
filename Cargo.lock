@@ -764,7 +764,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1519,8 +1519,8 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.20.0"
-source = "git+https://github.com/silicon-heaven/libshvclient-rs?tag=0.20.0#12243e272c6127c07cb0770ba0e6d874a45781e4"
+version = "0.21.0"
+source = "git+https://github.com/silicon-heaven/libshvclient-rs?tag=0.21.0#6906275c37a85f863fc5224170b1893ec46d5827"
 dependencies = [
  "async-broadcast",
  "async-trait",
