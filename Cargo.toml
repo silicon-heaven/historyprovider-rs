@@ -9,19 +9,19 @@ name = "hp"
 [dependencies]
 tokio = { version = "1.48.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", tag = "3.6.22" }
-shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", tag = "5.0.0" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", tag = "0.21.0", features = ["tokio"] }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", tag = "7.0.0" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", tag = "0.21.1", features = ["tokio"] }
 futures = "0.3.31"
-log = "0.4.28"
+log = "0.4.29"
 clap = { version = "4.5.53", features = ["derive"] }
 # simple_logger = { version = "5.0.0", features = ["stderr"] }
 simple_logger = { version = "5.1.0" }
 url = "2.5.4"
-duration-str = "0.17"
+duration-str = "0.18"
 sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.17", features = ["io"] }
-async-compression = { version = "0.4.34", features = ["gzip", "tokio"] }
+async-compression = { version = "0.4.35", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.17", features = ["fs"] }
@@ -42,5 +42,5 @@ humantime = "2.3.0"
 [dev-dependencies]
 async-broadcast = "0.7.2"
 async-trait = "0.1.80"
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", tag = "0.21.0", features = ["mocking"] }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", tag = "0.21.1", features = ["mocking"] }
 tempfile = "3.23.0"
