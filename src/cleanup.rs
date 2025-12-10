@@ -5,6 +5,8 @@ use tokio::io;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::util::msec_to_log2_filename;
+
 #[derive(Debug, Clone)]
 pub(crate) struct LogFile {
     pub(crate) name: PathBuf,
@@ -40,11 +42,11 @@ pub(crate) async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<
 }
 
 /// Prune `.log2` files while keeping the newest one per directory
-pub(crate) async fn cleanup_log2_files(dir: impl AsRef<Path>, size_limit: u64) -> io::Result<()> {
+pub(crate) async fn cleanup_log2_files(dir: impl AsRef<Path>, size_limit: u64, days_to_keep: i64) -> io::Result<()> {
     let files = collect_log2_files(dir.as_ref()).await?;
     let mut files_size: u64 = files.iter().map(|f| f.size).sum();
 
-    info!("log2 files size: {files_size}, size limit: {size_limit}");
+    info!("log2 files size: {files_size}, size limit: {size_limit}, days_to_keep: {days_to_keep}");
     if files_size < size_limit {
         info!("Size limit not hit, nothing to cleanup");
         return Ok(());
@@ -58,11 +60,15 @@ pub(crate) async fn cleanup_log2_files(dir: impl AsRef<Path>, size_limit: u64) -
 
     let mut deletable_files = Vec::new();
 
+    // This file doesn't have to exist, I'm only constructing the filename for log retention.
+    let oldest_file_to_keep = PathBuf::from(msec_to_log2_filename(shvproto::DateTime::now().add_days(-days_to_keep).epoch_msec()));
+    info!("keeping files younger than {filename}", filename = oldest_file_to_keep.to_string_lossy());
+
     for (_dir, mut group) in grouped {
         // Sort descending (newest first)
         group.sort_by(|a, b| b.name.cmp(&a.name));
-        // Keep the newest file
-        deletable_files.extend(group.into_iter().skip(1));
+        // Keep the newest file, and keep files newer than oldest_file_to_delete
+        deletable_files.extend(group.into_iter().skip(1).filter(|log_file| log_file.name < oldest_file_to_keep));
     }
 
     // Sort deletable files (oldest first for deletion)

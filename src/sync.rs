@@ -722,6 +722,7 @@ pub(crate) async fn sync_task(
     // The download size limit should be lower than the max_journal_dir_size, because it doesn't
     // count in the files synced by getLog.
     let max_journal_dir_size = log_size_limit(&app_state.config);
+    let days_to_keep = app_state.config.days_to_keep.unwrap_or(0);
 
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {
@@ -817,7 +818,7 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
-                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
@@ -881,7 +882,7 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
-                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                         Ok(_) => info!("Cleanup journal dir done"),
                         Err(err) => error!("Cleanup journal dir error: {err}"),
                     }
@@ -891,7 +892,7 @@ pub(crate) async fn sync_task(
             }
             SyncCommand::Cleanup => {
                 info!("Cleanup journal dir start");
-                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }

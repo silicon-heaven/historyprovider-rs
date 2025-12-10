@@ -38,6 +38,7 @@ pub struct HpConfig {
     max_sync_tasks: Option<usize>,
     max_journal_dir_size: Option<usize>,
     periodic_sync_interval: Option<u64>,
+    days_to_keep: Option<i64>,
 }
 
 impl HpConfig {

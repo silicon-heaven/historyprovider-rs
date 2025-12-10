@@ -406,6 +406,7 @@ pub mod testing {
                 journal_dir: journal_dir.path().to_str().expect("path must work").to_string(),
                 max_sync_tasks: None,
                 max_journal_dir_size: None,
+                days_to_keep: None,
                 periodic_sync_interval: Some(3),
             },
             dirtylog_cmd_tx,
