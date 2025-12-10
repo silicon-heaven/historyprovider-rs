@@ -24,7 +24,7 @@ use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
-use crate::util::{get_files, is_log2_file, DedupReceiver};
+use crate::util::{get_files, is_log2_file, msec_to_log2_filename, DedupReceiver};
 use crate::{HpConfig, State};
 
 #[derive(Default)]
@@ -541,13 +541,6 @@ async fn sync_site_legacy(
     const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100000;
     const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
     const RECORD_COUNT_LIMIT: i64 = 10000;
-
-    fn msec_to_log2_filename(msec: i64) -> String {
-        shvproto::DateTime::from_epoch_msec(msec)
-            .to_chrono_datetime()
-            .format("%Y-%m-%dT%H-%M-%S-%3f.log2")
-            .to_string()
-    }
 
     let (mut getlog_params, mut log_file_path, mut log_file_entries) = match newest_log {
         Some((newest_log_file, newest_log_entries)) => {

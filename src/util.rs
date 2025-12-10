@@ -134,6 +134,14 @@ pub(crate) fn dedup_channel<T: Eq + Hash + Clone>() -> (DedupSender<T>, DedupRec
     (DedupSender { pending: pending.clone(), sender }, DedupReceiver { pending, receiver })
 }
 
+pub(crate) fn msec_to_log2_filename(msec: i64) -> String {
+    shvproto::DateTime::from_epoch_msec(msec)
+        .to_chrono_datetime()
+        .format("%Y-%m-%dT%H-%M-%S-%3f.log2")
+        .to_string()
+}
+
+
 #[cfg(test)]
 pub mod testing {
     use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesData, SubHpInfo}, sync::SyncCommand, util::{DedupReceiver, dedup_channel}};
