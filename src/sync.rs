@@ -24,8 +24,8 @@ use crate::journalentry::JournalEntry;
 use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWriterLog2, Log2Reader};
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
-use crate::util::{get_files, is_log2_file, DedupReceiver};
-use crate::{State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
+use crate::util::{get_files, is_log2_file, msec_to_log2_filename, DedupReceiver};
+use crate::{HpConfig, State};
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
@@ -542,13 +542,6 @@ async fn sync_site_legacy(
     const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
     const RECORD_COUNT_LIMIT: i64 = 10000;
 
-    fn msec_to_log2_filename(msec: i64) -> String {
-        shvproto::DateTime::from_epoch_msec(msec)
-            .to_chrono_datetime()
-            .format("%Y-%m-%dT%H-%M-%S-%3f.log2")
-            .to_string()
-    }
-
     let (mut getlog_params, mut log_file_path, mut log_file_entries) = match newest_log {
         Some((newest_log_file, newest_log_entries)) => {
             let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
@@ -699,6 +692,11 @@ async fn sync_site_legacy(
 
 const MAX_SYNC_TASKS_DEFAULT: usize = 8;
 
+pub fn log_size_limit(config: &HpConfig) -> u64 {
+    const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
+    config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as u64
+}
+
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
@@ -723,7 +721,8 @@ pub(crate) async fn sync_task(
 
     // The download size limit should be lower than the max_journal_dir_size, because it doesn't
     // count in the files synced by getLog.
-    let max_journal_dir_size = app_state.config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as u64;
+    let max_journal_dir_size = log_size_limit(&app_state.config);
+    let days_to_keep = app_state.config.days_to_keep.unwrap_or(0);
 
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {
@@ -819,7 +818,7 @@ pub(crate) async fn sync_task(
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
-                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
@@ -883,7 +882,7 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
-                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                         Ok(_) => info!("Cleanup journal dir done"),
                         Err(err) => error!("Cleanup journal dir error: {err}"),
                     }
@@ -893,7 +892,7 @@ pub(crate) async fn sync_task(
             }
             SyncCommand::Cleanup => {
                 info!("Cleanup journal dir start");
-                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size).await {
+                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
