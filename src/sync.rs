@@ -25,7 +25,7 @@ use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWr
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{get_files, is_log2_file, DedupReceiver};
-use crate::{State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
+use crate::{HpConfig, State};
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
@@ -699,6 +699,11 @@ async fn sync_site_legacy(
 
 const MAX_SYNC_TASKS_DEFAULT: usize = 8;
 
+pub fn log_size_limit(config: &HpConfig) -> u64 {
+    const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
+    config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as u64
+}
+
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
@@ -723,7 +728,7 @@ pub(crate) async fn sync_task(
 
     // The download size limit should be lower than the max_journal_dir_size, because it doesn't
     // count in the files synced by getLog.
-    let max_journal_dir_size = app_state.config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as u64;
+    let max_journal_dir_size = log_size_limit(&app_state.config);
 
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {

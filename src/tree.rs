@@ -26,7 +26,8 @@ use crate::getlog::getlog_handler;
 use crate::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
 use crate::pushlog::pushlog_impl;
 use crate::sites::SubHpInfo;
-use crate::{AlarmWithTimestamp, HpConfig, State, MAX_JOURNAL_DIR_SIZE_DEFAULT};
+use crate::sync::log_size_limit;
+use crate::{AlarmWithTimestamp, HpConfig, State};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
@@ -331,10 +332,6 @@ impl From<LsFilesEntry> for RpcValue {
     fn from(value: LsFilesEntry) -> Self {
         shvproto::make_list!(value.name, value.ftype.to_string(), value.size).into()
     }
-}
-
-fn log_size_limit(config: &HpConfig) -> i64 {
-    config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as i64
 }
 
 async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {

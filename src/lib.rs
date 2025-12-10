@@ -27,8 +27,6 @@ mod util;
 pub mod typeinfo;
 pub mod alarm;
 
-const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
-
 fn default_journal_dir() -> String {
     "/tmp/hp-rs/shvjournal".into()
 }
