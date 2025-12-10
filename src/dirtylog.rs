@@ -118,7 +118,7 @@ pub(crate) async fn dirtylog_task(
                     Ok(file) => file,
                     Err(err) => {
                         if err.kind() == std::io::ErrorKind::NotFound {
-                            info!("Trim dirty log done, no dirty log file for the site");
+                            info!("Trim dirty log done, no dirty log file for the site {site}");
                         } else {
                             error!("Cannot trim dirty log. Cannot open file {file_path}: {err}", file_path = dirty_log_path.to_string_lossy());
                         }
