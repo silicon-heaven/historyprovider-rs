@@ -406,7 +406,6 @@ pub(crate) async fn sites_task(
 
                     let (sites_info, sub_hps) = match sites {
                         Ok(sites) => {
-                            eprintln!("sites = '{:?}'", sites);
                             if sites
                                 .get("_meta")
                                 .map(RpcValue::as_map)
