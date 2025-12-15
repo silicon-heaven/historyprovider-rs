@@ -8,8 +8,8 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
-shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", tag = "3.6.22" }
-shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", tag = "7.0.0" }
+shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", tag = "3.6.27" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", tag = "7.1.0" }
 shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", tag = "0.21.1", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.29"
@@ -21,7 +21,7 @@ duration-str = "0.18"
 sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.17", features = ["io"] }
-async-compression = { version = "0.4.35", features = ["gzip", "tokio"] }
+async-compression = { version = "0.4.36", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.17", features = ["fs"] }
