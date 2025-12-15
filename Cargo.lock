@@ -104,9 +104,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.35"
+version = "0.4.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07a926debf178f2d355197f9caddb08e54a9329d44748034bba349c5848cb519"
+checksum = "98ec5f6c2f8bc326c994cb9e241cc257ddaba9afa8555a43cffbb5dd86efaa37"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -312,9 +312,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34a3cbbb8b6eca96f3a5c4bf6938d5b27ced3675d69f95bb51948722870bc323"
+checksum = "b0f7ac3e5b97fdce45e8922fb05cae2c37f7bbd63d30dd94821dacfd8f3f2bf2"
 dependencies = [
  "compression-core",
  "flate2",
@@ -361,6 +361,15 @@ name = "convert_case"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db05ffb6856bf0ecdf6367558a76a0e8a77b1713044eb92845c692100ed50190"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -794,8 +803,8 @@ dependencies = [
  "serde_yaml_ng",
  "sha1",
  "shvclient",
- "shvproto",
- "shvrpc",
+ "shvproto 3.6.27",
+ "shvrpc 7.1.0",
  "simple_logger",
  "tempfile",
  "time",
@@ -1012,7 +1021,18 @@ name = "libshvproto-macros"
 version = "0.2.0"
 source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.22#b4856f506cc65e153c25f9d2799a15b2630162f6"
 dependencies = [
- "convert_case",
+ "convert_case 0.9.0",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "libshvproto-macros"
+version = "0.2.0"
+source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.27#63ffbab77a139886efdee64e6854356fad2ce9a7"
+dependencies = [
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "syn",
@@ -1546,8 +1566,8 @@ dependencies = [
  "macro_magic",
  "rustls-pemfile",
  "rustls-platform-verifier",
- "shvproto",
- "shvrpc",
+ "shvproto 3.6.22",
+ "shvrpc 7.0.0",
  "tokio",
  "tokio-util",
  "url",
@@ -1561,7 +1581,19 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
- "libshvproto-macros",
+ "libshvproto-macros 0.2.0 (git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.22)",
+ "log",
+]
+
+[[package]]
+name = "shvproto"
+version = "3.6.27"
+source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.27#63ffbab77a139886efdee64e6854356fad2ce9a7"
+dependencies = [
+ "chrono",
+ "clap",
+ "hex",
+ "libshvproto-macros 0.2.0 (git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.27)",
  "log",
 ]
 
@@ -1582,7 +1614,28 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sha1",
- "shvproto",
+ "shvproto 3.6.22",
+ "url",
+]
+
+[[package]]
+name = "shvrpc"
+version = "7.1.0"
+source = "git+https://github.com/silicon-heaven/libshvrpc-rs?tag=7.1.0#ba8103c61d10717a31e684b32104efcaccb4f9b7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "crc",
+ "duration-str 0.17.0",
+ "futures",
+ "futures-time",
+ "glob",
+ "hex",
+ "log",
+ "serde",
+ "serde_yaml",
+ "sha1",
+ "shvproto 3.6.22",
  "url",
 ]
 
