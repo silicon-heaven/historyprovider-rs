@@ -6,6 +6,8 @@ use crate::{sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::debug;
 use shvclient::clientapi::ClientCommand;
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvproto::{make_list, make_map, RpcValue};
 use shvrpc::rpcframe::RpcFrame;
 use shvrpc::rpcmessage::RpcError;

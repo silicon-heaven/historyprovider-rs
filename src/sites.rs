@@ -9,6 +9,8 @@ use log::{debug, error, warn};
 use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList, Subscriber};
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvproto::{DateTime, RpcValue};
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::util::find_longest_path_prefix;
@@ -668,6 +670,8 @@ mod tests {
     use async_broadcast::Sender;
     use futures::{channel::mpsc::{UnboundedReceiver, UnboundedSender}, StreamExt};
     use shvclient::{clientapi::ClientCommand, ClientEvent};
+    use shvclient::shvproto;
+    use shvclient::shvrpc;
     use shvproto::RpcValue;
     use shvrpc::rpcframe::RpcFrame;
 

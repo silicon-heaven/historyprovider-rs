@@ -1,3 +1,5 @@
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvproto::{DateTime as ShvDateTime, RpcValue};
 
 #[derive(Clone,Debug)]
@@ -105,6 +107,7 @@ impl From<DataChange> for RpcValue {
 
 #[cfg(test)]
 mod tests {
+    use shvclient::shvproto;
     use shvproto::{DateTime as ShvDateTime, RpcValue};
 
     use crate::journalrw::VALUE_FLAG_PROVISIONAL_BIT;

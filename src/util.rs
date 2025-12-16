@@ -8,6 +8,8 @@ use std::task::Poll;
 use futures::{Stream, StreamExt, TryStreamExt};
 use shvclient::clientapi::{ShvApiVersion, Subscriber};
 use shvclient::ClientCommandSender;
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvrpc::join_path;
 use shvrpc::rpc::ShvRI;
 use tokio::fs::DirEntry;
@@ -148,6 +150,8 @@ pub mod testing {
     use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
     use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
+    use shvclient::shvproto;
+    use shvclient::shvrpc;
     use shvproto::RpcValue;
     use shvrpc::{rpcframe::RpcFrame, rpcmessage::RpcError, RpcMessage, RpcMessageMetaTags};
     use std::{collections::{BTreeMap, HashMap}, path::{Path, PathBuf}, sync::Arc};

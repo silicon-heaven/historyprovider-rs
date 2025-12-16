@@ -1,6 +1,8 @@
 use futures::{AsyncWrite, AsyncWriteExt, Stream};
 use futures::io::{AsyncBufRead, AsyncBufReadExt, Lines};
 use shvclient::clientnode::{METH_GET, SIG_CHNG};
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvproto::RpcValue;
 use shvrpc::metamethod::AccessLevel;
 use std::borrow::Cow;
@@ -619,6 +621,8 @@ mod tests {
     use futures::io::{BufReader, Cursor};
     use futures::StreamExt;
     use shvclient::clientnode::{METH_GET, SIG_CHNG};
+    use shvclient::shvproto;
+    use shvclient::shvrpc;
     use shvproto::{CponReader, Reader};
     use shvrpc::metamethod::AccessLevel;
     use tokio::fs::File;

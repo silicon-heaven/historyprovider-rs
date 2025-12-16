@@ -4,6 +4,7 @@ use tokio::fs;
 use tokio::io;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use shvclient::shvproto;
 
 use crate::util::msec_to_log2_filename;
 

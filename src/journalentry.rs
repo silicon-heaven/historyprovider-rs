@@ -1,4 +1,4 @@
-use shvproto::RpcValue;
+use shvclient::shvproto::RpcValue;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct JournalEntry {

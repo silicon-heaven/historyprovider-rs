@@ -11,6 +11,8 @@ use shvclient::clientnode::{err_unresolved_request, LsHandlerResult, Method, Req
 use shvclient::clientnode::StaticNode;
 use shvclient::shvproto::RpcValue;
 use shvclient::ClientCommandSender;
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvrpc::metamethod::{AccessLevel, MetaMethod};
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::util::children_on_path;
