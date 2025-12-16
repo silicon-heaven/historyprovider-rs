@@ -8,6 +8,8 @@ use chrono::TimeZone;
 use futures::io::BufReader;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{error, info, warn};
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use tokio::fs::DirEntry;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -342,6 +344,7 @@ pub(crate) async fn getlog_impl(
 mod tests {
     use std::error::Error;
 
+    use shvclient::shvproto;
     use shvproto::{DateTime, RpcValue};
 
     use crate::{getlog::{getlog_impl, GetLogResult, JournalEntryStream}, journalentry::JournalEntry, journalrw::{GetLog2Params, GetLog2Since}};

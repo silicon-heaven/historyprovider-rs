@@ -4,6 +4,8 @@ use std::sync::Arc;
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use log::info;
 use serde::Deserialize;
+use shvclient::shvproto;
+use shvclient::shvrpc;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;

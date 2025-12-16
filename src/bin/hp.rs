@@ -1,6 +1,7 @@
 use clap::Parser;
 use historyprovider::HpConfig;
 use log::*;
+use shvclient::shvrpc;
 use shvrpc::{client::ClientConfig, util::parse_log_verbosity};
 use simple_logger::SimpleLogger;
 use url::Url;

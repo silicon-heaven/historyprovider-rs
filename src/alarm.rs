@@ -1,4 +1,4 @@
-use shvproto::{Map as RpcMap, RpcValue};
+use shvclient::shvproto::{Map as RpcMap, RpcValue};
 
 use crate::typeinfo::{FieldDescriptionMethods, PathInfo, Type, TypeDescriptionMethods, TypeInfo};
 
@@ -257,7 +257,7 @@ fn collect_alarms_for_type<Getter: AlarmGetter>(type_info: &TypeInfo, shv_path: 
 
 #[cfg(test)]
 mod tests {
-    use shvproto::RpcValue;
+    use shvclient::shvproto::RpcValue;
 
     use crate::alarm::{collect_alarms, Severity};
     use crate::typeinfo::TypeInfo;

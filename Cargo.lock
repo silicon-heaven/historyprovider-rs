@@ -366,15 +366,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "convert_case"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -803,8 +794,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha1",
  "shvclient",
- "shvproto 3.6.27",
- "shvrpc 7.1.0",
  "simple_logger",
  "tempfile",
  "time",
@@ -1021,18 +1010,7 @@ name = "libshvproto-macros"
 version = "0.2.0"
 source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.22#b4856f506cc65e153c25f9d2799a15b2630162f6"
 dependencies = [
- "convert_case 0.9.0",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "libshvproto-macros"
-version = "0.2.0"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.27#63ffbab77a139886efdee64e6854356fad2ce9a7"
-dependencies = [
- "convert_case 0.10.0",
+ "convert_case",
  "proc-macro2",
  "quote",
  "syn",
@@ -1566,8 +1544,8 @@ dependencies = [
  "macro_magic",
  "rustls-pemfile",
  "rustls-platform-verifier",
- "shvproto 3.6.22",
- "shvrpc 7.0.0",
+ "shvproto",
+ "shvrpc",
  "tokio",
  "tokio-util",
  "url",
@@ -1581,19 +1559,7 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
- "libshvproto-macros 0.2.0 (git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.22)",
- "log",
-]
-
-[[package]]
-name = "shvproto"
-version = "3.6.27"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.27#63ffbab77a139886efdee64e6854356fad2ce9a7"
-dependencies = [
- "chrono",
- "clap",
- "hex",
- "libshvproto-macros 0.2.0 (git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.27)",
+ "libshvproto-macros",
  "log",
 ]
 
@@ -1614,28 +1580,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sha1",
- "shvproto 3.6.22",
- "url",
-]
-
-[[package]]
-name = "shvrpc"
-version = "7.1.0"
-source = "git+https://github.com/silicon-heaven/libshvrpc-rs?tag=7.1.0#ba8103c61d10717a31e684b32104efcaccb4f9b7"
-dependencies = [
- "anyhow",
- "async-trait",
- "crc",
- "duration-str 0.17.0",
- "futures",
- "futures-time",
- "glob",
- "hex",
- "log",
- "serde",
- "serde_yaml",
- "sha1",
- "shvproto 3.6.22",
+ "shvproto",
  "url",
 ]
 
