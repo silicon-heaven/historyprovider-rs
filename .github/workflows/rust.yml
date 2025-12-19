@@ -36,3 +36,16 @@ jobs:
         uses: syyyr/rust-pycobertura-action@v4.0.1
         with:
           project_name: historyprovider-rs
+
+  upload-crates-io:
+    name: Publish crates on crates.io
+    if: github.ref == 'refs/heads/main'
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - run: |
+          cargo login <<< "${{secrets.CRATES_IO_TOKEN}}"
+          cargo publish
