@@ -4,7 +4,6 @@ use std::sync::Arc;
 use futures::io::{BufReader, BufWriter};
 use futures::StreamExt as _;
 use log::{error, info, warn};
-use shvclient::shvproto;
 use shvproto::RpcValue;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 
