@@ -4,8 +4,6 @@ use log::debug;
 use log::warn;
 use shvclient::clientnode::METH_DIR;
 use shvclient::clientnode::METH_LS;
-use shvclient::shvproto;
-use shvclient::shvrpc;
 use shvproto::MetaMap;
 use shvproto::RpcValue;
 use shvproto::Map as RpcMap;
@@ -1253,7 +1251,6 @@ fn from_nodes_tree_helper(
 
 #[cfg(test)]
 mod tests {
-    use shvclient::shvproto;
     use shvproto::RpcValue;
 
     use crate::typeinfo::{FieldDescriptionMethods, SampleType, Type, TypeDescriptionMethods, TypeInfo};

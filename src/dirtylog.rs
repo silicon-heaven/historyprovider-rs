@@ -10,8 +10,6 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use log::{debug, error, info, warn};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
-use shvclient::shvproto;
-use shvclient::shvrpc;
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -300,8 +298,6 @@ mod tests {
     use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
     use log::debug;
     use shvclient::clientapi::ClientCommand;
-    use shvclient::shvproto;
-    use shvclient::shvrpc;
     use shvproto::DateTime;
     use shvrpc::rpcframe::RpcFrame;
 

@@ -11,8 +11,6 @@ use log::{debug, error, info, warn};
 use shvclient::clientapi::RpcCall;
 use shvclient::clientnode::METH_DIR;
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
-use shvclient::shvproto;
-use shvclient::shvrpc;
 use shvproto::RpcValue;
 use shvrpc::join_path;
 use time::format_description::well_known::Iso8601;

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use shvclient::shvproto;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use log::warn;
