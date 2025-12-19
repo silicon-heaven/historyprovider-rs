@@ -481,6 +481,19 @@ async fn sync_file(
     Ok(())
 }
 
+fn format_getlog_since_duration(since: &GetLog2Since) -> String {
+    let GetLog2Since::DateTime(dt) = since else {
+        return String::new();
+    };
+
+    let Ok(duration) = (shvproto::DateTime::now().to_chrono_naivedatetime() - dt.to_chrono_naivedatetime()).to_std() else{
+        return String::new();
+
+    };
+
+    humantime::format_duration(std::time::Duration::from_secs(duration.as_secs())).to_string()
+}
+
 async fn sync_site_legacy(
     site_path: impl AsRef<str>,
     getlog_path: impl AsRef<str>,
@@ -630,9 +643,11 @@ async fn sync_site_legacy(
     loop {
         sync_logger.log(
             log::Level::Info,
-            format!("Calling getLog, target: {}, since: {}, snapshot: {}",
+            format!("Calling getLog, target: {}, since: {} ({} left), snapshot: {}",
                 local_journal_path.to_string_lossy(),
-                getlog_params.since, getlog_params.with_snapshot)
+                getlog_params.since,
+                format_getlog_since_duration(&getlog_params.since),
+                getlog_params.with_snapshot)
         );
         let log: RpcValue = RpcCall::new(getlog_path, "getLog")
             .param(getlog_params.clone())
