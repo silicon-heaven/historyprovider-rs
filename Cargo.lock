@@ -358,9 +358,9 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db05ffb6856bf0ecdf6367558a76a0e8a77b1713044eb92845c692100ed50190"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -482,20 +482,6 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
-
-[[package]]
-name = "duration-str"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9add086174f60bcbcfde7175e71dcfd99da24dfd12f611d0faf74f4f26e15a06"
-dependencies = [
- "chrono",
- "rust_decimal",
- "serde",
- "thiserror 2.0.17",
- "time",
- "winnow",
-]
 
 [[package]]
 name = "duration-str"
@@ -785,7 +771,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
- "duration-str 0.18.0",
+ "duration-str",
  "futures",
  "hex",
  "humantime",
@@ -794,6 +780,8 @@ dependencies = [
  "serde_yaml_ng",
  "sha1",
  "shvclient",
+ "shvproto",
+ "shvrpc",
  "simple_logger",
  "tempfile",
  "time",
@@ -1007,8 +995,9 @@ checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
 name = "libshvproto-macros"
-version = "0.2.0"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.22#b4856f506cc65e153c25f9d2799a15b2630162f6"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa5a5556f28c7681af8680d7282b2244925c8dcaaeff5afefb8e096710b665b0"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -1531,12 +1520,13 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.21.1"
-source = "git+https://github.com/silicon-heaven/libshvclient-rs?tag=0.21.1#6dca0e5b15808e62f6f47acb908a108de561e8ac"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e383e8993f0153ed7f96e627113a33839ce8b651adf8be8b1603f86d51f08f0"
 dependencies = [
  "async-broadcast",
  "async-trait",
- "duration-str 0.17.0",
+ "duration-str",
  "futures",
  "futures-rustls",
  "futures-time",
@@ -1553,8 +1543,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "3.6.22"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?tag=3.6.22#b4856f506cc65e153c25f9d2799a15b2630162f6"
+version = "3.6.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d61f512657d31bd316132c93bbab4c99fe87f3743dc21848bbe1e87d8cfada2c"
 dependencies = [
  "chrono",
  "clap",
@@ -1565,13 +1556,14 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "7.0.0"
-source = "git+https://github.com/silicon-heaven/libshvrpc-rs?tag=7.0.0#e95135f8d29f98cdc6c8036802d4118ece2c226a"
+version = "7.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e044c1198308d33f5470afee029a5d078b9746823d9723e31d332799f247c9b"
 dependencies = [
  "anyhow",
  "async-trait",
  "crc",
- "duration-str 0.17.0",
+ "duration-str",
  "futures",
  "futures-time",
  "glob",
