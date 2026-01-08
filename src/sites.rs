@@ -10,7 +10,7 @@ use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, Rp
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
-use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
+use shvrpc::rpcmessage::RpcError;
 use shvrpc::util::find_longest_path_prefix;
 use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio::time::timeout;
@@ -300,10 +300,7 @@ fn online_status_worker(
                         .await;
                     if dir_result.is_ok() {
                         set_online_status(&site, SiteOnlineStatus::Online, &client_commands, &app_state).await;
-                    } else if let Err(err) = dir_result
-                        && let CallRpcMethodErrorKind::RpcError(RpcError { code, .. }) = err.error()
-                        && (*code == RpcErrorCode::MethodCallTimeout.into() || *code == RpcErrorCode::MethodNotFound.into())
-                    {
+                    } else if let Err(err) = dir_result && matches!(err.error(), CallRpcMethodErrorKind::RpcError(RpcError { .. })) {
                         set_online_status(&site, SiteOnlineStatus::Offline, &client_commands, &app_state).await;
                     }
                 }
