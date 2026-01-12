@@ -19,12 +19,12 @@ log = "0.4.29"
 clap = { version = "4.5.54", features = ["derive"] }
 # simple_logger = { version = "5.0.0", features = ["stderr"] }
 simple_logger = { version = "5.1.0" }
-url = "2.5.4"
+url = "2.5.8"
 duration-str = "0.18"
 sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.18", features = ["io"] }
-async-compression = { version = "0.4.36", features = ["gzip", "tokio"] }
+async-compression = { version = "0.4.37", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.18", features = ["fs"] }
