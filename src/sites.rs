@@ -353,8 +353,7 @@ pub(crate) async fn sites_task(
     {
         let app_state = app_state.clone();
         tokio::spawn(async move {
-            const PERIODIC_SYNC_INTERVAL_DEFAULT: u64 = 60 * 60;
-            let periodic_sync_interval = app_state.config.periodic_sync_interval.unwrap_or(PERIODIC_SYNC_INTERVAL_DEFAULT);
+            let periodic_sync_interval = app_state.config.periodic_sync_interval;
             let mut interval: Option<tokio::time::Interval> = None;
             loop {
                 tokio::select! {

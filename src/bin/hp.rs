@@ -102,10 +102,10 @@ fn load_client_config(cli_opts: Opts) -> shvrpc::Result<(ClientConfig, HpConfig)
     )?;
 
     hp_config.journal_dir = cli_opts.journal_dir.unwrap_or(hp_config.journal_dir);
-    hp_config.max_sync_tasks = cli_opts.max_sync_tasks.or(hp_config.max_sync_tasks);
-    hp_config.max_journal_dir_size = cli_opts.max_journal_dir_size.or(hp_config.max_journal_dir_size);
-    hp_config.periodic_sync_interval = cli_opts.periodic_sync_interval.or(hp_config.periodic_sync_interval);
-    hp_config.days_to_keep = cli_opts.days_to_keep.or(hp_config.days_to_keep);
+    hp_config.max_sync_tasks = cli_opts.max_sync_tasks.unwrap_or(hp_config.max_sync_tasks);
+    hp_config.max_journal_dir_size = cli_opts.max_journal_dir_size.unwrap_or(hp_config.max_journal_dir_size);
+    hp_config.periodic_sync_interval = cli_opts.periodic_sync_interval.unwrap_or(hp_config.periodic_sync_interval);
+    hp_config.days_to_keep = cli_opts.days_to_keep.unwrap_or(hp_config.days_to_keep);
 
     Ok((client_config, hp_config))
 }

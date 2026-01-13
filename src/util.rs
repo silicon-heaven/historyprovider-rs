@@ -144,7 +144,7 @@ pub(crate) fn msec_to_log2_filename(msec: i64) -> String {
 
 #[cfg(test)]
 pub mod testing {
-    use crate::{State, dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesData, SubHpInfo}, sync::SyncCommand, util::{DedupReceiver, dedup_channel}};
+    use crate::{State, dirtylog::DirtyLogCommand, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::SyncCommand, util::{DedupReceiver, dedup_channel}};
     use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
     use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
@@ -404,10 +404,10 @@ pub mod testing {
             start_time: std::time::Instant::now(),
             config: crate::HpConfig {
                 journal_dir: journal_dir.path().to_str().expect("path must work").to_string(),
-                max_sync_tasks: None,
-                max_journal_dir_size: None,
-                days_to_keep: None,
-                periodic_sync_interval: Some(3),
+                max_sync_tasks: max_sync_tasks_default(),
+                max_journal_dir_size: max_journal_dir_size_default(),
+                days_to_keep: 0,
+                periodic_sync_interval: 3,
             },
             dirtylog_cmd_tx,
             sync_cmd_tx: dedup_sender.clone(),

@@ -25,7 +25,7 @@ use crate::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalWr
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{get_files, is_log2_file, msec_to_log2_filename, DedupReceiver};
-use crate::{HpConfig, State};
+use crate::State;
 
 #[derive(Default)]
 pub(crate) struct SyncInfo {
@@ -705,13 +705,6 @@ async fn sync_site_legacy(
     Ok(())
 }
 
-const MAX_SYNC_TASKS_DEFAULT: usize = 8;
-
-pub fn log_size_limit(config: &HpConfig) -> u64 {
-    const MAX_JOURNAL_DIR_SIZE_DEFAULT: usize = 30 * 1_000_000_000;
-    config.max_journal_dir_size.unwrap_or(MAX_JOURNAL_DIR_SIZE_DEFAULT) as u64
-}
-
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
@@ -736,8 +729,8 @@ pub(crate) async fn sync_task(
 
     // The download size limit should be lower than the max_journal_dir_size, because it doesn't
     // count in the files synced by getLog.
-    let max_journal_dir_size = log_size_limit(&app_state.config);
-    let days_to_keep = app_state.config.days_to_keep.unwrap_or(0);
+    let max_journal_dir_size = app_state.config.max_journal_dir_size as u64;
+    let days_to_keep = app_state.config.days_to_keep;
 
     while let Some(cmd) = sync_cmd_rx.next().await {
         match cmd {
@@ -749,7 +742,7 @@ pub(crate) async fn sync_task(
                     app_state.sites_data.read().await.clone(),
                     max_journal_dir_size
                 ).await;
-                let max_sync_tasks = app_state.config.max_sync_tasks.unwrap_or(MAX_SYNC_TASKS_DEFAULT);
+                let max_sync_tasks = app_state.config.max_sync_tasks;
                 let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
                 let mut sync_tasks = vec![];
                 let sync_start = tokio::time::Instant::now();

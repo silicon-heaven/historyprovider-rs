@@ -27,28 +27,36 @@ mod util;
 pub mod typeinfo;
 pub mod alarm;
 
-fn default_journal_dir() -> String {
+const fn max_sync_tasks_default() -> usize { 8 }
+const fn max_journal_dir_size_default() -> usize { 30 * 1_000_000_000 } // 30 GB
+const fn periodic_sync_interval_default() -> u64 { 60 * 60 } // 1 hour
+
+fn journal_dir_default() -> String {
     "/tmp/hp-rs/shvjournal".into()
 }
 
 #[derive(Clone, Deserialize)]
 pub struct HpConfig {
-    #[serde(default = "default_journal_dir")]
+    #[serde(default = "journal_dir_default")]
     pub journal_dir: String,
-    pub max_sync_tasks: Option<usize>,
-    pub max_journal_dir_size: Option<usize>,
-    pub periodic_sync_interval: Option<u64>,
-    pub days_to_keep: Option<i64>,
+    #[serde(default = "max_sync_tasks_default")]
+    pub max_sync_tasks: usize,
+    #[serde(default = "max_journal_dir_size_default")]
+    pub max_journal_dir_size: usize,
+    #[serde(default = "periodic_sync_interval_default")]
+    pub periodic_sync_interval: u64,
+    #[serde(default)]
+    pub days_to_keep: i64,
 }
 
 impl Default for HpConfig {
     fn default() -> Self {
         Self {
-            journal_dir: default_journal_dir(),
-            max_sync_tasks: None,
-            max_journal_dir_size: None,
-            periodic_sync_interval: None,
-            days_to_keep: None,
+            journal_dir: journal_dir_default(),
+            max_sync_tasks: max_sync_tasks_default(),
+            max_journal_dir_size: max_journal_dir_size_default(),
+            periodic_sync_interval: periodic_sync_interval_default(),
+            days_to_keep: Default::default(),
         }
     }
 }
