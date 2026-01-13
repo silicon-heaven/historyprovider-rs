@@ -34,11 +34,23 @@ fn default_journal_dir() -> String {
 #[derive(Clone, Deserialize)]
 pub struct HpConfig {
     #[serde(default = "default_journal_dir")]
-    journal_dir: String,
-    max_sync_tasks: Option<usize>,
-    max_journal_dir_size: Option<usize>,
-    periodic_sync_interval: Option<u64>,
-    days_to_keep: Option<i64>,
+    pub journal_dir: String,
+    pub max_sync_tasks: Option<usize>,
+    pub max_journal_dir_size: Option<usize>,
+    pub periodic_sync_interval: Option<u64>,
+    pub days_to_keep: Option<i64>,
+}
+
+impl Default for HpConfig {
+    fn default() -> Self {
+        Self {
+            journal_dir: default_journal_dir(),
+            max_sync_tasks: None,
+            max_journal_dir_size: None,
+            periodic_sync_interval: None,
+            days_to_keep: None,
+        }
+    }
 }
 
 impl HpConfig {

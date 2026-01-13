@@ -11,9 +11,6 @@ struct Opts {
     /// Config file path
     #[arg(long)]
     config: Option<String>,
-    /// Historyprovider config file
-    #[arg(long, default_value = "config.yaml")]
-    hp_config: String,
     /// Create default config file if one specified by --config is not found
     #[arg(short, long)]
     create_default_config: bool,
@@ -39,6 +36,24 @@ struct Opts {
     /// Print version and exit
     #[arg(short = 'V', long)]
     version: bool,
+
+    // HP specific options
+    //
+    /// Path to journal directory
+    #[arg(long)]
+    journal_dir: Option<String>,
+    /// Maximum number of parallel sync tasks
+    #[arg(long)]
+    max_sync_tasks: Option<usize>,
+    /// Maximum size of journal directory in bytes
+    #[arg(long)]
+    max_journal_dir_size: Option<usize>,
+    /// Periodic sync interval in seconds
+    #[arg(long)]
+    periodic_sync_interval: Option<u64>,
+    /// Number of days to keep history data
+    #[arg(long)]
+    days_to_keep: Option<i64>,
 }
 
 fn init_logger(cli_opts: &Opts) {
@@ -65,24 +80,34 @@ fn print_banner(text: impl AsRef<str>) {
     info!("{banner_line}");
 }
 
-fn load_client_config(cli_opts: Opts) -> shvrpc::Result<ClientConfig> {
-    let mut config = if let Some(config_file) = &cli_opts.config {
-        ClientConfig::from_file_or_default(config_file, cli_opts.create_default_config)?
+fn load_client_config(cli_opts: Opts) -> shvrpc::Result<(ClientConfig, HpConfig)> {
+    let (mut client_config, mut hp_config) = if let Some(config_file) = &cli_opts.config {
+        (
+            ClientConfig::from_file_or_default(config_file, cli_opts.create_default_config)?,
+            HpConfig::load(config_file)?,
+        )
     } else {
-        Default::default()
+        (Default::default(), Default::default())
     };
-    config.url = cli_opts.url.map_or_else(|| Ok(config.url), |url_str| Url::parse(&url_str))?;
-    config.device_id = cli_opts.device_id.or(config.device_id);
-    config.mount = cli_opts.mount.or(config.mount);
-    config.reconnect_interval = cli_opts.reconnect_interval.map_or_else(
-        || Ok(config.reconnect_interval),
+    client_config.url = cli_opts.url.map_or_else(|| Ok(client_config.url), |url_str| Url::parse(&url_str))?;
+    client_config.device_id = cli_opts.device_id.or(client_config.device_id);
+    client_config.mount = cli_opts.mount.or(client_config.mount);
+    client_config.reconnect_interval = cli_opts.reconnect_interval.map_or_else(
+        || Ok(client_config.reconnect_interval),
         |interval_str| duration_str::parse(&interval_str).map(Some)
     )?;
-    config.heartbeat_interval = cli_opts.heartbeat_interval.map_or_else(
-        || Ok(config.heartbeat_interval),
+    client_config.heartbeat_interval = cli_opts.heartbeat_interval.map_or_else(
+        || Ok(client_config.heartbeat_interval),
         |interval_str| duration_str::parse(&interval_str)
     )?;
-    Ok(config)
+
+    hp_config.journal_dir = cli_opts.journal_dir.unwrap_or(hp_config.journal_dir);
+    hp_config.max_sync_tasks = cli_opts.max_sync_tasks.or(hp_config.max_sync_tasks);
+    hp_config.max_journal_dir_size = cli_opts.max_journal_dir_size.or(hp_config.max_journal_dir_size);
+    hp_config.periodic_sync_interval = cli_opts.periodic_sync_interval.or(hp_config.periodic_sync_interval);
+    hp_config.days_to_keep = cli_opts.days_to_keep.or(hp_config.days_to_keep);
+
+    Ok((client_config, hp_config))
 }
 
 #[tokio::main]
@@ -97,10 +122,7 @@ pub(crate) async fn main() -> shvrpc::Result<()> {
 
     init_logger(&cli_opts);
     print_banner(format!("{} {} starting", std::module_path!(), PKG_VERSION));
-
-    let hp_config = cli_opts.hp_config.clone();
-    let client_config = load_client_config(cli_opts).expect("Invalid config");
-    let hp_config = HpConfig::load(hp_config)?;
+    let (client_config, hp_config) = load_client_config(cli_opts).expect("Invalid config");
 
     historyprovider::run(&hp_config, &client_config).await
 }
