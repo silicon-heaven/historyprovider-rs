@@ -26,7 +26,6 @@ use crate::getlog::getlog_handler;
 use crate::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
 use crate::pushlog::pushlog_impl;
 use crate::sites::SubHpInfo;
-use crate::sync::log_size_limit;
 use crate::{AlarmWithTimestamp, HpConfig, State};
 
 // History site node methods
@@ -236,7 +235,7 @@ async fn shvjournal_request_handler(
                 METH_LS_FILES => return m.resolve(METHODS, async || {
                     journaldir_lsfiles_handler(get_journaldir_entries(path).await?).await
                 }),
-                METH_LOG_SIZE_LIMIT => return m.resolve(METHODS, async move || Ok(log_size_limit(&app_state.config))),
+                METH_LOG_SIZE_LIMIT => return m.resolve(METHODS, async move || Ok(app_state.config.max_journal_dir_size as i64)),
                 METH_TOTAL_LOG_SIZE => return m.resolve(METHODS, async move || total_log_size(&app_state.config)
                     .await
                     .map(RpcValue::from)
@@ -244,7 +243,7 @@ async fn shvjournal_request_handler(
                 ),
                 METH_LOG_USAGE => return m.resolve(METHODS, async move || total_log_size(&app_state.config)
                         .await
-                        .map(|size| 100. * (size as f64) / (log_size_limit(&app_state.config) as f64))
+                        .map(|size| 100. * (size as f64) / (app_state.config.max_journal_dir_size as f64))
                         .map_err(rpc_error_filesystem)
                 ),
                 METH_SYNC_LOG => return m.resolve(METHODS, async move || sync_log_request_handler(&param, app_state).await),
