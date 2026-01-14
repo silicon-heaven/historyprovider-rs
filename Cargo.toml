@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.6.0"
+version = "2.6.1"
 edition = "2024"
 
 [[bin]]
@@ -12,7 +12,7 @@ name = "hp"
 [dependencies]
 tokio = { version = "1.49.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 shvproto = "3.6.27"
-shvrpc = "7.1.8"
+shvrpc = "7.1.9"
 shvclient = { version = "0.21.10", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.29"
@@ -32,15 +32,11 @@ time = { version = "0.3.41", features = ["formatting"] }
 chrono = "0.4.42"
 humantime = "2.3.0"
 
-# [patch."https://github.com/silicon-heaven/libshvclient-rs"]
-# shvclient = { path = "../libshvclient-rs" }
-#
-# [patch."https://github.com/silicon-heaven/libshvproto-rs"]
-# shvproto = { path = "../libshvproto-rs" }
-#
-# [patch."https://github.com/silicon-heaven/libshvrpc-rs"]
+[patch.crates-io]
 # shvrpc = { path = "../libshvrpc-rs" }
-#
+# shvproto = { path = "../libshvproto-rs" }
+# shvclient = { path = "../libshvclient-rs" }
+
 
 [dev-dependencies]
 async-broadcast = "0.7.2"
