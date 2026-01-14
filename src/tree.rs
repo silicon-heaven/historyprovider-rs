@@ -38,10 +38,10 @@ const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_LS_FILES: MetaMethod = MetaMethod::new_static(METH_LS_FILES, 0, AccessLevel::Read, "Map|Null", "List", &[], "");
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod::new_static(METH_GET_LOG, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
-const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flag::IsGetter as _, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
-const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[("alarmmod", Some("Null"))], "");
-const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[("statealarmmod", Some("Null"))], "");
-const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
+const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flag::IsGetter as _, AccessLevel::Read, "Null", "i[Unknown,Offline,Online]", &[("onlinestatuschng", None)], "");
+const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, 0, AccessLevel::Read, "Null", "List", &[("alarmmod", Some("Null"))], "");
+const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, 0, AccessLevel::Read, "Null", "List", &[("statealarmmod", Some("Null"))], "");
+const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, 0, AccessLevel::Read, "Map", "List", &[], "");
 const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, 0, AccessLevel::Write, "RpcValue", "RpcValue", &[], "");
 
 // Root node methods
