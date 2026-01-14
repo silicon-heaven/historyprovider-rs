@@ -30,6 +30,7 @@ use crate::{AlarmWithTimestamp, HpConfig, State};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
+const METH_ONLINE_STATUS: &str = "onlineStatus";
 const METH_ALARM_TABLE: &str = "alarmTable";
 const METH_STATE_ALARM_TABLE: &str = "stateAlarmTable";
 const METH_ALARM_LOG: &str = "alarmLog";
@@ -37,6 +38,7 @@ const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_LS_FILES: MetaMethod = MetaMethod::new_static(METH_LS_FILES, 0, AccessLevel::Read, "Map|Null", "List", &[], "");
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod::new_static(METH_GET_LOG, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
+const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flag::IsGetter as _, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
 const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[("alarmmod", Some("Null"))], "");
 const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[("statealarmmod", Some("Null"))], "");
 const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
@@ -524,6 +526,16 @@ impl AlarmGetter for StateAlarm {
     }
 }
 
+async fn online_status_handler(
+    site_path: &str,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let Some(&site_state) = app_state.online_states.read().await.get(site_path) else {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong onlineStatus path: {site_path}")));
+    };
+    Ok((site_state as i32).into())
+}
+
 async fn alarmtable_handler<Getter: AlarmGetter>(
     site_path: &str,
     app_state: Arc<State>,
@@ -654,7 +666,7 @@ pub(crate) async fn request_handler(
                         const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_PUSH_LOG];
                         METHODS
                     } else if sites_data.typeinfos.get(&path).is_some_and(Result::is_ok) {
-                        const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_ALARM_TABLE, META_METHOD_STATE_ALARM_TABLE, META_METHOD_ALARM_LOG];
+                        const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_ONLINE_STATUS, META_METHOD_ALARM_TABLE, META_METHOD_STATE_ALARM_TABLE, META_METHOD_ALARM_LOG];
                         METHODS
                     } else {
                         const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_ALARM_LOG];
@@ -677,6 +689,7 @@ pub(crate) async fn request_handler(
                 }
                 Method::Other(m) => match m.method() {
                     METH_GET_LOG => m.resolve(methods, async move || { getlog_handler_rq(&path, &param, app_state).await }),
+                    METH_ONLINE_STATUS => m.resolve(methods, async move || { online_status_handler(&path, app_state).await }),
                     METH_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<CommonAlarm>(&path, app_state).await }),
                     METH_STATE_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<StateAlarm>(&path, app_state).await }),
                     METH_ALARM_LOG => m.resolve(methods, async move || { alarmlog_handler(&path, &param, app_state).await }),

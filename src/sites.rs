@@ -24,9 +24,9 @@ use crate::{AlarmWithTimestamp, State};
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum SiteOnlineStatus {
     #[default]
-    Unknown,
-    Offline,
-    Online,
+    Unknown = 0,
+    Offline = 1,
+    Online = 2,
 }
 
 #[derive(Clone,Default)]
