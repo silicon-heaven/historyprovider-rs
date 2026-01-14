@@ -298,6 +298,7 @@ fn online_status_worker(
                         .timeout(ONLINE_TIMER)
                         .exec(&client_commands)
                         .await;
+                    debug!(target: "OnlineStatus", "[{site}] RPC call result: {dir_result:?}");
                     if dir_result.is_ok() {
                         set_online_status(&site, SiteOnlineStatus::Online, &client_commands, &app_state).await;
                     } else if let Err(err) = dir_result && matches!(err.error(), CallRpcMethodErrorKind::RpcError(RpcError { .. })) {
