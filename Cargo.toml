@@ -28,8 +28,8 @@ async-compression = { version = "0.4.37", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.18", features = ["fs"] }
-time = { version = "0.3.41", features = ["formatting"] }
-chrono = "0.4.42"
+time = { version = "0.3.45", features = ["formatting"] }
+chrono = "0.4.43"
 humantime = "2.3.0"
 
 [patch.crates-io]
