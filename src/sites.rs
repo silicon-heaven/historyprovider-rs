@@ -587,7 +587,7 @@ pub(crate) async fn sites_task(
                 let msg = match mntchng_frame.to_rpcmesage() {
                     Ok(msg) => msg,
                     Err(err) => {
-                        warn!("Ignoring wrong RpcFrame: {err}");
+                        warn!("Ignoring wrong mntchng RpcFrame: {err}, frame: {mntchng_frame:?}");
                         continue;
                     }
                 };
@@ -619,7 +619,7 @@ pub(crate) async fn sites_task(
                 let msg = match notification_frame.to_rpcmesage() {
                     Ok(msg) => msg,
                     Err(err) => {
-                        warn!("Ignoring wrong RpcFrame: {err}");
+                        warn!("Ignoring wrong notification RpcFrame: {err}, frame: {notification_frame:?}");
                         continue;
                     }
                 };
