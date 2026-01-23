@@ -50,32 +50,29 @@ fn collect_sites(
 ) -> BTreeMap<String, SiteInfo>
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
-        // Using the `type` node to detect sites.
-        return sites_subtree
-            .get("HP")
-            .or_else(|| sites_subtree.get("HP3"))
-            .and_then(|_| sites_subtree.get("type"))
-            .and_then(|v| match &v.value {
-                shvproto::Value::String(site_type) => Some(site_type),
-                _ => None,
-            }
-            )
-            .map_or_else(
-                BTreeMap::new,
-                |site_type|
-                    BTreeMap::from([(
-                        path_prefix.join("/"),
-                        SiteInfo {
-                            name: sites_subtree
-                                .get("name")
-                                .map(RpcValue::as_str)
-                                .unwrap_or_default()
-                                .into(),
-                            site_type: site_type.to_string(),
-                            sub_hp: Default::default(),
-                        },
-                    )])
+        let is_site = sites_subtree.contains_key("HP") ||
+            sites_subtree.get("HP3")
+            .and_then(|hp3_node| shvproto::Map::try_from(hp3_node).ok())
+            .is_some_and(|hp3_node|
+                hp3_node.get("type").is_none_or(|ty| ty.as_str() == "device")
             );
+
+        return if is_site {
+            let get_or_default = |key: &str, default: &str| sites_subtree
+                .get(key)
+                .and_then(|val| String::try_from(val).ok())
+                .unwrap_or_else(|| default.into());
+            BTreeMap::from([(
+                    path_prefix.join("/"),
+                    SiteInfo {
+                        name: get_or_default("name", "<undefined>"),
+                        site_type: get_or_default("type", "<undefined>"),
+                        sub_hp: Default::default(),
+                    },
+            )])
+        } else {
+            BTreeMap::new()
+        }
     }
 
     sites_subtree
@@ -455,8 +452,12 @@ pub(crate) async fn sites_task(
 
                     // Subscribe mntchng
                     mntchng_subscribers = sites_info
-                        .keys()
-                        .map(|path| {
+                        .iter()
+                        .filter(|(_, site)| sub_hps
+                            .get(&site.sub_hp)
+                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+                        )
+                        .map(|(path, _)| {
                             subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
                         })
                         .collect::<FuturesUnordered<_>>()
@@ -465,8 +466,12 @@ pub(crate) async fn sites_task(
 
 
                     subscribers = sites_info
-                        .keys()
-                        .flat_map(|path| {
+                        .iter()
+                        .filter(|(_, site)| sub_hps
+                            .get(&site.sub_hp)
+                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+                        )
+                        .flat_map(|(path, _)| {
                             let shv_path = join_path!("shv", path);
                             let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
                             const SIG_CMDLOG: &str = "cmdlog";
@@ -478,8 +483,12 @@ pub(crate) async fn sites_task(
                         .await;
 
                     let typeinfos = sites_info
-                        .keys()
-                        .map(|path| {
+                        .iter()
+                        .filter(|(_, site)| sub_hps
+                            .get(&site.sub_hp)
+                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+                        )
+                        .map(|(path, _)| {
                             let client_cmd_tx = client_cmd_tx.clone();
                             async move {
                                 let result = 'result: {
@@ -703,7 +712,7 @@ mod tests {
     fn collect_sites() {
         let sites_tree = shvproto::make_map!(
             "site" => shvproto::make_map!(
-                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1", "HP3" => "{}")
+                "_meta" => shvproto::make_map!("type" => "DepotG3", "name" => "test1", "HP3" => shvproto::make_map!())
             ),
         );
         let sites = super::collect_sites(&[], &sites_tree);
