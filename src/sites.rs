@@ -452,8 +452,12 @@ pub(crate) async fn sites_task(
 
                     // Subscribe mntchng
                     mntchng_subscribers = sites_info
-                        .keys()
-                        .map(|path| {
+                        .iter()
+                        .filter(|(_, site)| sub_hps
+                            .get(&site.sub_hp)
+                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+                        )
+                        .map(|(path, _)| {
                             subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
                         })
                         .collect::<FuturesUnordered<_>>()
@@ -462,8 +466,12 @@ pub(crate) async fn sites_task(
 
 
                     subscribers = sites_info
-                        .keys()
-                        .flat_map(|path| {
+                        .iter()
+                        .filter(|(_, site)| sub_hps
+                            .get(&site.sub_hp)
+                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+                        )
+                        .flat_map(|(path, _)| {
                             let shv_path = join_path!("shv", path);
                             let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
                             const SIG_CMDLOG: &str = "cmdlog";
@@ -475,8 +483,12 @@ pub(crate) async fn sites_task(
                         .await;
 
                     let typeinfos = sites_info
-                        .keys()
-                        .map(|path| {
+                        .iter()
+                        .filter(|(_, site)| sub_hps
+                            .get(&site.sub_hp)
+                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+                        )
+                        .map(|(path, _)| {
                             let client_cmd_tx = client_cmd_tx.clone();
                             async move {
                                 let result = 'result: {
