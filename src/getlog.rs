@@ -129,12 +129,13 @@ pub(crate) async fn getlog_handler(
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
 
-    Ok(getlog_impl(file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, params).await)
+    Ok(getlog_impl(site_path, file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, params).await)
 }
 
 pub(crate) type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
 pub(crate) async fn getlog_impl(
+    site: &str,
     journal_readers: impl IntoIterator<Item = JournalEntryStream>,
     dirty_log: impl IntoIterator<Item = JournalEntry>,
     params: &GetLog2Params
@@ -242,7 +243,7 @@ pub(crate) async fn getlog_impl(
                         break 'outer;
                     }
                 }
-                Err(err) => error!("Skipping corrupted journal entry: {err}"),
+                Err(err) => error!("Skipping corrupted journal entry, site: {site}, error: {err}"),
             }
         }
     }
@@ -374,8 +375,8 @@ mod tests {
         Box::pin(tokio_stream::iter(entries))
     }
 
-    async fn get_log_entries(readers: Vec<JournalEntryStream>, params: GetLog2Params) -> GetLogResult {
-        getlog_impl(readers, [], &params).await
+    async fn get_log_entries(site: &str, readers: Vec<JournalEntryStream>, params: GetLog2Params) -> GetLogResult {
+        getlog_impl(site, readers, [], &params).await
     }
 
     #[tokio::test]
@@ -823,7 +824,7 @@ mod tests {
         ].into_iter().map(|test_case| (data_4 as fn() -> _, test_case)));
 
         for (data, case) in test_cases {
-            let result = get_log_entries(data(), case.params).await;
+            let result = get_log_entries("test", data(), case.params).await;
             let chained_entries = result.snapshot_entries.into_iter().chain(result.event_entries.into_iter()).collect::<Vec<_>>();
             let expected = case.expected.into_iter().map(|(ts, path, val)| (ts.to_string(), path.to_string(), val)).collect::<Vec<_>>();
             assert_eq!(chained_entries.into_iter().map(|entry_val| (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path.clone(), entry_val.value.clone())).collect::<Vec<_>>(), expected, "Test case failed: {}", case.name);
