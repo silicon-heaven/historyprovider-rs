@@ -489,8 +489,8 @@ pub(crate) async fn sites_task(
                                         .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
                                     let Some(type_info_filename) = files
                                         .into_iter()
-                                        .find(|file| file == "typeInfo.cpon") else {
-                                            break 'result Err(format!("No typeInfo.cpon found for site {path}"));
+                                        .find(|file| file == "typeInfo.cpon" || file == "nodesTree.cpon") else {
+                                            break 'result Err(format!("No typeInfo.cpon or nodesTree.cpon found for site {path}"));
                                         };
                                     let type_info_filepath = join_path!(files_path, type_info_filename);
                                     let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read").exec(&client_cmd_tx)
