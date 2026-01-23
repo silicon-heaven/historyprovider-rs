@@ -50,32 +50,29 @@ fn collect_sites(
 ) -> BTreeMap<String, SiteInfo>
 {
     if let Some((&"_meta", path_prefix)) = path_segments.split_last() {
-        // Using the `type` node to detect sites.
-        return sites_subtree
-            .get("HP")
-            .or_else(|| sites_subtree.get("HP3"))
-            .and_then(|_| sites_subtree.get("type"))
-            .and_then(|v| match &v.value {
-                shvproto::Value::String(site_type) => Some(site_type),
-                _ => None,
-            }
-            )
-            .map_or_else(
-                BTreeMap::new,
-                |site_type|
-                    BTreeMap::from([(
-                        path_prefix.join("/"),
-                        SiteInfo {
-                            name: sites_subtree
-                                .get("name")
-                                .map(RpcValue::as_str)
-                                .unwrap_or_default()
-                                .into(),
-                            site_type: site_type.to_string(),
-                            sub_hp: Default::default(),
-                        },
-                    )])
+        let is_site = sites_subtree.contains_key("HP") ||
+            sites_subtree.get("HP3")
+            .and_then(|hp3_node| shvproto::Map::try_from(hp3_node).ok())
+            .is_some_and(|hp3_node|
+                hp3_node.get("type").is_none_or(|ty| ty.as_str() == "device")
             );
+
+        return if is_site {
+            let get_or_default = |key: &str, default: &str| sites_subtree
+                .get(key)
+                .and_then(|val| String::try_from(val).ok())
+                .unwrap_or_else(|| default.into());
+            BTreeMap::from([(
+                    path_prefix.join("/"),
+                    SiteInfo {
+                        name: get_or_default("name", "<undefined>"),
+                        site_type: get_or_default("type", "<undefined>"),
+                        sub_hp: Default::default(),
+                    },
+            )])
+        } else {
+            BTreeMap::new()
+        }
     }
 
     sites_subtree
