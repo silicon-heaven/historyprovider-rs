@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.6.6"
+version = "2.6.7"
 edition = "2024"
 
 [[bin]]
@@ -28,7 +28,7 @@ async-compression = { version = "0.4.37", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.18", features = ["fs"] }
-time = { version = "0.3.45", features = ["formatting"] }
+time = { version = "0.3.46", features = ["formatting"] }
 chrono = "0.4.43"
 humantime = "2.3.0"
 
