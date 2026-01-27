@@ -10,10 +10,10 @@ edition = "2024"
 name = "hp"
 
 [dependencies]
-tokio = { version = "1.49.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 shvproto = "3.6.27"
-shvrpc = "9.0.0"
-shvclient = { version = "0.22.0", features = ["tokio"] }
+shvrpc = "9.0.1"
+shvclient = { version = "0.22.1", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.29"
 clap = { version = "4.5.56", features = ["derive"] }
