@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use futures::channel::mpsc::{unbounded, UnboundedSender};
+use futures::channel::mpsc::{UnboundedSender, unbounded};
 use log::info;
 use serde::Deserialize;
+use shvclient::client::Full;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
 use tokio::sync::RwLock;
@@ -26,6 +27,8 @@ mod datachange;
 mod util;
 pub mod typeinfo;
 pub mod alarm;
+
+pub use crate::util::init_logger;
 
 const fn max_sync_tasks_default() -> usize { 8 }
 const fn max_journal_dir_size_default() -> usize { 30 * 1_000_000_000 } // 30 GB
@@ -98,7 +101,7 @@ struct State {
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
 }
 
-pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
+fn make_client(hp_config: &HpConfig) -> shvrpc::Result<(shvclient::Client<Full>, impl FnOnce(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver))> {
     info!("Setting up journal dir: {}", &hp_config.journal_dir);
     std::fs::create_dir_all(&hp_config.journal_dir)?;
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
@@ -118,16 +121,32 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         dirtylog_cmd_tx,
     });
 
-    shvclient::Client::new()
+    let client = shvclient::Client::new()
         .mount_dynamic("", {
             let app_state = app_state.clone();
             move |rq, cmd_sender|
                 tree::request_handler(rq, cmd_sender, app_state.clone())
-        })
-        .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
-            tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
-            tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
-            tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
-        })
+        });
+
+    let init_function = |client_cmd_tx: shvclient::ClientCommandSender, client_evt_rx: shvclient::ClientEventsReceiver| {
+        tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
+        tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
+        tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
+    };
+
+    Ok((client, init_function))
+}
+
+pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
+    let (client, init_function) = make_client(hp_config)?;
+    client
+        .run_with_init(client_config, init_function)
+        .await
+}
+
+pub async fn mock_run(hp_config: &HpConfig, conn_evt_rx: futures::channel::mpsc::UnboundedReceiver<shvclient::ConnectionEvent>) -> shvrpc::Result<()> {
+    let (client, init_function) = make_client(hp_config)?;
+    client
+        .mock_run_with_init(init_function, conn_evt_rx)
         .await
 }
