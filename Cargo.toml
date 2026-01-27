@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.6.15"
+version = "2.6.16"
 edition = "2024"
 
 [[bin]]
