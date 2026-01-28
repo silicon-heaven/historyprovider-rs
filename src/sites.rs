@@ -348,7 +348,7 @@ pub(crate) async fn sites_task(
     }
 
     let (periodic_sync_tx, mut periodic_sync_rx) = futures::channel::mpsc::unbounded();
-    {
+    let periodic_sync_task = {
         let app_state = app_state.clone();
         tokio::spawn(async move {
             let periodic_sync_interval = app_state.config.periodic_sync_interval;
@@ -385,8 +385,8 @@ pub(crate) async fn sites_task(
                 }
             }
             log::debug!("periodic sync task finished");
-        });
-    }
+        })
+    };
 
     loop {
         futures::select! {
@@ -663,6 +663,11 @@ pub(crate) async fn sites_task(
             }
             complete => break,
         }
+    }
+    drop(periodic_sync_tx);
+    log::debug!("waiting for periodic sync task to finish");
+    if let Err(err) = periodic_sync_task.await {
+        log::error!("Failed to join periodic_sync_task: {err}")
     }
     log::debug!("sites task finished");
 }
