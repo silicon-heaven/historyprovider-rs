@@ -484,6 +484,8 @@ pub(crate) async fn sites_task(
                         .collect::<SelectAll<_>>()
                         .await;
 
+                    log::info!("Loading typeInfo");
+
                     let typeinfos = sites_info
                         .iter()
                         .filter(|(_, site)| sub_hps
@@ -534,6 +536,7 @@ pub(crate) async fn sites_task(
                     };
                     let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
                     let mut state_alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
+                    log::info!("Loading alarmTables");
                     for site_path in sites_info.keys() {
                         let Some(Ok(type_info)) = typeinfos.get(site_path) else {
                             // No typeinfo for this site - skip
