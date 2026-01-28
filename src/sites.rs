@@ -388,6 +388,8 @@ pub(crate) async fn sites_task(
         })
     };
 
+    let mut online_status_task = None;
+
     loop {
         futures::select! {
             client_event = client_evt_rx.select_next_some() => match client_event {
@@ -571,11 +573,11 @@ pub(crate) async fn sites_task(
                         online_status_channels.insert(site.to_string(), tx);
                         online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
                     }
-                    tokio::spawn(async move {
+                    online_status_task = Some(tokio::spawn(async move {
                         debug!(target: "OnlineStatus", "online status task starts");
                         futures::future::join_all(online_status_workers).await;
                         debug!(target: "OnlineStatus", "online status task finish");
-                    });
+                    }));
                     *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
                     periodic_sync_tx
@@ -669,6 +671,14 @@ pub(crate) async fn sites_task(
     if let Err(err) = periodic_sync_task.await {
         log::error!("Failed to join periodic_sync_task: {err}")
     }
+
+    if let Some(online_status_task) = online_status_task {
+        online_status_channels.clear();
+        if let Err(err) = online_status_task.await {
+            log::error!("Failed to join online_status_task: {err}")
+        };
+    }
+
     log::debug!("sites task finished");
 }
 
