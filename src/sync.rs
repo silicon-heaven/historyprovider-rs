@@ -724,6 +724,8 @@ pub(crate) async fn sync_task(
                         app_state.sync_info.append(site, message).await,
                 }
             }
+
+            log::debug!("sync logger task finished");
         }
     });
 
@@ -907,7 +909,12 @@ pub(crate) async fn sync_task(
             }
         }
     }
-    logger_task.abort();
+
+    log::debug!("waiting for sync logger task to finish");
+    drop(logger_tx);
+    if let Err(err) = logger_task.await {
+        log::error!("Failed to join logger_task: {err}")
+    }
 }
 
 #[cfg(test)]
