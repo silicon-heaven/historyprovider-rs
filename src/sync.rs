@@ -915,6 +915,7 @@ pub(crate) async fn sync_task(
     if let Err(err) = logger_task.await {
         log::error!("Failed to join logger_task: {err}")
     }
+    log::debug!("sync task finished");
 }
 
 #[cfg(test)]
