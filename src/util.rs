@@ -103,7 +103,6 @@ impl<T: Eq + Hash + Clone> DedupSender<T> {
             })
     }
 
-    #[cfg(test)]
     pub(crate) fn close_channel(&self) {
         self.sender.close_channel();
     }

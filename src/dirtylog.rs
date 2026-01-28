@@ -289,6 +289,7 @@ pub(crate) async fn dirtylog_task(
             complete => break,
         }
     }
+    log::debug!("dirtylog task finished");
 }
 
 #[cfg(test)]
