@@ -125,9 +125,17 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
                 tree::request_handler(rq, cmd_sender, app_state.clone())
         })
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
-            tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
-            tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
-            tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
+            let wrap_task = |handle| Box::new(async move {
+                if let Err(task_result) = handle.await {
+                    log::error!("Failed to join task: {task_result}");
+                }
+            });
+
+            vec![
+                wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()))),
+                wrap_task(tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx))),
+                wrap_task(tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx))),
+            ]
         })
         .await
 }
