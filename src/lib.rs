@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use log::info;
 use serde::Deserialize;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 
 use crate::alarm::Alarm;
@@ -96,6 +98,7 @@ struct State {
     config: HpConfig,
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
+    app_closing: AtomicBool,
 }
 
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
@@ -116,6 +119,7 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         config: hp_config.clone(),
         sync_cmd_tx,
         dirtylog_cmd_tx,
+        app_closing: AtomicBool::new(false),
     });
 
     shvclient::Client::new()
@@ -130,6 +134,25 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
                     log::error!("Failed to join task: {task_result}");
                 }
             });
+            let handle_signal = |signal_kind| {
+                let app_state2 = app_state.clone();
+                let client_cmd_tx2 = client_cmd_tx.clone();
+                match signal(signal_kind) {
+                    Ok(mut stream) => {
+                        tokio::spawn(async move {
+                            stream.recv().await;
+                            app_state2.app_closing.store(true, std::sync::atomic::Ordering::Relaxed);
+                            app_state2.sync_cmd_tx.close_channel();
+                            app_state2.dirtylog_cmd_tx.close_channel();
+                            client_cmd_tx2.terminate_client();
+                        });
+                    },
+                    Err(err) => log::error!("Failed to install signal handler: {err}"),
+                }
+            };
+
+            handle_signal(SignalKind::interrupt());
+            handle_signal(SignalKind::terminate());
 
             vec![
                 wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()))),
