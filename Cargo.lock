@@ -237,9 +237,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.54"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6e6ff9dcd79cff5cd969a17a545d79e84ab086e444102a591e288a8aa3ce394"
+checksum = "a75ca66430e33a14957acc24c5077b503e7d374151b2b4b3a10c83b4ceb4be0e"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.54"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa42cf4d2b7a41bc8f663a7cab4031ebafa1bf3875705bfaf8466dc60ab52c00"
+checksum = "793207c7fa6300a0608d1080b858e5fdbe713cdc1c8db9fb17777d8a13e63df0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -259,9 +259,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.49"
+version = "4.5.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a0b5487afeab2deb2ff4e03a807ad1a03ac532ff5a2cee5d86884440c7f7671"
+checksum = "a92793da1a46a5f2a02a6f4c46c6496b28c43638adea8306fcb0caa1634f24e5"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -487,6 +487,20 @@ name = "duration-str"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6eb193f176998d2f9fed5cfea52af8237f86a03fe66b85f96ad75d890a85299"
+dependencies = [
+ "chrono",
+ "rust_decimal",
+ "serde",
+ "thiserror 2.0.17",
+ "time",
+ "winnow",
+]
+
+[[package]]
+name = "duration-str"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12494809f9915b6132014cc259c4e204ab53ab6c6dd2225672703b5359267d82"
 dependencies = [
  "chrono",
  "rust_decimal",
@@ -770,7 +784,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
- "duration-str",
+ "duration-str 0.19.0",
  "futures",
  "hex",
  "humantime",
@@ -780,7 +794,7 @@ dependencies = [
  "sha1",
  "shvclient",
  "shvproto",
- "shvrpc",
+ "shvrpc 9.0.0",
  "simple_logger",
  "tempfile",
  "time",
@@ -1017,15 +1031,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
-name = "lock_api"
-version = "0.4.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
-dependencies = [
- "scopeguard",
-]
-
-[[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1152,29 +1157,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
-name = "parking_lot"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
-dependencies = [
- "lock_api",
- "parking_lot_core",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.9.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
-dependencies = [
- "cfg-if",
- "libc",
- "redox_syscall",
- "smallvec",
- "windows-link",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1244,15 +1226,6 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
-
-[[package]]
-name = "redox_syscall"
-version = "0.5.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
-dependencies = [
- "bitflags",
-]
 
 [[package]]
 name = "ring"
@@ -1406,12 +1379,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scopeguard"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
 name = "security-framework"
 version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1519,13 +1486,13 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.21.10"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95a9651b4d7bf66062dbeda53a1608138ac6124be527c88627e9acb7bcd7bc19"
+checksum = "ea837cf929d1be22de648991bf6b8175a456c35114e6387c83e928ed009dfbcf"
 dependencies = [
  "async-broadcast",
  "async-trait",
- "duration-str",
+ "duration-str 0.18.0",
  "futures",
  "futures-rustls",
  "futures-time",
@@ -1534,7 +1501,7 @@ dependencies = [
  "rustls-pemfile",
  "rustls-platform-verifier",
  "shvproto",
- "shvrpc",
+ "shvrpc 7.2.0",
  "tokio",
  "tokio-util",
  "url",
@@ -1555,14 +1522,14 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "7.1.9"
+version = "7.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f933ab659c999598dc3308a6ca2ee27439c30ff8b82d6c4f12d386298d8a837"
+checksum = "4d723e21af5600eb30ab6d6460b8059a35f92a0dda77643dc1311b45861acf1b"
 dependencies = [
  "anyhow",
  "async-trait",
  "crc",
- "duration-str",
+ "duration-str 0.18.0",
  "futures",
  "futures-time",
  "glob",
@@ -1576,12 +1543,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "signal-hook-registry"
-version = "1.4.7"
+name = "shvrpc"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7664a098b8e616bdfcc2dc0e9ac44eb231eedf41db4e9fe95d8d32ec728dedad"
+checksum = "dd261c9a4e05a4796aceb7f592bf849ada6b1db8094e23ae87c60a1b3781b355"
 dependencies = [
- "libc",
+ "anyhow",
+ "async-trait",
+ "crc",
+ "duration-str 0.18.0",
+ "futures",
+ "futures-time",
+ "glob",
+ "hex",
+ "log",
+ "serde",
+ "serde_yaml",
+ "sha1",
+ "shvproto",
+ "url",
 ]
 
 [[package]]
@@ -1775,12 +1755,9 @@ version = "1.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86"
 dependencies = [
- "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
