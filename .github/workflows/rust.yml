@@ -13,6 +13,7 @@ env:
 permissions:
   # For syyyr/rust-pycobertura-action
   pull-requests: write
+  contents: write
 
 jobs:
   build:
@@ -36,6 +37,53 @@ jobs:
         uses: syyyr/rust-pycobertura-action@v4.0.1
         with:
           project_name: historyprovider-rs
+
+  create-releases:
+    name: Create releases
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Build and Install Binary
+        run: |
+          mkdir -p ${{github.workspace}}/install
+          cargo install --path '${{github.workspace}}' --root '${{github.workspace}}/install' --all-features --locked
+        shell: bash
+
+      - name: Get version from Cargo.toml
+        id: get-version
+        run: |
+          version="$(grep '^version' Cargo.toml | head -n1 | sed 's/version\s*=\s*"\(.*\)"/\1/')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: ${{ steps.get-version.outputs.version }}
+
+      - name: Rename artifacts
+        run: |
+          mv "${{github.workspace}}/install/bin/hp" "${{github.workspace}}/install/bin/historyprovider-${{ steps.get-version.outputs.version }}"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: historyprovider ${{ steps.get-version.outputs.version }}
+          tag_name: ${{ steps.get-version.outputs.version }}
+          fail_on_unmatched_files: true
+          make_latest: true
+          body: |
+            historyprovider ${{ steps.get-version.outputs.version }}
+
+            If you find any bugs, please report them to the repository's issue tracker.
+          files: |
+            ${{github.workspace}}/install/bin/historyprovider*${{ steps.get-version.outputs.version }}*
 
   upload-crates-io:
     name: Publish crates on crates.io
