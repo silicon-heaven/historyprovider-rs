@@ -41,7 +41,8 @@ jobs:
   create-releases:
     name: Create releases
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    # Build on the older Ubuntu for older glibc.
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
