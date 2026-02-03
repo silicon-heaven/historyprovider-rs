@@ -3,17 +3,17 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.6.11"
+version = "2.6.12"
 edition = "2024"
 
 [[bin]]
 name = "hp"
 
 [dependencies]
-tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"], default-features = false }
 shvproto = "3.6.27"
-shvrpc = "9.0.1"
-shvclient = { version = "0.22.1", features = ["tokio"] }
+shvrpc = { version = "10.0", features = ["journal"] }
+shvclient = { version = "0.23", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.29"
 clap = { version = "4.5.56", features = ["derive"] }
@@ -32,7 +32,7 @@ time = { version = "0.3.46", features = ["formatting"] }
 chrono = "0.4.43"
 humantime = "2.3.0"
 
-[patch.crates-io]
+# [patch.crates-io]
 # shvrpc = { path = "../libshvrpc-rs" }
 # shvproto = { path = "../libshvproto-rs" }
 # shvclient = { path = "../libshvclient-rs" }
@@ -41,5 +41,5 @@ humantime = "2.3.0"
 [dev-dependencies]
 async-broadcast = "0.7.2"
 async-trait = "0.1.80"
-shvclient = { version = "0.22.0", features = ["mocking"] }
+shvclient = { version = "0.23", features = ["mocking", "tokio"] }
 tempfile = "3.24.0"

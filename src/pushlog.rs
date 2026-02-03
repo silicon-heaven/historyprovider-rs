@@ -5,9 +5,9 @@ use futures::io::{BufReader, BufWriter};
 use futures::StreamExt as _;
 use log::{error, info, warn};
 use shvproto::RpcValue;
+use shvrpc::journalrw::{JournalReaderLog2, JournalWriterLog2, Log2Header, Log2Reader};
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 
-use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, Log2Header, Log2Reader};
 use crate::util::{get_files, is_log2_file};
 use crate::State;
 
@@ -33,9 +33,9 @@ pub(crate) async fn pushlog_impl(
     app_state: Arc<State>,
 ) -> PushLogResult
 {
-    info!("pushLog handler, site: {site_path}, log header: {header}", header = log_reader.header);
+    info!("pushLog handler, site: {site_path}, log header: {header}", header = log_reader.header());
 
-    let Log2Header {since, until, ..} = log_reader.header;
+    let Log2Header {since, until, ..} = log_reader.header().clone();
     let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
 
     let local_latest_entries = {

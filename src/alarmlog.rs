@@ -5,11 +5,11 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use log::warn;
 use shvproto::{FromRpcValue, ToRpcValue};
+use shvrpc::journalrw::{GetLog2Params, GetLog2Since};
 use tokio::sync::Semaphore;
 
 use crate::alarm::collect_alarms;
 use crate::getlog::getlog_handler;
-use crate::journalrw::{GetLog2Params, GetLog2Since};
 use crate::sites::update_alarms;
 use crate::{AlarmWithTimestamp, State};
 

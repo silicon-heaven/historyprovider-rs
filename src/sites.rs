@@ -525,8 +525,8 @@ pub(crate) async fn sites_task(
                         typeinfos: typeinfos.clone()
                     };
 
-                    let params = crate::journalrw::GetLog2Params {
-                        since: crate::journalrw::GetLog2Since::LastEntry,
+                    let params = shvrpc::journalrw::GetLog2Params {
+                        since: shvrpc::journalrw::GetLog2Since::LastEntry,
                         with_snapshot: true,
                         ..Default::default()
                     };
