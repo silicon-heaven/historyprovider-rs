@@ -12,11 +12,11 @@ use log::{debug, error, info, warn};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
+use shvrpc::journalentry::JournalEntry;
+use shvrpc::journalrw::{JournalReaderLog2, JournalWriterLog2};
+use shvrpc::datachange::{DataChange, ValueFlags};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use crate::datachange::DataChange;
-use crate::journalentry::JournalEntry;
-use crate::journalrw::{JournalReaderLog2, JournalWriterLog2, VALUE_FLAG_SPONTANEOUS_BIT};
 use crate::sites::ParsedNotification;
 use crate::util::{get_files, is_log2_file};
 use crate::State;
@@ -276,7 +276,7 @@ pub(crate) async fn dirtylog_task(
                         access_level: AccessLevel::Read as _,
                         short_time: data_change.short_time.unwrap_or(-1),
                         user_id: Default::default(),
-                        repeat: data_change.value_flags & (1 << VALUE_FLAG_SPONTANEOUS_BIT) == 0,
+                        repeat: !data_change.value_flags.contains(ValueFlags::SPONTANEOUS),
                         provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
                     };
                     // Schedule next task
@@ -299,9 +299,9 @@ mod tests {
     use log::debug;
     use shvclient::clientapi::ClientCommand;
     use shvproto::DateTime;
-    use shvrpc::rpcframe::RpcFrame;
+    use shvrpc::{datachange::{DataChange, ValueFlags}, journalentry::JournalEntry, rpcframe::RpcFrame};
 
-    use crate::{datachange::DataChange, dirtylog::{DirtyLogCommand, dirtylog_task}, journalentry::JournalEntry, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
+    use crate::{dirtylog::{DirtyLogCommand, dirtylog_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{PrettyJoinError, TestStep, run_test}}};
 
     struct DirtylogTaskTestState {
         sender: UnboundedSender<DirtyLogCommand>,
@@ -365,7 +365,7 @@ mod tests {
                     Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), param: DataChange{
                         value: 20.into(),
                         date_time: Some(DateTime::from_iso_str("2022-07-07T00:00:00.000").expect("DateTime must work")),
-                        value_flags: 0,
+                        value_flags: ValueFlags::empty(),
                         short_time: None,
                     }.into() }))),
                 ],

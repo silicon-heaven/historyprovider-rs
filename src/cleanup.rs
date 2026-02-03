@@ -43,7 +43,7 @@ pub(crate) async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<
 
 /// Prune `.log2` files while keeping the newest one per directory
 pub(crate) async fn cleanup_log2_files(dir: impl AsRef<Path>, size_limit: u64, days_to_keep: i64) -> io::Result<()> {
-    let files = collect_log2_files(dir.as_ref()).await?;
+    let files = collect_log2_files(dir).await?;
     let mut files_size: u64 = files.iter().map(|f| f.size).sum();
 
     info!("log2 files size: {files_size}, size limit: {size_limit}, days_to_keep: {days_to_keep}");

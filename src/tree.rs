@@ -15,6 +15,7 @@ use shvrpc::metamethod::{AccessLevel, MetaMethod};
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::util::children_on_path;
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
+use shvrpc::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLockReadGuard;
 use tokio_stream::wrappers::ReadDirStream;
@@ -23,7 +24,6 @@ use tokio_util::io::ReaderStream;
 use crate::alarmlog::{alarmlog_impl, AlarmLogParams};
 use crate::cleanup::collect_log2_files;
 use crate::getlog::getlog_handler;
-use crate::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
 use crate::pushlog::pushlog_impl;
 use crate::sites::SubHpInfo;
 use crate::{AlarmWithTimestamp, HpConfig, State};
@@ -36,13 +36,13 @@ const METH_STATE_ALARM_TABLE: &str = "stateAlarmTable";
 const METH_ALARM_LOG: &str = "alarmLog";
 const METH_PUSH_LOG: &str = "pushLog";
 
-const META_METHOD_LS_FILES: MetaMethod = MetaMethod::new_static(METH_LS_FILES, 0, AccessLevel::Read, "Map|Null", "List", &[], "");
-const META_METHOD_GET_LOG: MetaMethod = MetaMethod::new_static(METH_GET_LOG, 0, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
-const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flag::IsGetter as _, AccessLevel::Read, "Null", "i[Unknown,Offline,Online]", &[("onlinestatuschng", None)], "");
-const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, 0, AccessLevel::Read, "Null", "List", &[("alarmmod", Some("Null"))], "");
-const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, 0, AccessLevel::Read, "Null", "List", &[("statealarmmod", Some("Null"))], "");
-const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, 0, AccessLevel::Read, "Map", "List", &[], "");
-const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, 0, AccessLevel::Write, "RpcValue", "RpcValue", &[], "");
+const META_METHOD_LS_FILES: MetaMethod = MetaMethod::new_static(METH_LS_FILES, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map|Null", "List", &[], "");
+const META_METHOD_GET_LOG: MetaMethod = MetaMethod::new_static(METH_GET_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
+const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Read, "Null", "i[Unknown,Offline,Online]", &[("onlinestatuschng", None)], "");
+const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("alarmmod", Some("Null"))], "");
+const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("statealarmmod", Some("Null"))], "");
+const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map", "List", &[], "");
+const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Write, "RpcValue", "RpcValue", &[], "");
 
 // Root node methods
 const METH_VERSION: &str = "version";
@@ -221,12 +221,12 @@ async fn shvjournal_request_handler(
     if is_shvjournal_root {
         const METHODS: &[MetaMethod] = &[
             META_METHOD_LS_FILES,
-            MetaMethod::new_static(METH_LOG_SIZE_LIMIT, 0, AccessLevel::Developer, "Null", "Int", &[], ""),
-            MetaMethod::new_static(METH_TOTAL_LOG_SIZE, 0, AccessLevel::Developer, "Null", "Int", &[], "Returns: total size occupied by logs."),
-            MetaMethod::new_static(METH_LOG_USAGE, 0, AccessLevel::Developer, "Null", "Decimal", &[], "Returns: percentage of space occupied by logs."),
-            MetaMethod::new_static(METH_SYNC_LOG, 0, AccessLevel::Write, "String|Map", "List", &[], "syncLog - triggers a manual sync\nAccepts a mandatory string param, only the subtree signified by the string is synced.\nsyncLog also takes a map param in this format: {\n\twaitForFinished: bool // the method waits until the whole operation is finished and only then returns a response\n\tshvPath: string // the subtree to be synced\n}\n\nReturns: a list of all leaf sites that will be synced\n"),
-            MetaMethod::new_static(METH_SYNC_INFO, 0, AccessLevel::Read, "String", "Map", &[], "syncInfo - returns info about sites' sync status\nOptionally takes a string that filters the sites by prefix.\n\nReturns: a map where they is the path of the site and the value is a map with a status string and a last updated timestamp.\n"),
-            MetaMethod::new_static(METH_SANITIZE_LOG, 0, AccessLevel::Developer, "Null", "String", &[], ""),
+            MetaMethod::new_static(METH_LOG_SIZE_LIMIT, shvrpc::metamethod::Flags::None, AccessLevel::Developer, "Null", "Int", &[], ""),
+            MetaMethod::new_static(METH_TOTAL_LOG_SIZE, shvrpc::metamethod::Flags::None, AccessLevel::Developer, "Null", "Int", &[], "Returns: total size occupied by logs."),
+            MetaMethod::new_static(METH_LOG_USAGE, shvrpc::metamethod::Flags::None, AccessLevel::Developer, "Null", "Decimal", &[], "Returns: percentage of space occupied by logs."),
+            MetaMethod::new_static(METH_SYNC_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Write, "String|Map", "List", &[], "syncLog - triggers a manual sync\nAccepts a mandatory string param, only the subtree signified by the string is synced.\nsyncLog also takes a map param in this format: {\n\twaitForFinished: bool // the method waits until the whole operation is finished and only then returns a response\n\tshvPath: string // the subtree to be synced\n}\n\nReturns: a list of all leaf sites that will be synced\n"),
+            MetaMethod::new_static(METH_SYNC_INFO, shvrpc::metamethod::Flags::None, AccessLevel::Read, "String", "Map", &[], "syncInfo - returns info about sites' sync status\nOptionally takes a string that filters the sites by prefix.\n\nReturns: a map where they is the path of the site and the value is a map with a status string and a last updated timestamp.\n"),
+            MetaMethod::new_static(METH_SANITIZE_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Developer, "Null", "String", &[], ""),
         ];
         match method {
             Method::Dir(dir) => return dir.resolve(METHODS),
@@ -281,10 +281,10 @@ async fn shvjournal_request_handler(
         }
     } else if path_meta.is_file() {
         const METHODS: &[MetaMethod] = &[
-            MetaMethod::new_static(METH_HASH, 0, AccessLevel::Read, "Map|Null", "String", &[], ""),
-            MetaMethod::new_static(METH_SIZE, 0, AccessLevel::Browse, "", "Int", &[], ""),
-            MetaMethod::new_static(METH_READ, 0, AccessLevel::Read, "Map", "Blob", &[], "Parameters\n  offset: file offset to start read, default is 0\n  size: number of bytes to read starting on offset, default is till end of file\n"),
-            MetaMethod::new_static(METH_READ_COMPRESSED, 0, AccessLevel::Read, "Map", "Blob", &[], "Parameters\n  read() parameters\n  compressionType: gzip (default) | qcompress"),
+            MetaMethod::new_static(METH_HASH, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map|Null", "String", &[], ""),
+            MetaMethod::new_static(METH_SIZE, shvrpc::metamethod::Flags::None, AccessLevel::Browse, "", "Int", &[], ""),
+            MetaMethod::new_static(METH_READ, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map", "Blob", &[], "Parameters\n  offset: file offset to start read, default is 0\n  size: number of bytes to read starting on offset, default is till end of file\n"),
+            MetaMethod::new_static(METH_READ_COMPRESSED, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map", "Blob", &[], "Parameters\n  read() parameters\n  compressionType: gzip (default) | qcompress"),
         ];
         match method {
             Method::Dir(dir) => dir.resolve(METHODS),
@@ -597,8 +597,8 @@ pub(crate) async fn request_handler(
             shvjournal_request_handler(path, method, param, app_state).await,
         NodeType::ValueCache => {
             const METHODS: &[MetaMethod] = &[
-                MetaMethod::new_static(METH_GET, 0, AccessLevel::Developer, "String", "RpcValue", &[], ""),
-                MetaMethod::new_static(METH_GET_CACHE, 0, AccessLevel::Developer, "Null", "Map", &[], ""),
+                MetaMethod::new_static(METH_GET, shvrpc::metamethod::Flags::None, AccessLevel::Developer, "String", "RpcValue", &[], ""),
+                MetaMethod::new_static(METH_GET_CACHE, shvrpc::metamethod::Flags::None, AccessLevel::Developer, "Null", "Map", &[], ""),
             ];
             match method {
                 Method::Dir(dir) => dir.resolve(METHODS),
@@ -609,9 +609,9 @@ pub(crate) async fn request_handler(
         }
         NodeType::Root => {
             const METHODS: &[MetaMethod] = &[
-                MetaMethod::new_static(METH_VERSION, 0, AccessLevel::Read, "Null", "String", &[], ""),
-                MetaMethod::new_static(METH_UPTIME, 0, AccessLevel::Read, "Null", "String", &[], ""),
-                MetaMethod::new_static(METH_RELOAD_SITES, 0, AccessLevel::Write, "Null", "Bool", &[], ""),
+                MetaMethod::new_static(METH_VERSION, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "String", &[], ""),
+                MetaMethod::new_static(METH_UPTIME, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "String", &[], ""),
+                MetaMethod::new_static(METH_RELOAD_SITES, shvrpc::metamethod::Flags::None, AccessLevel::Write, "Null", "Bool", &[], ""),
                 META_METHOD_ALARM_LOG,
                 // TODO: All root node methods:
                 // appName

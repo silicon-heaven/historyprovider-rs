@@ -553,9 +553,9 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flate2"
-version = "1.1.8"
+version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -763,7 +763,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "2.6.11"
+version = "2.6.12"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1472,9 +1472,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.22.1"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cfcdc72cf1923e6781493ddfed4e8651aca4ec30bf4f78c7756ce7048088d90"
+checksum = "930cec2827cd0a21d1a16cc08fca1a7fc4ef348d870b83626d7d93d6e1ef8cdc"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1508,12 +1508,13 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "9.0.1"
+version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1888cc59abf52592f42bbe28dbd79ce250ce3199bd3873abcbc27b1eda75b207"
+checksum = "206ca7a53c912c9fde6502f7d34d1338909d686bd69b02c0425ccc894ad62ca9"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bitflags",
  "crc",
  "duration-str",
  "futures",

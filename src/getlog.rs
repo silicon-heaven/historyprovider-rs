@@ -13,8 +13,8 @@ use tokio::fs::DirEntry;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::dirtylog::DirtyLogCommand;
-use crate::journalentry::JournalEntry;
-use crate::journalrw::{matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2};
+use shvrpc::journalentry::JournalEntry;
+use shvrpc::journalrw::{matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2};
 use crate::util::{get_files, is_log2_file};
 use crate::State;
 
@@ -344,16 +344,17 @@ mod tests {
     use std::error::Error;
 
     use shvproto::{DateTime, RpcValue};
+    use shvrpc::{journalentry::JournalEntry, journalrw::{GetLog2Params, GetLog2Since}};
 
-    use crate::{getlog::{getlog_impl, GetLogResult, JournalEntryStream}, journalentry::JournalEntry, journalrw::{GetLog2Params, GetLog2Since}};
+    use crate::{getlog::{getlog_impl, GetLogResult, JournalEntryStream}};
 
 
     fn ts(ts_str: &str) -> shvproto::DateTime {
         DateTime::from_iso_str(ts_str).unwrap()
     }
 
-    fn since(ts_str: &str)-> crate::journalrw::GetLog2Since {
-        crate::journalrw::GetLog2Since::DateTime(ts(ts_str))
+    fn since(ts_str: &str)-> shvrpc::journalrw::GetLog2Since {
+        shvrpc::journalrw::GetLog2Since::DateTime(ts(ts_str))
     }
 
     fn make_entry(timestamp: &str, path: &str, value: impl Into<RpcValue>) -> Result<JournalEntry, Box<dyn Error + Send + Sync>> {
