@@ -6,7 +6,6 @@ use simple_logger::SimpleLogger;
 use url::Url;
 
 #[derive(Parser, Debug)]
-//#[structopt(name = "device", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "SHV call")]
 struct Opts {
     /// Config file path
     #[arg(long)]

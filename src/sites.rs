@@ -348,7 +348,7 @@ pub(crate) async fn sites_task(
     }
 
     let (periodic_sync_tx, mut periodic_sync_rx) = futures::channel::mpsc::unbounded();
-    {
+    let periodic_sync_task = {
         let app_state = app_state.clone();
         tokio::spawn(async move {
             let periodic_sync_interval = app_state.config.periodic_sync_interval;
@@ -385,8 +385,10 @@ pub(crate) async fn sites_task(
                 }
             }
             log::debug!("periodic sync task finished");
-        });
-    }
+        })
+    };
+
+    let mut online_status_task = None;
 
     loop {
         futures::select! {
@@ -464,7 +466,7 @@ pub(crate) async fn sites_task(
                         .collect::<SelectAll<_>>()
                         .await;
 
-
+                    log::info!("Loading typeinfo");
                     subscribers = sites_info
                         .iter()
                         .filter(|(_, site)| sub_hps
@@ -533,6 +535,9 @@ pub(crate) async fn sites_task(
                     let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
                     let mut state_alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
                     for site_path in sites_info.keys() {
+                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         let Some(Ok(type_info)) = typeinfos.get(site_path) else {
                             // No typeinfo for this site - skip
                             continue;
@@ -564,6 +569,10 @@ pub(crate) async fn sites_task(
 
                     let mut online_status_workers = Vec::new();
                     for (site, info) in sites_info.iter() {
+                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+
                         if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
                             continue
                         };
@@ -571,11 +580,11 @@ pub(crate) async fn sites_task(
                         online_status_channels.insert(site.to_string(), tx);
                         online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
                     }
-                    tokio::spawn(async move {
+                    online_status_task = Some(tokio::spawn(async move {
                         debug!(target: "OnlineStatus", "online status task starts");
                         futures::future::join_all(online_status_workers).await;
                         debug!(target: "OnlineStatus", "online status task finish");
-                    });
+                    }));
                     *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
                     periodic_sync_tx
@@ -664,6 +673,19 @@ pub(crate) async fn sites_task(
             complete => break,
         }
     }
+    drop(periodic_sync_tx);
+    log::debug!("waiting for periodic sync task to finish");
+    if let Err(err) = periodic_sync_task.await {
+        log::error!("Failed to join periodic_sync_task: {err}")
+    }
+
+    if let Some(online_status_task) = online_status_task {
+        online_status_channels.clear();
+        if let Err(err) = online_status_task.await {
+            log::error!("Failed to join online_status_task: {err}")
+        };
+    }
+
     log::debug!("sites task finished");
 }
 

@@ -724,6 +724,8 @@ pub(crate) async fn sync_task(
                         app_state.sync_info.append(site, message).await,
                 }
             }
+
+            log::debug!("sync logger task finished");
         }
     });
 
@@ -751,6 +753,7 @@ pub(crate) async fn sync_task(
                     .read()
                     .await
                     .clone();
+                let mut sites_to_trim = Vec::new();
                 for (site_path, site_info) in sites_info.iter() {
                     let sub_hp = sub_hps
                         .get(&site_info.sub_hp)
@@ -760,6 +763,12 @@ pub(crate) async fn sync_task(
                         .acquire_owned()
                         .await
                         .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
+
+                    if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    sites_to_trim.push(site_path);
+
                     let client_cmd_tx = client_cmd_tx.clone();
                     let site_path = site_path.clone();
                     let app_state = app_state.clone();
@@ -818,12 +827,12 @@ pub(crate) async fn sync_task(
                 }
                 futures::future::join_all(sync_tasks).await;
                 log::info!("Sync logs done in {} s", sync_start.elapsed().as_secs());
-                sites_info
-                    .keys()
+                sites_to_trim
+                    .into_iter()
                     .for_each(|site|
                         app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
                         .unwrap_or_else(|e|
-                            panic!("Cannot send dirtylog Trim command for site {site}: {e}")
+                            log::error!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
                 match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
@@ -907,7 +916,12 @@ pub(crate) async fn sync_task(
             }
         }
     }
-    logger_task.abort();
+
+    log::debug!("waiting for sync logger task to finish");
+    drop(logger_tx);
+    if let Err(err) = logger_task.await {
+        log::error!("Failed to join logger_task: {err}")
+    }
 }
 
 #[cfg(test)]
