@@ -103,7 +103,6 @@ impl<T: Eq + Hash + Clone> DedupSender<T> {
             })
     }
 
-    #[cfg(test)]
     pub(crate) fn close_channel(&self) {
         self.sender.close_channel();
     }
@@ -431,6 +430,7 @@ pub mod testing {
             alarms: Default::default(),
             state_alarms: Default::default(),
             online_states: Default::default(),
+            app_closing: false.into(),
         });
 
 

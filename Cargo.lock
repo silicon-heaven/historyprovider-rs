@@ -763,7 +763,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "2.6.13"
+version = "2.6.14"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1472,9 +1472,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.23.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "930cec2827cd0a21d1a16cc08fca1a7fc4ef348d870b83626d7d93d6e1ef8cdc"
+checksum = "8ce896bcf00748d6be3b147b5be0e5266e80bb326c3a550770c80d30ce4e5dc9"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1527,6 +1527,16 @@ dependencies = [
  "sha1",
  "shvproto",
  "url",
+]
+
+[[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
 ]
 
 [[package]]
@@ -1724,6 +1734,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

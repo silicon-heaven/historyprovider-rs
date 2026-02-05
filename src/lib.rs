@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use log::info;
 use serde::Deserialize;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 
 use crate::alarm::Alarm;
@@ -96,6 +99,7 @@ struct State {
     config: HpConfig,
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
+    app_closing: AtomicBool,
 }
 
 pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
@@ -116,7 +120,17 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         config: hp_config.clone(),
         sync_cmd_tx,
         dirtylog_cmd_tx,
+        app_closing: AtomicBool::new(false),
     });
+
+    #[derive(Default)]
+    struct AppTasks {
+        sites_task: Option<Pin<Box<dyn Future<Output = ()>>>>,
+        sync_task: Option<Pin<Box<dyn Future<Output = ()>>>>,
+        dirtylog_task: Option<Pin<Box<dyn Future<Output = ()>>>>,
+    }
+
+    let mut tasks: AppTasks = Default::default();
 
     shvclient::Client::new()
         .mount_dynamic("", {
@@ -125,9 +139,48 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
                 tree::request_handler(rq, cmd_sender, app_state.clone())
         })
         .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
-            tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()));
-            tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx));
-            tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state, dirtylog_cmd_rx));
+            let wrap_task = |handle| Box::pin(async move {
+                if let Err(task_result) = handle.await {
+                    log::error!("Failed to join task: {task_result}");
+                }
+            });
+            let app_state = app_state.clone();
+            let handle_signal = |signal_kind| {
+                let app_state = app_state.clone();
+                let client_cmd_tx2 = client_cmd_tx.clone();
+                match signal(signal_kind) {
+                    Ok(mut stream) => {
+                        tokio::spawn(async move {
+                            stream.recv().await;
+                            // Relaxed is enough - we are not protecting any data by this atomic variable.
+                            app_state.app_closing.store(true, std::sync::atomic::Ordering::Relaxed);
+                            client_cmd_tx2.terminate_client();
+                        });
+                    },
+                    Err(err) => log::error!("Failed to install signal handler: {err}"),
+                }
+            };
+
+            handle_signal(SignalKind::interrupt());
+            handle_signal(SignalKind::terminate());
+
+            tasks.sites_task = Some(wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()))));
+            tasks.sync_task = Some(wrap_task(tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx))));
+            tasks.dirtylog_task = Some(wrap_task(tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state.clone(), dirtylog_cmd_rx))));
         })
-        .await
+        .await?;
+
+    if let Some(task) = tasks.sites_task.take() {
+        task.await;
+    }
+    app_state.sync_cmd_tx.close_channel();
+    if let Some(task) = tasks.sync_task.take() {
+        task.await;
+    }
+    app_state.dirtylog_cmd_tx.close_channel();
+    if let Some(task) = tasks.dirtylog_task.take() {
+        task.await;
+    }
+
+    Ok(())
 }
