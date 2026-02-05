@@ -1472,9 +1472,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ce896bcf00748d6be3b147b5be0e5266e80bb326c3a550770c80d30ce4e5dc9"
+version = "0.26.0"
 dependencies = [
  "async-broadcast",
  "async-trait",
