@@ -11,12 +11,12 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "3.6.27"
+shvproto = "6.0.1"
 shvrpc = { version = "10.0", features = ["journal"] }
-shvclient = { version = "0.25", features = ["tokio"] }
+shvclient = { version = "0.26", features = ["tokio"] }
 futures = "0.3.31"
 log = "0.4.29"
-clap = { version = "4.5.56", features = ["derive"] }
+clap = { version = "4.5.57", features = ["derive"] }
 # simple_logger = { version = "5.0.0", features = ["stderr"] }
 simple_logger = { version = "5.1.0" }
 url = "2.5.8"
@@ -24,11 +24,11 @@ duration-str = "0.19"
 sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.18", features = ["io"] }
-async-compression = { version = "0.4.37", features = ["gzip", "tokio"] }
+async-compression = { version = "0.4.39", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.18", features = ["fs"] }
-time = { version = "0.3.46", features = ["formatting"] }
+time = { version = "0.3.47", features = ["formatting"] }
 chrono = "0.4.43"
 humantime = "2.3.0"
 
@@ -41,5 +41,5 @@ humantime = "2.3.0"
 [dev-dependencies]
 async-broadcast = "0.7.2"
 async-trait = "0.1.80"
-shvclient = { version = "0.25", features = ["mocking", "tokio"] }
+shvclient = { version = "0.26", features = ["mocking", "tokio"] }
 tempfile = "3.24.0"
