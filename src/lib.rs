@@ -3,9 +3,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use futures::channel::mpsc::{unbounded, UnboundedSender};
+use futures::channel::mpsc::{UnboundedSender, unbounded};
 use log::info;
 use serde::Deserialize;
+use shvclient::client::Full;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
 use tokio::signal::unix::{SignalKind, signal};
@@ -29,6 +30,8 @@ mod dirtylog;
 mod util;
 pub mod typeinfo;
 pub mod alarm;
+
+pub use crate::util::init_logger;
 
 const fn max_sync_tasks_default() -> usize { 8 }
 const fn max_journal_dir_size_default() -> usize { 30 * 1_000_000_000 } // 30 GB
@@ -89,7 +92,7 @@ impl From<AlarmWithTimestamp> for RpcValue {
     }
 }
 
-struct State {
+pub struct State {
     start_time: std::time::Instant,
     sites_data: RwLock<sites::SitesData>,
     sync_info: sync::SyncInfo,
@@ -102,7 +105,32 @@ struct State {
     app_closing: AtomicBool,
 }
 
-pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
+#[derive(Default)]
+pub struct AppTasks {
+    sites_task: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    sync_task: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    dirtylog_task: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+}
+
+impl AppTasks {
+    pub async fn wait_until_finished(self, app_state: &State) {
+        if let Some(task) = self.sites_task {
+            task.await;
+        }
+        app_state.sync_cmd_tx.close_channel();
+        if let Some(task) = self.sync_task {
+            task.await;
+        }
+        app_state.dirtylog_cmd_tx.close_channel();
+        if let Some(task) = self.dirtylog_task {
+            task.await;
+        }
+
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result<(Arc<State>, shvclient::Client<Full>, impl FnOnce(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver))> {
     info!("Setting up journal dir: {}", &hp_config.journal_dir);
     std::fs::create_dir_all(&hp_config.journal_dir)?;
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
@@ -123,38 +151,31 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
         app_closing: AtomicBool::new(false),
     });
 
-    #[derive(Default)]
-    struct AppTasks {
-        sites_task: Option<Pin<Box<dyn Future<Output = ()>>>>,
-        sync_task: Option<Pin<Box<dyn Future<Output = ()>>>>,
-        dirtylog_task: Option<Pin<Box<dyn Future<Output = ()>>>>,
-    }
-
-    let mut tasks: AppTasks = Default::default();
-
-    shvclient::Client::new()
+    let client = shvclient::Client::new()
         .mount_dynamic("", {
             let app_state = app_state.clone();
             move |rq, cmd_sender|
                 tree::request_handler(rq, cmd_sender, app_state.clone())
-        })
-        .run_with_init(client_config, |client_cmd_tx, client_evt_rx| {
+        });
+
+    let init_function = {
+        let app_state = app_state.clone();
+        move |client_cmd_tx: shvclient::ClientCommandSender, client_evt_rx: shvclient::ClientEventsReceiver| {
             let wrap_task = |handle| Box::pin(async move {
                 if let Err(task_result) = handle.await {
                     log::error!("Failed to join task: {task_result}");
                 }
             });
-            let app_state = app_state.clone();
             let handle_signal = |signal_kind| {
                 let app_state = app_state.clone();
-                let client_cmd_tx2 = client_cmd_tx.clone();
+                let client_cmd_tx = client_cmd_tx.clone();
                 match signal(signal_kind) {
                     Ok(mut stream) => {
                         tokio::spawn(async move {
                             stream.recv().await;
                             // Relaxed is enough - we are not protecting any data by this atomic variable.
                             app_state.app_closing.store(true, std::sync::atomic::Ordering::Relaxed);
-                            client_cmd_tx2.terminate_client();
+                            client_cmd_tx.terminate_client();
                         });
                     },
                     Err(err) => log::error!("Failed to install signal handler: {err}"),
@@ -167,20 +188,18 @@ pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::
             tasks.sites_task = Some(wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()))));
             tasks.sync_task = Some(wrap_task(tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx))));
             tasks.dirtylog_task = Some(wrap_task(tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state.clone(), dirtylog_cmd_rx))));
-        })
+        }
+    };
+
+    Ok((app_state, client, init_function))
+}
+
+pub async fn run(hp_config: &HpConfig, client_config: &ClientConfig) -> shvrpc::Result<()> {
+    let mut tasks = AppTasks::default();
+    let (app_state, client, init_function) = make_client(hp_config,  &mut tasks)?;
+    client
+        .run_with_init(client_config, init_function)
         .await?;
-
-    if let Some(task) = tasks.sites_task.take() {
-        task.await;
-    }
-    app_state.sync_cmd_tx.close_channel();
-    if let Some(task) = tasks.sync_task.take() {
-        task.await;
-    }
-    app_state.dirtylog_cmd_tx.close_channel();
-    if let Some(task) = tasks.dirtylog_task.take() {
-        task.await;
-    }
-
+    tasks.wait_until_finished(app_state.as_ref()).await;
     Ok(())
 }

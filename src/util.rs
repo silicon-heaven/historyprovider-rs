@@ -13,13 +13,10 @@ use shvrpc::rpc::ShvRI;
 use tokio::fs::DirEntry;
 use tokio_stream::wrappers::ReadDirStream;
 
-#[cfg(test)]
 use std::sync::Once;
-#[cfg(test)]
 use simple_logger::SimpleLogger;
 
-#[cfg(test)]
-pub(crate) fn init_logger() {
+pub fn init_logger() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         SimpleLogger::new()
