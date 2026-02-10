@@ -38,19 +38,19 @@ struct Opts {
 
     // HP specific options
     //
-    /// Path to journal directory
+    /// Path to journal directory, default: /tmp/hp-rs/shvjournal
     #[arg(long)]
     journal_dir: Option<String>,
-    /// Maximum number of parallel sync tasks
+    /// Maximum number of parallel sync tasks, default: 8
     #[arg(long)]
     max_sync_tasks: Option<usize>,
-    /// Maximum size of journal directory in bytes
+    /// Maximum size of journal directory in bytes, default: 30 GB
     #[arg(long)]
     max_journal_dir_size: Option<usize>,
-    /// Periodic sync interval in seconds
+    /// Periodic sync interval in seconds, default: 1 hour
     #[arg(long)]
     periodic_sync_interval: Option<u64>,
-    /// Number of days to keep history data
+    /// Number of days to keep history data, default: 0
     #[arg(long)]
     days_to_keep: Option<i64>,
 }
