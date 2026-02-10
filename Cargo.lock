@@ -104,9 +104,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.37"
+version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d10e4f991a553474232bc0a31799f6d24b034a84c0971d80d2e2f78b2e576e40"
+checksum = "68650b7df54f0293fd061972a0fb05aaf4fc0879d3b3d21a638a182c5c543b9f"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -237,9 +237,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.56"
+version = "4.5.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75ca66430e33a14957acc24c5077b503e7d374151b2b4b3a10c83b4ceb4be0e"
+checksum = "6899ea499e3fb9305a65d5ebf6e3d2248c5fab291f300ad0a704fbe142eae31a"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.56"
+version = "4.5.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "793207c7fa6300a0608d1080b858e5fdbe713cdc1c8db9fb17777d8a13e63df0"
+checksum = "7b12c8b680195a62a8364d16b8447b01b6c2c8f9aaf68bee653be34d4245e238"
 dependencies = [
  "anstream",
  "anstyle",
@@ -560,6 +560,12 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
 ]
+
+[[package]]
+name = "fn_name"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528a0eb35b41b895aef1afed5ab28659084118e730edc72f033e76fb71666dbb"
 
 [[package]]
 name = "form_urlencoded"
@@ -1472,9 +1478,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "0.25.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ce896bcf00748d6be3b147b5be0e5266e80bb326c3a550770c80d30ce4e5dc9"
+checksum = "58c9d088b2b70f10bd68ae0921dd7dd93a6212fcf6f1ac59812dbc630b5001e0"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1495,12 +1501,13 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "3.6.28"
+version = "6.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d61f512657d31bd316132c93bbab4c99fe87f3743dc21848bbe1e87d8cfada2c"
+checksum = "4266e60864f8aee34eecdb2ff54b6007e3d2a38c70d237c3489c9877a259df60"
 dependencies = [
  "chrono",
  "clap",
+ "fn_name",
  "hex",
  "libshvproto-macros",
  "log",
@@ -1508,9 +1515,9 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "10.0.0"
+version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "206ca7a53c912c9fde6502f7d34d1338909d686bd69b02c0425ccc894ad62ca9"
+checksum = "ed610a07fe8c869230e4e258b8a9fa2546a6589670a2569f3df7580683236361"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1621,9 +1628,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.24.0"
+version = "3.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "655da9c7eb6305c55742045d5a8d2037996d61d8de95806335c7c86ce0f82e9c"
+checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
  "getrandom 0.3.4",
@@ -1674,9 +1681,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.46"
+version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9da98b7d9b7dad93488a84b8248efc35352b0b2657397d4167e7ad67e5d535e5"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa",
@@ -1697,9 +1704,9 @@ checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "time-macros"
-version = "0.2.26"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78cc610bac2dcee56805c99642447d4c5dbde4d01f752ffea0199aee1f601dc4"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
