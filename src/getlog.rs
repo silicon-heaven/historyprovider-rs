@@ -232,7 +232,7 @@ pub(crate) async fn getlog_impl(
         record_count_limit_hit: false,
         last_entry: None,
         first_unmatched_entry_msec: None,
-        until_ms: params.until.as_ref().map_or(i64::MAX, shvproto::DateTime::epoch_msec),
+        until_ms: params.until.map_or(i64::MAX, shvproto::DateTime::epoch_msec),
     };
 
     'outer: for mut reader in journal_readers {
