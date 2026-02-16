@@ -535,37 +535,58 @@ pub(crate) async fn sites_task(
 
                     log::info!("Loading initial alarm tables");
 
-                    let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
-                    let mut state_alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
-                    for site_path in sites_info.keys() {
-                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
-                        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
-                            // No typeinfo for this site - skip
-                            continue;
-                        };
+                    let semaphore = Arc::new(tokio::sync::Semaphore::new(8));
 
-                        let log = match getlog_handler(site_path, &params, app_state.clone()).await {
-                            Ok(log) => log,
-                            Err(err) => {
-                                log::error!("couldn't init alarms: getlog failed: {err}");
-                                continue;
+                    let (alarms, state_alarms) = sites_info
+                        .keys()
+                        .map(|site_path| async {
+                            if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                                return None;
                             }
-                        };
 
-                        let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
-                        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
-                            let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
+                            let permit = semaphore
+                                .clone()
+                                .acquire_owned()
+                                .await
+                                .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
 
-                            for entry in chained_entries.clone()  {
-                                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
-                            }
-                        };
+                            let Some(Ok(type_info)) = typeinfos.get(site_path) else {
+                                // No typeinfo for this site - skip
+                                return None;
+                            };
 
-                        impl_update_alarms(&mut alarms, collect_alarms);
-                        impl_update_alarms(&mut state_alarms, collect_state_alarms);
-                    }
+                            let log = match getlog_handler(site_path, &params, app_state.clone()).await {
+                                Ok(log) => log,
+                                Err(err) => {
+                                    log::error!("couldn't init alarms: getlog failed: {err}");
+                                    return None;
+                                }
+                            };
+
+                            drop(permit);
+
+                            let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
+                            let impl_update_alarms = |alarm_collector| {
+                                let mut alarms_for_site = Vec::new();
+
+                                for entry in chained_entries.clone()  {
+                                    update_alarms(alarm_collector, &mut alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+                                }
+                                alarms_for_site
+                            };
+
+                            Some((site_path.clone(), impl_update_alarms(collect_alarms), impl_update_alarms(collect_state_alarms)))
+                        })
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<Vec<_>>()
+                        .await
+                        .into_iter()
+                        .flatten()
+                        .fold((BTreeMap::default(), BTreeMap::default()), |(mut alarms_table, mut state_alarms_table), (site_path, alarms, state_alarms)| {
+                            alarms_table.insert(site_path.clone(), alarms);
+                            state_alarms_table.insert(site_path, state_alarms);
+                            (alarms_table, state_alarms_table)
+                        });
 
                     *app_state.alarms.write().await = alarms;
                     *app_state.state_alarms.write().await = state_alarms;
