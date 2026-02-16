@@ -532,6 +532,9 @@ pub(crate) async fn sites_task(
                         with_snapshot: true,
                         ..Default::default()
                     };
+
+                    log::info!("Loading initial alarm tables");
+
                     let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
                     let mut state_alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
                     for site_path in sites_info.keys() {
@@ -566,6 +569,8 @@ pub(crate) async fn sites_task(
 
                     *app_state.alarms.write().await = alarms;
                     *app_state.state_alarms.write().await = state_alarms;
+
+                    log::info!("Initial alarm tables loaded");
 
                     let mut online_status_workers = Vec::new();
                     for (site, info) in sites_info.iter() {
