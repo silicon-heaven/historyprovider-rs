@@ -11,13 +11,13 @@ use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
 use shvrpc::rpcmessage::RpcError;
+use shvrpc::typeinfo::TypeInfo;
 use shvrpc::util::find_longest_path_prefix;
 use shvrpc::{join_path, RpcMessageMetaTags};
 use tokio::time::timeout;
 
 use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
 use crate::getlog::getlog_handler;
-use crate::typeinfo::TypeInfo;
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, State};
 
