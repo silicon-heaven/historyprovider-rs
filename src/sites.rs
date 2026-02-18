@@ -527,6 +527,26 @@ pub(crate) async fn sites_task(
                         typeinfos: typeinfos.clone()
                     };
 
+                    let mut online_status_workers = Vec::new();
+                    for (site, info) in sites_info.iter() {
+                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+
+                        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
+                            continue
+                        };
+                        let (tx, rx) = futures::channel::mpsc::unbounded();
+                        online_status_channels.insert(site.to_string(), tx);
+                        online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
+                    }
+                    online_status_task = Some(tokio::spawn(async move {
+                        debug!(target: "OnlineStatus", "online status task starts");
+                        futures::future::join_all(online_status_workers).await;
+                        debug!(target: "OnlineStatus", "online status task finish");
+                    }));
+                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+
                     let params = shvrpc::journalrw::GetLog2Params {
                         since: shvrpc::journalrw::GetLog2Since::LastEntry,
                         with_snapshot: true,
@@ -566,26 +586,6 @@ pub(crate) async fn sites_task(
 
                     *app_state.alarms.write().await = alarms;
                     *app_state.state_alarms.write().await = state_alarms;
-
-                    let mut online_status_workers = Vec::new();
-                    for (site, info) in sites_info.iter() {
-                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
-
-                        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
-                            continue
-                        };
-                        let (tx, rx) = futures::channel::mpsc::unbounded();
-                        online_status_channels.insert(site.to_string(), tx);
-                        online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
-                    }
-                    online_status_task = Some(tokio::spawn(async move {
-                        debug!(target: "OnlineStatus", "online status task starts");
-                        futures::future::join_all(online_status_workers).await;
-                        debug!(target: "OnlineStatus", "online status task finish");
-                    }));
-                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
