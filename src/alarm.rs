@@ -1,6 +1,6 @@
 use shvproto::{Map as RpcMap, RpcValue};
 
-use crate::typeinfo::{FieldDescriptionMethods, PathInfo, Type, TypeDescriptionMethods, TypeInfo};
+use shvrpc::typeinfo::{FieldDescriptionMethods, PathInfo, Type, TypeDescriptionMethods, TypeInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Alarm {
@@ -260,7 +260,7 @@ mod tests {
     use shvproto::RpcValue;
 
     use crate::alarm::{collect_alarms, Severity};
-    use crate::typeinfo::TypeInfo;
+    use shvrpc::typeinfo::TypeInfo;
 
     const TYPE_INFO: &str = r#"
 <"version":4>{

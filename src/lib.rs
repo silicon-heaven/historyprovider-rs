@@ -28,7 +28,6 @@ mod cleanup;
 mod dirtylog;
 // mod datachange;
 mod util;
-pub mod typeinfo;
 pub mod alarm;
 
 pub use crate::util::init_logger;

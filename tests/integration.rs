@@ -21,7 +21,7 @@ pub async fn mock_run(hp_config: &HpConfig, conn_evt_rx: futures::channel::mpsc:
 }
 
 async fn request(conn_evt_tx: &mut UnboundedSender<ConnectionEvent>, path: &str, method: &str, param: RpcValue) {
-    conn_evt_tx.unbounded_send(ConnectionEvent::RpcFrameReceived(RpcMessage::new_request(path, method, Some(param)).to_frame().unwrap())).unwrap();
+    conn_evt_tx.unbounded_send(ConnectionEvent::RpcFrameReceived(RpcMessage::new_request(path, method).with_param(param).to_frame().unwrap())).unwrap();
 }
 
 struct PendingRequest(RpcMessage);
