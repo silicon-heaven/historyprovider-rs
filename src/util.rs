@@ -252,7 +252,7 @@ pub mod testing {
             ClientCommand::Subscribe { ri, notifications_tx, .. } => {
                 debug!(target: "test-driver", "subscription: {ri}");
                 assert_eq!(&ri, expected_ri);
-                let subscribe_response = RpcMessage::new_request("dummy", "dummy", None).prepare_response().unwrap().to_frame().unwrap();
+                let subscribe_response = RpcMessage::new_request("dummy", "dummy").prepare_response().unwrap().to_frame().unwrap();
                 notifications_tx.unbounded_send(subscribe_response).unwrap();
                 notifications_tx
             },
@@ -348,7 +348,7 @@ pub mod testing {
             let method = self.2.as_str();
             let param = self.3.clone();
             debug!(target: "test-driver", "==> {shv_path}:{method}, param: {param}");
-            sender.unbounded_send(RpcMessage::new_signal(shv_path, method, Some(param)).to_frame().unwrap()).unwrap();
+            sender.unbounded_send(RpcMessage::new_signal(shv_path, method).with_param(param).to_frame().unwrap()).unwrap();
         }
     }
 

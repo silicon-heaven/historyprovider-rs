@@ -217,7 +217,7 @@ async fn set_online_status(
     *online_status = new_status;
 
     client_commands
-        .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng", Some((new_status as i32).into())))
+        .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng").with_param(new_status as i32))
         .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
 
     const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
@@ -257,7 +257,7 @@ async fn set_online_status(
 
     if emit_alarmmod {
         client_commands
-            .send_message(shvrpc::RpcMessage::new_signal(site, "alarmmod", None))
+            .send_message(shvrpc::RpcMessage::new_signal(site, "alarmmod"))
             .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'alarmmod' signal: {err}"));
     }
 }
@@ -662,7 +662,7 @@ pub(crate) async fn sites_task(
 
                     let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
                     if !updated.is_empty() {
-                        client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name, None))
+                        client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name))
                             .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                     }
                 };
@@ -708,10 +708,10 @@ mod tests {
             ("foo/site1".to_string(), dummy_siteinfo()),
             ("foo/site2".to_string(), dummy_siteinfo()),
         ]);
-        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("something/site1/some_value_node", "chng", Some(20.into())), &sites_info), None);
-        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/bar/site1/some_value_node", "chng", Some(20.into())), &sites_info), None);
+        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("something/site1/some_value_node", "chng").with_param(20), &sites_info), None);
+        assert_eq!(super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/bar/site1/some_value_node", "chng").with_param(20), &sites_info), None);
         assert_eq!(
-            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site1/xyz/node", "chng", Some(20.into())), &sites_info),
+            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site1/xyz/node", "chng").with_param(20), &sites_info),
             Some(super::ParsedNotification {
                 site_path: "foo/site1".into(),
                 property_path: "xyz/node".into(),
@@ -720,7 +720,7 @@ mod tests {
             })
         );
         assert_eq!(
-            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site2/none", "chng", None), &sites_info),
+            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site2/none", "chng"), &sites_info),
             Some(super::ParsedNotification {
                 site_path: "foo/site2".into(),
                 property_path: "none".into(),
