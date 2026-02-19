@@ -34,7 +34,7 @@ pub mod alarm;
 pub use crate::util::init_logger;
 
 const fn max_sync_tasks_default() -> usize { 8 }
-fn max_journal_dir_size_default() -> Size { Size::from_gibibytes(30)  }
+const fn max_journal_dir_size_default() -> Size { Size::from_const(30 * size::GiB)  }
 const fn periodic_sync_interval_default() -> u64 { 60 * 60 } // 1 hour
 
 fn journal_dir_default() -> String {
