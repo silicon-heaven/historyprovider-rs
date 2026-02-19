@@ -46,7 +46,7 @@ struct Opts {
     max_sync_tasks: Option<usize>,
     /// Maximum size of journal directory in bytes, default: 30 GB
     #[arg(long)]
-    max_journal_dir_size: Option<usize>,
+    max_journal_dir_size: Option<size::Size>,
     /// Periodic sync interval in seconds, default: 1 hour
     #[arg(long)]
     periodic_sync_interval: Option<u64>,

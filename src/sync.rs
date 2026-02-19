@@ -731,7 +731,7 @@ pub(crate) async fn sync_task(
 
     // The download size limit should be lower than the max_journal_dir_size, because it doesn't
     // count in the files synced by getLog.
-    let max_journal_dir_size = app_state.config.max_journal_dir_size as u64;
+    let max_journal_dir_size = app_state.config.max_journal_dir_size.bytes().cast_unsigned();
     let days_to_keep = app_state.config.days_to_keep;
 
     while let Some(cmd) = sync_cmd_rx.next().await {

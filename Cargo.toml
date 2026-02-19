@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.6.18"
+version = "2.7.0"
 edition = "2024"
 
 [[bin]]
@@ -31,6 +31,7 @@ tokio-stream = { version = "0.1.18", features = ["fs"] }
 time = { version = "0.3.47", features = ["formatting"] }
 chrono = "0.4.43"
 humantime = "2.3.0"
+size = { version = "0.5.0", features = ["serde"] }
 
 # [patch.crates-io]
 # shvrpc = { path = "../libshvrpc-rs" }
