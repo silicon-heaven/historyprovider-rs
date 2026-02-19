@@ -9,6 +9,7 @@ use serde::Deserialize;
 use shvclient::client::Full;
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
+use size::Size;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 
@@ -33,7 +34,7 @@ pub mod alarm;
 pub use crate::util::init_logger;
 
 const fn max_sync_tasks_default() -> usize { 8 }
-const fn max_journal_dir_size_default() -> usize { 30 * 1_000_000_000 } // 30 GB
+fn max_journal_dir_size_default() -> Size { Size::from_gibibytes(30)  }
 const fn periodic_sync_interval_default() -> u64 { 60 * 60 } // 1 hour
 
 fn journal_dir_default() -> String {
@@ -47,7 +48,7 @@ pub struct HpConfig {
     #[serde(default = "max_sync_tasks_default")]
     pub max_sync_tasks: usize,
     #[serde(default = "max_journal_dir_size_default")]
-    pub max_journal_dir_size: usize,
+    pub max_journal_dir_size: Size,
     #[serde(default = "periodic_sync_interval_default")]
     pub periodic_sync_interval: u64,
     #[serde(default)]
@@ -130,6 +131,7 @@ impl AppTasks {
 
 #[allow(clippy::type_complexity)]
 pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result<(Arc<State>, shvclient::Client<Full>, impl FnOnce(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver))> {
+    info!("Max journal dir size: {}", &hp_config.max_journal_dir_size);
     info!("Setting up journal dir: {}", &hp_config.journal_dir);
     std::fs::create_dir_all(&hp_config.journal_dir)?;
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
