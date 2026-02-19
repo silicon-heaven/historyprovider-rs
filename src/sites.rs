@@ -438,14 +438,14 @@ pub(crate) async fn sites_task(
                         }
                     };
 
-                    log::info!("Loaded sites:\n{}", sites_info
+                    log::debug!("Loaded sites:\n{}", sites_info
                         .iter()
                         .map(|(path, site)| format!(" {path}: {site:?}"))
                         .collect::<Vec<_>>()
                         .join("\n")
                     );
 
-                    log::info!("Loaded sub HPs:\n{}", sub_hps
+                    log::debug!("Loaded sub HPs:\n{}", sub_hps
                         .iter()
                         .map(|(path, hp)| format!(" {path}: {hp:?}"))
                         .collect::<Vec<_>>()
