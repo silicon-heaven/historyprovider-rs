@@ -85,16 +85,3 @@ jobs:
             If you find any bugs, please report them to the repository's issue tracker.
           files: |
             ${{github.workspace}}/install/bin/historyprovider*${{ steps.get-version.outputs.version }}*
-
-  upload-crates-io:
-    name: Publish crates on crates.io
-    if: github.ref == 'refs/heads/main'
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - run: |
-          cargo login <<< "${{secrets.CRATES_IO_TOKEN}}"
-          cargo publish
