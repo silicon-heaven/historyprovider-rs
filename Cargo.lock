@@ -497,6 +497,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "duration-str"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "027cd1402a609c71a9ac333c7e3d90ee042e7a131da1a83da8c60df323f12f61"
+dependencies = [
+ "chrono",
+ "rust_decimal",
+ "serde",
+ "thiserror 2.0.18",
+ "time",
+ "winnow",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,7 +789,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
- "duration-str",
+ "duration-str 0.21.0",
  "futures",
  "hex",
  "humantime",
@@ -1472,13 +1486,13 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc0d0bb55a1e0d45a1475234ade5a676d55bd459a3e491b2ba0844b96a98c0c6"
+checksum = "7cdb06676de3d80a6d8c7c0fa36dca00ea70882be05f1c4e1ff93df263e2564c"
 dependencies = [
  "async-broadcast",
  "async-trait",
- "duration-str",
+ "duration-str 0.20.0",
  "futures",
  "futures-rustls",
  "futures-time",
@@ -1495,9 +1509,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.1.0"
+version = "6.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae6d9c936884a6f7065804c2ac9e41d658ee32bcdf7ca5a93ab1973aed002f67"
+checksum = "c08d5cd288caec2b4b5de89920612c788f2fb505f85eda53b38ba1b29ad635a9"
 dependencies = [
  "chrono",
  "clap",
@@ -1509,15 +1523,15 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "14.0.0"
+version = "14.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e71c18df92913f418c836cad1f7d6ab6a38575a12ca160e627c9d7f012fa36f7"
+checksum = "eb9fc505a0c982ec6c736a3b31e295620f79a41ad909148d2b8b4d6b307ca731"
 dependencies = [
  "anyhow",
  "async-trait",
  "bitflags",
  "crc",
- "duration-str",
+ "duration-str 0.20.0",
  "futures",
  "futures-time",
  "glob",
@@ -1736,9 +1750,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.49.0"
+version = "1.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86"
+checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
 dependencies = [
  "bytes",
  "libc",
