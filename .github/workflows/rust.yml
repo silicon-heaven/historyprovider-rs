@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Generate coverage
-        uses: syyyr/rust-pycobertura-action@v4.0.1
+        uses: syyyr/rust-pycobertura-action@v4.1.0
         with:
           project_name: historyprovider-rs
 
