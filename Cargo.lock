@@ -484,9 +484,9 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "duration-str"
-version = "0.20.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae065b0fbd186e5014e14be5f9411e4cb4a2ec14168e8a34e38183a3d1c07544"
+checksum = "027cd1402a609c71a9ac333c7e3d90ee042e7a131da1a83da8c60df323f12f61"
 dependencies = [
  "chrono",
  "rust_decimal",
@@ -768,7 +768,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "2.7.5"
+version = "2.7.6"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1472,9 +1472,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "3.0.0"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc0d0bb55a1e0d45a1475234ade5a676d55bd459a3e491b2ba0844b96a98c0c6"
+checksum = "275b3be1dd417a5ed4bfc5538e6e1f7f7f2d5353e52900432d5b6a99268fc00c"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1495,9 +1495,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.1.0"
+version = "6.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae6d9c936884a6f7065804c2ac9e41d658ee32bcdf7ca5a93ab1973aed002f67"
+checksum = "c08d5cd288caec2b4b5de89920612c788f2fb505f85eda53b38ba1b29ad635a9"
 dependencies = [
  "chrono",
  "clap",
@@ -1509,9 +1509,9 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "14.0.0"
+version = "14.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e71c18df92913f418c836cad1f7d6ab6a38575a12ca160e627c9d7f012fa36f7"
+checksum = "1f53511b257ad5809eb71fea5af256bc42302086e6c2b343b3f9e8eb03a7ebd5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1631,9 +1631,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.26.0"
+version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82a72c767771b47409d2345987fda8628641887d5466101319899796367354a0"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
  "getrandom 0.3.4",
@@ -1736,9 +1736,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.49.0"
+version = "1.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86"
+checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
 dependencies = [
  "bytes",
  "libc",
