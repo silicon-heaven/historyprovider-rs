@@ -390,50 +390,54 @@ pub(crate) async fn sites_task(
 
     let mut online_status_task = None;
 
-    loop {
+    'main_loop: loop {
         futures::select! {
             client_event = client_evt_rx.select_next_some() => match client_event {
                 shvclient::ClientEvent::Connected(shv_api_version) => {
                     log::info!("Getting sites info");
 
-                    let sites: Result<shvproto::Map, _> = RpcCall::new("sites", "getSites")
-                        .exec(&client_cmd_tx)
-                        .await;
+                    let (sites_info, sub_hps) = 'sites_get_loop: loop {
+                        let sites: Result<shvproto::Map, _> = RpcCall::new("sites", "getSites")
+                            .exec(&client_cmd_tx)
+                            .await;
 
-                    let (sites_info, sub_hps) = match sites {
-                        Ok(sites) => {
-                            if sites
-                                .get("_meta")
-                                .map(RpcValue::as_map)
-                                .and_then(|map| map.get("HP3"))
-                                .map(RpcValue::as_map)
-                                .and_then(|map| map.get("type"))
-                                .map(RpcValue::as_str)
-                                .is_none_or(|type_str| type_str != "HP3")
-                            {
-                                eprintln!("This site's _meta does NOT include an HP3 node. Refusing to continue. Add an HP3 node to the site's _meta, otherwise this HP instance will not be visible to parent HPs.");
-                                std::process::abort();
-                            }
-                            let sub_hps = collect_sub_hps(&[], &sites);
-                            let mut sites_info = collect_sites(&[], &sites);
-                            for (path, site_info) in &mut sites_info {
-                                if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
-                                    site_info.sub_hp = prefix.into();
-                                } else {
-                                    log::error!("Cannot find sub HP for site {path}");
-                                    site_info.sub_hp = path.clone();
+                        match sites {
+                            Ok(sites) => {
+                                if sites
+                                    .get("_meta")
+                                        .map(RpcValue::as_map)
+                                        .and_then(|map| map.get("HP3"))
+                                        .map(RpcValue::as_map)
+                                        .and_then(|map| map.get("type"))
+                                        .map(RpcValue::as_str)
+                                        .is_none_or(|type_str| type_str != "HP3")
+                                {
+                                    eprintln!("This site's _meta does NOT include an HP3 node. Refusing to continue. Add an HP3 node to the site's _meta, otherwise this HP instance will not be visible to parent HPs.");
+                                    std::process::abort();
                                 }
+                                let sub_hps = collect_sub_hps(&[], &sites);
+                                let mut sites_info = collect_sites(&[], &sites);
+                                for (path, site_info) in &mut sites_info {
+                                    if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
+                                        site_info.sub_hp = prefix.into();
+                                    } else {
+                                        log::error!("Cannot find sub HP for site {path}");
+                                        site_info.sub_hp = path.clone();
+                                    }
+                                }
+                                break 'sites_get_loop (Arc::new(sites_info), Arc::new(sub_hps));
                             }
-                            (Arc::new(sites_info), Arc::new(sub_hps))
-                        }
-                        Err(err) => match err.error() {
-                            CallRpcMethodErrorKind::ConnectionClosed => {
-                                log::warn!("Connection closed while getting sites info");
-                                continue
-                            }
-                            _ => {
-                                log::error!("Get sites info error: {err}");
-                                Default::default()
+                            Err(err) => {
+                                match err.error() {
+                                    CallRpcMethodErrorKind::ConnectionClosed => {
+                                        log::warn!("Connection closed while getting sites info");
+                                        continue 'main_loop;
+                                    }
+                                    _ => {
+                                        log::error!("Get sites info error: {err}");
+                                    }
+                                }
+                                tokio::time::sleep(Duration::from_secs(1)).await;
                             }
                         }
                     };
