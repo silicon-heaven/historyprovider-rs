@@ -366,7 +366,7 @@ mod tests {
             access_level: 32,
             source: "".to_string(),
             value: value.into(),
-            user_id: None,
+            user_id: RpcValue::null(),
             repeat: false,
             provisional: false,
         })
