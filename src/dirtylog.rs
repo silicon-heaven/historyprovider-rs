@@ -275,7 +275,7 @@ pub(crate) async fn dirtylog_task(
                         value: data_change.value,
                         access_level: AccessLevel::Read as _,
                         short_time: data_change.short_time.unwrap_or(-1),
-                        user_id: Default::default(),
+                        user_id: shvproto::RpcValue::null(),
                         repeat: !data_change.value_flags.contains(ValueFlags::SPONTANEOUS),
                         provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
                     };
@@ -417,7 +417,7 @@ mod tests {
                             value: 20.into(),
                             access_level: 8,
                             short_time: -1,
-                            user_id: None,
+                            user_id: shvproto::RpcValue::null(),
                             repeat: true,
                             provisional: true
                         }],
@@ -441,7 +441,7 @@ mod tests {
                             value: 20.into(),
                             access_level: 8,
                             short_time: -1,
-                            user_id: None,
+                            user_id: shvproto::RpcValue::null(),
                             repeat: true,
                             provisional: true
                         }],
