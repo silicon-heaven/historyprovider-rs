@@ -1,5 +1,6 @@
 use log::error;
 use log::info;
+use shvrpc::journalrw::datetime_to_log3_filename;
 use tokio::fs;
 use tokio::io;
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ pub(crate) struct LogFile {
     pub(crate) size: u64,
 }
 
-pub(crate) async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<LogFile>> {
+pub(crate) async fn collect_log_files(dir: impl AsRef<Path>) -> io::Result<Vec<LogFile>> {
     let mut result = Vec::new();
     let mut dirs = vec![dir.as_ref().to_path_buf()];
 
@@ -27,7 +28,7 @@ pub(crate) async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<
 
             if metadata.is_dir() {
                 dirs.push(path);
-            } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "log2")
+            } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "log2" || ext == "log3")
                 && let (Some(file_name), Some(parent)) = (path.file_name(), path.parent()) {
                     result.push(LogFile {
                         name: file_name.into(),
@@ -41,9 +42,9 @@ pub(crate) async fn collect_log2_files(dir: impl AsRef<Path>) -> io::Result<Vec<
     Ok(result)
 }
 
-/// Prune `.log2` files while keeping the newest one per directory
-pub(crate) async fn cleanup_log2_files(dir: impl AsRef<Path>, size_limit: u64, days_to_keep: i64) -> io::Result<()> {
-    let files = collect_log2_files(dir).await?;
+/// Prune `.log[2,3]` files while keeping the newest one per directory
+pub(crate) async fn cleanup_log_files(dir: impl AsRef<Path>, size_limit: u64, days_to_keep: i64) -> io::Result<()> {
+    let files = collect_log_files(dir).await?;
     let mut files_size: u64 = files.iter().map(|f| f.size).sum();
 
     info!("log2 files size: {files_size}, size limit: {size_limit}, days_to_keep: {days_to_keep}");
@@ -61,14 +62,26 @@ pub(crate) async fn cleanup_log2_files(dir: impl AsRef<Path>, size_limit: u64, d
     let mut deletable_files = Vec::new();
 
     // This file doesn't have to exist, I'm only constructing the filename for log retention.
-    let oldest_file_to_keep = PathBuf::from(msec_to_log2_filename(shvproto::DateTime::now().add_days(-days_to_keep).epoch_msec()));
-    info!("keeping files younger than {filename}", filename = oldest_file_to_keep.to_string_lossy());
+    let oldest_log2_file_to_keep = PathBuf::from(msec_to_log2_filename(shvproto::DateTime::now().add_days(-days_to_keep).epoch_msec()));
+    let oldest_log3_file_to_keep = PathBuf::from(datetime_to_log3_filename(shvproto::DateTime::now().add_days(-days_to_keep)));
+    info!("keeping files younger than {filename_log2} or {filename_log3}",
+        filename_log2 = oldest_log2_file_to_keep.to_string_lossy(),
+        filename_log3 = oldest_log3_file_to_keep.to_string_lossy(),
+    );
 
     for (_dir, mut group) in grouped {
         // Sort descending (newest first)
         group.sort_by(|a, b| b.name.cmp(&a.name));
-        // Keep the newest file, and keep files newer than oldest_file_to_delete
-        deletable_files.extend(group.into_iter().skip(1).filter(|log_file| log_file.name < oldest_file_to_keep));
+        // Keep the newest two files (for snapshots), and keep files newer than oldest_file_to_delete
+        deletable_files.extend(group
+            .into_iter()
+            .skip(2)
+            .filter(|log_file| if log_file.name.ends_with(".log2") {
+                log_file.name < oldest_log2_file_to_keep
+            } else {
+                log_file.name < oldest_log3_file_to_keep
+            })
+        );
     }
 
     // Sort deletable files (oldest first for deletion)

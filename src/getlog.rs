@@ -14,8 +14,8 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::dirtylog::DirtyLogCommand;
 use shvrpc::journalentry::JournalEntry;
-use shvrpc::journalrw::{matches_path_pattern, GetLog2Params, GetLog2Since, JournalReaderLog2};
-use crate::util::{get_files, is_log2_file};
+use shvrpc::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalReaderLog3, matches_path_pattern};
+use crate::util::{get_files, is_log_file};
 use crate::State;
 
 pub(crate) struct GetLogResult {
@@ -32,14 +32,17 @@ pub(crate) struct GetLogResult {
 }
 
 fn file_name_to_file_msec(filename: &str) -> Result<i64, String> {
-    let without_ext = filename
-        .strip_suffix(".log2")
-        .ok_or_else(|| format!("Invalid file extension in '{filename}'"))?;
+    let (stripped, format) = if let Some(stripped) = filename.strip_suffix(".log2") {
+        (stripped, "%Y-%m-%dT%H-%M-%S-%3f")
+    } else if let Some(stripped) = filename.strip_suffix(".log3") {
+        (stripped, "Y-%m-%dT%H-%M-%S")
+    } else {
+        return Err(format!("Invalid file extension in '{filename}'"));
+    };
 
-    let datetime = chrono::NaiveDateTime::parse_from_str(without_ext, "%Y-%m-%dT%H-%M-%S-%3f")
-        .map_err(|e| format!("Failed to parse '{filename}': {e}"))?;
-
-    Ok(chrono::Utc.from_utc_datetime(&datetime).timestamp_millis())
+    chrono::NaiveDateTime::parse_from_str(stripped, format)
+        .map(|datetime| chrono::Utc.from_utc_datetime(&datetime).timestamp_millis())
+        .map_err(|e| format!("Failed to parse '{filename}': {e}"))
 }
 
 
@@ -53,7 +56,7 @@ pub(crate) async fn getlog_handler(
     }
     let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
     info!("getLog handler, site: {site_path}, params: {params}");
-    let mut log_files = get_files(&local_journal_path, is_log2_file)
+    let mut log_files = get_files(&local_journal_path, is_log_file)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
     log_files.sort_by_key(|entry| entry.file_name());
@@ -65,10 +68,11 @@ pub(crate) async fn getlog_handler(
             async move {
                 match tokio::fs::File::open(&file_path).await {
                     Ok(file) => {
-                        JournalReaderLog2::new(BufReader::new(file.compat()))
-                            .next()
-                            .await
-                            .is_some()
+                        if file_path.ends_with(".log3") {
+                            JournalReaderLog3::new(BufReader::new(file.compat())).next().await.is_some()
+                        } else {
+                            JournalReaderLog2::new(BufReader::new(file.compat())).next().await.is_some()
+                        }
                     }
                     Err(err) => {
                         error!("Cannot open file {file_path} in call to getLog: {err}",
@@ -82,7 +86,7 @@ pub(crate) async fn getlog_handler(
         .collect::<Vec<_>>()
         .await;
 
-    let file_start_index = {
+    let file_start_index: usize = {
         if log_files.is_empty() {
             0
         } else {
@@ -102,6 +106,8 @@ pub(crate) async fn getlog_handler(
                 GetLog2Since::LastEntry => log_files.len() - 1,
                 GetLog2Since::None => 0,
             }
+            .saturating_sub(1) // Take previous file to have a complete snapshot when processing log3
+                               // files
         }
     };
 

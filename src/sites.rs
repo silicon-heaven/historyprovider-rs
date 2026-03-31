@@ -314,19 +314,21 @@ pub(crate) struct ParsedNotification {
     pub(crate) site_path: String,
     pub(crate) property_path: String,
     pub(crate) signal: String,
+    pub(crate) source: String,
     pub(crate) param: RpcValue,
 }
 
 pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap<String, SiteInfo>) -> Option<ParsedNotification> {
+    let path = msg.shv_path().unwrap_or_default();
+    let (site_path, property_path) = find_longest_path_prefix(sites_info, path.strip_prefix("shv/")?)?;
     let signal = msg.method().unwrap_or_default().to_string();
-    let path = msg.shv_path().unwrap_or_default().to_string();
+    let source = msg.source().unwrap_or_default().to_string();
     let param = msg.param().unwrap_or_default();
-    let stripped_path = path.strip_prefix("shv/")?;
-    let (site_path, property_path) = find_longest_path_prefix(sites_info, stripped_path)?;
     Some(ParsedNotification {
         site_path: site_path.to_string(),
         property_path: property_path.to_string(),
-        signal: signal.to_string(),
+        signal,
+        source,
         param: param.clone(),
     })
 }
@@ -720,6 +722,7 @@ mod tests {
                 site_path: "foo/site1".into(),
                 property_path: "xyz/node".into(),
                 signal: "chng".into(),
+                source: String::default(),
                 param: 20.into(),
             })
         );
@@ -729,6 +732,7 @@ mod tests {
                 site_path: "foo/site2".into(),
                 property_path: "none".into(),
                 signal: "chng".into(),
+                source: String::default(),
                 param: RpcValue::null(),
             })
         );
