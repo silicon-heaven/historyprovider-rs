@@ -24,10 +24,7 @@ mod sites;
 mod tree;
 mod sync;
 mod cleanup;
-// mod journalentry;
-// mod journalrw;
 mod dirtylog;
-// mod datachange;
 mod util;
 pub mod alarm;
 

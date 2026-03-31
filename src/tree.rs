@@ -22,7 +22,7 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 
 use crate::alarmlog::{alarmlog_impl, AlarmLogParams};
-use crate::cleanup::collect_log2_files;
+use crate::cleanup::collect_log_files;
 use crate::getlog::getlog_handler;
 use crate::pushlog::pushlog_impl;
 use crate::sites::SubHpInfo;
@@ -336,7 +336,7 @@ impl From<LsFilesEntry> for RpcValue {
 }
 
 async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {
-    collect_log2_files(&config.journal_dir)
+    collect_log_files(&config.journal_dir)
         .await
         .map(|files| files.into_iter().map(|f| f.size as i64).sum::<i64>())
 }

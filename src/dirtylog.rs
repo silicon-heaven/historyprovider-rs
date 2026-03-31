@@ -13,12 +13,12 @@ use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::DateTime as ShvDateTime;
 use shvrpc::metamethod::AccessLevel;
 use shvrpc::journalentry::JournalEntry;
-use shvrpc::journalrw::{JournalReaderLog2, JournalWriterLog2};
+use shvrpc::journalrw::{JournalReaderLog2, JournalReaderLog3, JournalWriterLog2};
 use shvrpc::datachange::{DataChange, ValueFlags};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::sites::ParsedNotification;
-use crate::util::{get_files, is_log2_file};
+use crate::util::{get_files, is_log_file};
 use crate::State;
 
 
@@ -127,7 +127,7 @@ pub(crate) async fn dirtylog_task(
                 };
 
                 let latest_entry = {
-                    let mut log_files = match get_files(journal_dir.join(&site), is_log2_file).await {
+                    let mut log_files = match get_files(journal_dir.join(&site), is_log_file).await {
                         Ok(files) => files,
                         Err(err) => {
                             error!("Cannot trim dirty log. Cannot read journal dir entries: {err}");
@@ -142,8 +142,13 @@ pub(crate) async fn dirtylog_task(
                             async move {
                                 match tokio::fs::File::open(&file_path).await {
                                     Ok(file) => {
-                                        let reader = JournalReaderLog2::new(BufReader::new(file.compat()));
-                                        reader.fold(None, async |_, entry| entry.ok()).await
+                                        if file_path.ends_with(".log3") {
+                                            let reader = JournalReaderLog3::new(BufReader::new(file.compat()));
+                                            reader.fold(None, async |_, entry| entry.ok()).await
+                                        } else {
+                                            let reader = JournalReaderLog2::new(BufReader::new(file.compat()));
+                                            reader.fold(None, async |_, entry| entry.ok()).await
+                                        }
                                     }
                                     Err(err) => {
                                         error!("Cannot open file {file_path} while getting the last journal entry for trim dirtylog: {err}",
@@ -265,19 +270,19 @@ pub(crate) async fn dirtylog_task(
                 DirtyLogCommand::Get { site, response_tx } => {
                     request_scheduler.schedule_new(site, Request::Get(response_tx));
                 }
-                DirtyLogCommand::ProcessNotification(ParsedNotification { site_path, property_path, signal, param }) => {
+                DirtyLogCommand::ProcessNotification(ParsedNotification { site_path, property_path, signal, source, param }) => {
                     let data_change = DataChange::from(param);
                     let journal_entry = JournalEntry {
                         epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
                         path: property_path,
                         signal,
-                        source: Default::default(),
+                        source,
                         value: data_change.value,
                         access_level: AccessLevel::Read as _,
                         short_time: data_change.short_time.unwrap_or(-1),
                         user_id: shvproto::RpcValue::null(),
                         repeat: !data_change.value_flags.contains(ValueFlags::SPONTANEOUS),
-                        provisional: true, // data_change.value_flags & (1 << VALUE_FLAG_PROVISIONAL_BIT) != 0,
+                        provisional: true,
                     };
                     // Schedule next task
                     request_scheduler.schedule_new(site_path, Request::Append(journal_entry));
@@ -354,7 +359,7 @@ mod tests {
             TestCase {
                 name: "ProcessNotification: journaldir doesn't exist",
                 steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), param: 20.into() })))
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), source: "get".into(), param: 20.into() })))
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
@@ -362,7 +367,7 @@ mod tests {
             TestCase {
                 name: "ProcessNotification: notifications get written to disk",
                 steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), param: DataChange{
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), source: "get".into(), param: DataChange{
                         value: 20.into(),
                         date_time: Some(DateTime::from_iso_str("2022-07-07T00:00:00.000").expect("DateTime must work")),
                         value_flags: ValueFlags::empty(),

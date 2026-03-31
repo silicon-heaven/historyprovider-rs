@@ -218,3 +218,188 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
+    init_logger();
+
+    // The content is not important for a sync test
+    static DUMMY_LOGFILE: &str = "entry1\nentry2\nentry3";
+
+    let very_large_log_file: String = "entrydata\n".to_string().repeat(400000);
+    let test_cases = [
+        TestCase {
+            name: "SyncSite: Remote and local - empty",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(Vec::<RpcValue>::new().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![],
+        },
+        TestCase {
+            name: "SyncSite: Remote - has files, local - empty",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: chunk download",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes()[..10].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 10, "size" => (DUMMY_LOGFILE.len() as i32) - 10).into(), Ok(DUMMY_LOGFILE.as_bytes()[10..].into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: File API detection error",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Err(RpcError::new(shvrpc::rpcmessage::RpcErrorCode::MethodCallTimeout, "Simulated test timeout")))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![],
+        },
+        TestCase {
+            name: "SyncAll: File without chronological order",
+            steps: &[
+                Box::new(SyncCommand::SyncAll),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-08T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: File without chronological order",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-08T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: Remote has one empty file and one non-empty file",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list![ "2022-07-05T18-06-15.log3", "f", 0 ],
+                        make_list![ "2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32]
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-05T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![("site1/2022-07-05T18-06-15.log3", ""), ("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: Don't download files older than we already have",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+            ],
+            starting_files: vec![
+                ("site1/2022-07-07T18-06-16.log3", DUMMY_LOGFILE), // Adjusted to be "newer" than the 15:00 remote file
+                ("site1/2022-07-07T18-06-17.log3", DUMMY_LOGFILE),
+            ],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-16.log3", DUMMY_LOGFILE), ("site1/2022-07-07T18-06-17.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: Files with same size remote/local size aren't synced",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+            ],
+            starting_files: vec![
+                ("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE),
+            ],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
+        },
+        TestCase {
+            name: "SyncSite: Remote sends more data",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(very_large_log_file.as_bytes().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![],
+        },
+        TestCase {
+            name: "SyncSite: chunk size",
+            steps: &[
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
+                        make_list!["2022-07-07T18-06-15.log3", "f", very_large_log_file.len() as i32],
+                ].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => 1000000).into(), Ok(very_large_log_file.as_bytes()[..1000000].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 1000000, "size" => 1000000).into(), Ok(very_large_log_file.as_bytes()[1000000..2000000].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 2000000, "size" => 1000000).into(), Ok(very_large_log_file.as_bytes()[2000000..3000000].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 3000000, "size" => 1000000).into(), Ok(very_large_log_file.as_bytes()[3000000..4000000].into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", very_large_log_file.as_str())],
+        },
+    ];
+
+    for test_case in test_cases {
+        run_test(
+            test_case.name,
+            test_case.steps,
+            test_case.starting_files,
+            test_case.expected_file_paths,
+            |ccs, _ces, cer, dirtylog_cmd_rx, _sync_cmd_rx, state| {
+                let (dedup_sender, receiver) = dedup_channel::<SyncCommand>();
+                let task_state = SyncTaskTestState {
+                    dedup_sender,
+                    _dirtylog_cmd_rx: dirtylog_cmd_rx,
+                };
+                let sync_task = tokio::spawn(sync_task(ccs, cer, state, receiver));
+                (sync_task, task_state)
+            },
+            |state| {
+                state.dedup_sender.close_channel();
+            },
+            &[]
+        ).await?;
+    }
+
+    Ok(())
+}

@@ -20,11 +20,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, Semaphore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use crate::cleanup::cleanup_log2_files;
+use crate::cleanup::cleanup_log_files;
 use crate::dirtylog::DirtyLogCommand;
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
-use crate::util::{get_files, is_log2_file, msec_to_log2_filename, DedupReceiver};
+use crate::util::{DedupReceiver, get_files, is_log_file, is_log2_file, msec_to_log2_filename};
 use crate::State;
 
 #[derive(Default)]
@@ -156,6 +156,10 @@ impl SyncLogger for SyncSiteLogger {
     }
 }
 
+fn is_log_file_entry(entry: &LsFilesEntry) -> bool {
+    matches!(entry.ftype, FileType::File) && (entry.name.ends_with(".log2") || entry.name.ends_with(".log3"))
+}
+
 async fn get_files_to_sync(
     client_cmd_tx: ClientCommandSender,
     sites_data: SitesData,
@@ -183,7 +187,7 @@ async fn get_files_to_sync(
                         .unwrap_or_default();
                     remote_files
                         .into_iter()
-                        .filter(|entry| matches!(entry.ftype, FileType::File) && entry.name.ends_with(".log2"))
+                        .filter(is_log_file_entry)
                         .map(|entry| (site_path, entry))
                         .collect::<Vec<_>>()
                 })
@@ -275,7 +279,7 @@ async fn sync_site_by_download(
 
     // If local files exist, limit fetching to files newer than the oldest local file.
     // This prevents fetching old files that would be deleted by cleanup just after the sync.
-    let oldest_local_file = get_files(&local_journal_path, is_log2_file)
+    let oldest_local_file = get_files(&local_journal_path, is_log_file)
         .await
         .map(|mut log_files| {log_files.sort_by_key(|entry| entry.file_name()); log_files})
         .unwrap_or_default()
@@ -294,7 +298,7 @@ async fn sync_site_by_download(
         None => &RpcCall::new(remote_journal_path, "lsfiles")
             .exec::<Vec<LsFilesEntry>, _>(&client_cmd_tx)
             .await
-            .map(|file_list| file_list.into_iter().filter(|file| matches!(file.ftype, FileType::File) && file.name.ends_with(".log2")).collect::<Vec<_>>())
+            .map(|file_list| file_list.into_iter().filter(is_log_file_entry).collect::<Vec<_>>())
             .map(|mut file_list| { file_list.sort_by(|file_a, file_b| file_a.name.cmp(&file_b.name)); file_list })
             .map_err(to_string)?
     };
@@ -835,7 +839,7 @@ pub(crate) async fn sync_task(
                             log::error!("Cannot send dirtylog Trim command for site {site}: {e}")
                         )
                     );
-                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
+                match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
@@ -899,7 +903,7 @@ pub(crate) async fn sync_task(
                         .unwrap_or_else(|e|
                             panic!("Cannot send dirtylog Trim command for site {site}: {e}")
                         );
-                    match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
+                    match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                         Ok(_) => info!("Cleanup journal dir done"),
                         Err(err) => error!("Cleanup journal dir error: {err}"),
                     }
@@ -909,7 +913,7 @@ pub(crate) async fn sync_task(
             }
             SyncCommand::Cleanup => {
                 info!("Cleanup journal dir start");
-                match cleanup_log2_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
+                match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }

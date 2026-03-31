@@ -73,6 +73,13 @@ pub(crate) async fn get_files(dir_path: impl AsRef<Path>, file_filter_fn: impl F
     .map_err(|e| format!("Cannot read content of the journal directory {}: {}", dir_path.to_string_lossy(), e))
 }
 
+pub(crate) fn is_log_file(entry: &DirEntry) -> bool {
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|file_name| file_name.ends_with(".log2") || file_name.ends_with(".log3"))
+}
+
 pub(crate) fn is_log2_file(entry: &DirEntry) -> bool {
     entry
         .file_name()
