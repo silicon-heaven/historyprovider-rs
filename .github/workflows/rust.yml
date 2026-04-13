@@ -73,7 +73,7 @@ jobs:
           mv "${{github.workspace}}/install/bin/hp" "${{github.workspace}}/install/bin/historyprovider-${{ steps.get-version.outputs.version }}"
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: historyprovider ${{ steps.get-version.outputs.version }}
           tag_name: ${{ steps.get-version.outputs.version }}
