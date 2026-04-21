@@ -50,12 +50,15 @@ pub(crate) async fn getlog_handler(
     site_path: &str,
     params: &GetLog2Params,
     app_state: Arc<State>,
-) -> Result<GetLogResult, RpcError> {
+) -> Result<GetLogResult, RpcError>
+{
+    info!("getLog handler, site: {site_path}, params: {params}");
+
     if !app_state.sites_data.read().await.sites_info.contains_key(site_path) {
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")));
     }
+
     let local_journal_path = Path::new(&app_state.config.journal_dir).join(site_path);
-    info!("getLog handler, site: {site_path}, params: {params}");
     let mut log_files = get_files(&local_journal_path, is_log_file)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
@@ -241,6 +244,8 @@ pub(crate) async fn getlog_impl(
         until_ms: params.until.map_or(i64::MAX, shvproto::DateTime::epoch_msec),
     };
 
+    log::debug!(target: "getlog_impl", "getlog_impl BEGIN, site: {site}, params: {params}");
+
     'outer: for mut reader in journal_readers {
         while let Some(entry_res) = reader.next().await {
             match entry_res {
@@ -330,6 +335,8 @@ pub(crate) async fn getlog_impl(
     };
 
     let record_count = snapshot_entries.len() as i64 + context.entries.len() as i64;
+
+    log::debug!(target: "getlog_impl", "getlog_impl END, site: {site}, params: {params}");
 
     GetLogResult {
         record_count,
