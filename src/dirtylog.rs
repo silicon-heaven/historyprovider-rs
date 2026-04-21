@@ -261,11 +261,23 @@ pub(crate) async fn dirtylog_task(
 
     let mut request_scheduler = RequestScheduler::new(Path::new(&app_state.config.journal_dir).into());
 
+    // Priority-based execution:
+    // 1. High Priority: Get, ProcessNotification (Optimizes getLog responsiveness)
+    // 2. Low Priority: Trim (Processed sequentially)
+    let mut trim_requests = VecDeque::new();
+
     loop {
-        futures::select! {
+        futures::select_biased! {
             command = cmd_rx.select_next_some() => match command {
                 DirtyLogCommand::Trim { site } => {
-                    request_scheduler.schedule_new(site, Request::Trim);
+                    if !trim_requests.contains(&site) {
+                        trim_requests.push_back(site);
+                    }
+                    // Schedule Trim only if there is no other request in the scheduler
+                    if request_scheduler.inflight.is_empty()
+                        && let Some(site) = trim_requests.pop_front() {
+                            request_scheduler.schedule_new(site, Request::Trim);
+                    }
                 }
                 DirtyLogCommand::Get { site, response_tx } => {
                     request_scheduler.schedule_new(site, Request::Get(response_tx));
@@ -290,6 +302,12 @@ pub(crate) async fn dirtylog_task(
             },
             site = request_scheduler.inflight.select_next_some() => {
                 request_scheduler.on_finished(site);
+                // If no other requests have been scheduled, we can process another Trim
+                if request_scheduler.inflight.is_empty()
+                    && let Some(site) = trim_requests.pop_front() {
+                        request_scheduler.schedule_new(site, Request::Trim);
+                }
+
             }
             complete => break,
         }
