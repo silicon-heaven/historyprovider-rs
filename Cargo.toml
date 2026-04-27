@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.9.0"
+version = "2.9.1"
 edition = "2024"
 
 [[bin]]
@@ -11,7 +11,7 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.51.1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "6.1.5"
+shvproto = "6.1.7"
 shvrpc = { version = "15.0", features = ["journal"] }
 shvclient = { version = "5.0", features = ["tokio"] }
 futures = "0.3.32"
@@ -24,7 +24,7 @@ duration-str = "0.21"
 sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
 hex = "0.4.3"
 tokio-util = { version = "0.7.18", features = ["io"] }
-async-compression = { version = "0.4.41", features = ["gzip", "tokio"] }
+async-compression = { version = "0.4.42", features = ["gzip", "tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 tokio-stream = { version = "0.1.18", features = ["fs"] }
