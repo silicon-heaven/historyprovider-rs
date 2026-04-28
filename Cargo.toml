@@ -3,8 +3,14 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.9.2"
+version = "2.10.0"
 edition = "2024"
+
+[profile.release]
+panic = 'abort'
+
+[profile.dev]
+panic = 'abort'
 
 [[bin]]
 name = "hp"
