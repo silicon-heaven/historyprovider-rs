@@ -153,7 +153,7 @@ pub mod testing {
     use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
     use shvproto::RpcValue;
     use shvrpc::{rpcframe::RpcFrame, rpcmessage::RpcError, RpcMessage, RpcMessageMetaTags};
-    use std::{collections::{BTreeMap, HashMap}, path::{Path, PathBuf}, sync::Arc};
+    use std::{collections::{BTreeMap, HashMap}, path::{Path, PathBuf}, sync::atomic::AtomicBool, sync::Arc};
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, sync::RwLock};
 
@@ -435,6 +435,8 @@ pub mod testing {
             state_alarms: Default::default(),
             online_states: Default::default(),
             app_closing: false.into(),
+            last_sites_loaded: RwLock::new(None),
+            sites_reload_in_progress: AtomicBool::new(false),
         });
 
 

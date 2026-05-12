@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use log::info;
@@ -89,6 +89,21 @@ impl From<AlarmWithTimestamp> for RpcValue {
     }
 }
 
+pub(crate) struct ReloadGuard<'a>(&'a AtomicBool);
+
+impl<'a> ReloadGuard<'a> {
+    pub(crate) fn new(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::Relaxed);
+        ReloadGuard(flag)
+    }
+}
+
+impl Drop for ReloadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 pub struct State {
     start_time: std::time::Instant,
     sites_data: RwLock<sites::SitesData>,
@@ -100,6 +115,8 @@ pub struct State {
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
     dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
     app_closing: AtomicBool,
+    last_sites_loaded: RwLock<Option<std::time::Instant>>,
+    pub(crate) sites_reload_in_progress: AtomicBool,
 }
 
 #[derive(Default)]
@@ -135,6 +152,7 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
 
     let (sync_cmd_tx, sync_cmd_rx) = crate::util::dedup_channel();
     let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded();
+    let (sites_cmd_tx, sites_cmd_rx) = unbounded();
 
     let app_state = Arc::new(State {
         start_time: std::time::Instant::now(),
@@ -147,13 +165,15 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
         sync_cmd_tx,
         dirtylog_cmd_tx,
         app_closing: AtomicBool::new(false),
+        last_sites_loaded: RwLock::new(None),
+        sites_reload_in_progress: AtomicBool::new(false),
     });
 
     let client = shvclient::Client::new()
         .mount_dynamic("", {
             let app_state = app_state.clone();
             move |rq, cmd_sender|
-                tree::request_handler(rq, cmd_sender, app_state.clone())
+                tree::request_handler(rq, cmd_sender, sites_cmd_tx.clone(), app_state.clone())
         });
 
     let init_function = {
@@ -183,7 +203,7 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
             handle_signal(SignalKind::interrupt());
             handle_signal(SignalKind::terminate());
 
-            tasks.sites_task = Some(wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone()))));
+            tasks.sites_task = Some(wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sites_cmd_rx))));
             tasks.sync_task = Some(wrap_task(tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx))));
             tasks.dirtylog_task = Some(wrap_task(tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state.clone(), dirtylog_cmd_rx))));
         }

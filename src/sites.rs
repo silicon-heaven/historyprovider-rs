@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
 use log::{debug, error, warn};
 use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList, Subscriber};
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
-use shvclient::{ClientCommandSender, ClientEventsReceiver};
+use shvclient::{ClientCommandSender, ClientEvent, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
 use shvrpc::rpcmessage::RpcError;
 use shvrpc::typeinfo::TypeInfo;
@@ -27,6 +27,10 @@ pub(crate) enum SiteOnlineStatus {
     Unknown = 0,
     Offline = 1,
     Online = 2,
+}
+
+pub(crate) enum SitesCommand {
+    ReloadSites,
 }
 
 #[derive(Clone,Default)]
@@ -337,21 +341,244 @@ pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap
     })
 }
 
+struct SitesTaskState {
+    mntchng_subscribers: SelectAll<Subscriber>,
+    subscribers: SelectAll<Subscriber>,
+    online_status_channels: BTreeMap<String, UnboundedSender<SiteOnlineStatus>>,
+    online_status_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+enum PeriodicSyncCommand {
+    Enable,
+    Disable,
+}
+
+
+async fn reload_sites(
+    shv_api_version: shvclient::clientapi::ShvApiVersion,
+    client_cmd_tx: &ClientCommandSender,
+    app_state: &Arc<State>,
+) -> Option<SitesTaskState>
+{
+    let _reload_guard = crate::ReloadGuard::new(&app_state.sites_reload_in_progress);
+    log::info!("Getting sites info");
+
+    let (sites_info, sub_hps) = 'sites_get_loop: loop {
+        let sites: Result<shvproto::Map, _> = RpcCall::new("sites", "getSites")
+            .exec(client_cmd_tx)
+            .await;
+
+        match sites {
+            Ok(sites) => {
+                if sites
+                    .get("_meta")
+                        .map(RpcValue::as_map)
+                        .and_then(|map| map.get("HP3"))
+                        .map(RpcValue::as_map)
+                        .and_then(|map| map.get("type"))
+                        .map(RpcValue::as_str)
+                        .is_none_or(|type_str| type_str != "HP3")
+                {
+                    eprintln!("This site's _meta does NOT include an HP3 node. Refusing to continue. Add an HP3 node to the site's _meta, otherwise this HP instance will not be visible to parent HPs.");
+                    std::process::abort();
+                }
+                let sub_hps = collect_sub_hps(&[], &sites);
+                let mut sites_info = collect_sites(&[], &sites);
+                for (path, site_info) in &mut sites_info {
+                    if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
+                        site_info.sub_hp = prefix.into();
+                    } else {
+                        log::error!("Cannot find sub HP for site {path}");
+                        site_info.sub_hp = path.clone();
+                    }
+                }
+                break 'sites_get_loop (Arc::new(sites_info), Arc::new(sub_hps));
+            }
+            Err(err) => {
+                match err.error() {
+                    CallRpcMethodErrorKind::ConnectionClosed => {
+                        log::warn!("Connection closed while getting sites info");
+                        return None;
+                    }
+                    _ => {
+                        log::error!("Get sites info error: {err}");
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
+
+    log::debug!("Loaded sites:\n{}", sites_info
+        .iter()
+        .map(|(path, site)| format!(" {path}: {site:?}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+    );
+
+    log::debug!("Loaded sub HPs:\n{}", sub_hps
+        .iter()
+        .map(|(path, hp)| format!(" {path}: {hp:?}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+    );
+
+    // Subscribe mntchng
+    let mntchng_subscribers = sites_info
+        .iter()
+        .filter(|(_, site)| sub_hps
+            .get(&site.sub_hp)
+            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+        )
+        .map(|(path, _)| {
+            subscribe(client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<SelectAll<_>>()
+        .await;
+
+    log::info!("Loading typeinfo");
+    let subscribers = sites_info
+        .iter()
+        .filter(|(_, site)| sub_hps
+            .get(&site.sub_hp)
+            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+        )
+        .flat_map(|(path, _)| {
+            let shv_path = join_path!("shv", path);
+            let sub_chng = subscribe(client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
+            const SIG_CMDLOG: &str = "cmdlog";
+            let sub_cmdlog = subscribe(client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
+            [sub_chng, sub_cmdlog]
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<SelectAll<_>>()
+        .await;
+
+    let typeinfos = sites_info
+        .iter()
+        .filter(|(_, site)| sub_hps
+            .get(&site.sub_hp)
+            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
+        )
+        .map(|(path, _)| {
+            let client_cmd_tx = ClientCommandSender::clone(client_cmd_tx);
+            async move {
+                let result = 'result: {
+                    let files_path = join_path!("sites", &path, "_files");
+                    let files = RpcCallLsList::new(&files_path).exec(&client_cmd_tx)
+                        .await
+                        .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
+                    let Some(type_info_filename) = files
+                        .into_iter()
+                        .find(|file| file == "typeInfo.cpon" || file == "nodesTree.cpon") else {
+                            break 'result Err(format!("No typeInfo.cpon or nodesTree.cpon found for site {path}"));
+                        };
+                    let type_info_filepath = join_path!(files_path, type_info_filename);
+                    let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read").exec(&client_cmd_tx)
+                        .await
+                        .unwrap_or_else(|err| panic!("Retrieving {type_info_filepath} failed: {err}"));
+                    RpcValue::from_cpon(String::from_utf8_lossy(type_info_file.as_blob()))
+                        .map_err(|err| format!("Couldn't parse typeinfo file as cpon: {err}"))
+                        .and_then(|rv| rv.try_into().map_err(|err| format!("Failed to parse typeinfo for {path}: {err}")))
+                };
+
+                (path.clone(), result)
+            }
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<BTreeMap<_, _>>()
+        .await;
+
+    let typeinfos = Arc::new(typeinfos);
+
+    *app_state.sites_data.write().await = SitesData {
+        sites_info: sites_info.clone(),
+        sub_hps: sub_hps.clone(),
+        typeinfos: typeinfos.clone()
+    };
+
+    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+    let mut online_status_channels = BTreeMap::new();
+    let mut online_status_workers = Vec::new();
+    for (site, info) in sites_info.iter() {
+        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+
+        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
+            continue
+        };
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        online_status_channels.insert(site.to_string(), tx);
+        online_status_workers.push(online_status_worker(site.clone(), rx, ClientCommandSender::clone(client_cmd_tx), Arc::clone(app_state)));
+    }
+
+    let alarms = &mut *app_state.alarms.write().await;
+    let state_alarms = &mut *app_state.state_alarms.write().await;
+
+    let online_status_task = Some(tokio::spawn(async move {
+        debug!(target: "OnlineStatus", "online status task starts");
+        futures::future::join_all(online_status_workers).await;
+        debug!(target: "OnlineStatus", "online status task finish");
+    }));
+    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+
+    let params = shvrpc::journalrw::GetLog2Params {
+        since: shvrpc::journalrw::GetLog2Since::LastEntry,
+        with_snapshot: true,
+        ..Default::default()
+    };
+
+    for site_path in sites_info.keys() {
+        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
+            continue;
+        };
+
+        let log = match getlog_handler(site_path, &params, Arc::clone(app_state)).await {
+            Ok(log) => log,
+            Err(err) => {
+                log::error!("couldn't init alarms: getlog failed: {err}");
+                continue;
+            }
+        };
+
+        let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
+        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
+            let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
+
+            for entry in chained_entries.clone()  {
+                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+            }
+        };
+
+        impl_update_alarms(alarms, collect_alarms);
+        impl_update_alarms(state_alarms, collect_state_alarms);
+    }
+
+    *app_state.last_sites_loaded.write().await = Some(std::time::Instant::now());
+    Some(SitesTaskState { mntchng_subscribers, subscribers, online_status_channels, online_status_task })
+}
+
 pub(crate) async fn sites_task(
     client_cmd_tx: ClientCommandSender,
     client_evt_rx: ClientEventsReceiver,
     app_state: Arc<State>,
+    mut sites_cmd_rx: UnboundedReceiver<SitesCommand>,
 )
 {
-    let mut client_evt_rx = client_evt_rx.fuse();
-    let mut mntchng_subscribers = SelectAll::<Subscriber>::default();
-    let mut subscribers = SelectAll::<Subscriber>::default();
-    let mut online_status_channels = BTreeMap::new();
+    let mut client_evt_rx = std::pin::pin!(client_evt_rx.fuse().peekable());
 
-    enum PeriodicSyncCommand {
-        Enable,
-        Disable,
-    }
+    let mut state = SitesTaskState {
+        mntchng_subscribers: SelectAll::<Subscriber>::default(),
+        subscribers: SelectAll::<Subscriber>::default(),
+        online_status_channels: BTreeMap::new(),
+        online_status_task: None,
+    };
+
 
     let (periodic_sync_tx, mut periodic_sync_rx) = futures::channel::mpsc::unbounded();
     let periodic_sync_task = {
@@ -394,305 +621,121 @@ pub(crate) async fn sites_task(
         })
     };
 
-    let mut online_status_task = None;
 
     'main_loop: loop {
-        futures::select! {
-            client_event = client_evt_rx.select_next_some() => match client_event {
-                shvclient::ClientEvent::Connected(shv_api_version) => {
-                    log::info!("Getting sites info");
+        periodic_sync_tx
+            .unbounded_send(PeriodicSyncCommand::Disable)
+            .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
 
-                    let (sites_info, sub_hps) = 'sites_get_loop: loop {
-                        let sites: Result<shvproto::Map, _> = RpcCall::new("sites", "getSites")
-                            .exec(&client_cmd_tx)
-                            .await;
+        let shv_api_version = loop {
+            match client_evt_rx.next().await {
+                Some(ClientEvent::Connected(shv_api_version)) => break shv_api_version,
+                Some(ClientEvent::ConnectionFailed(_)) | Some(ClientEvent::Disconnected) => (),
+                None => break 'main_loop,
+            }
+        };
 
-                        match sites {
-                            Ok(sites) => {
-                                if sites
-                                    .get("_meta")
-                                        .map(RpcValue::as_map)
-                                        .and_then(|map| map.get("HP3"))
-                                        .map(RpcValue::as_map)
-                                        .and_then(|map| map.get("type"))
-                                        .map(RpcValue::as_str)
-                                        .is_none_or(|type_str| type_str != "HP3")
-                                {
-                                    eprintln!("This site's _meta does NOT include an HP3 node. Refusing to continue. Add an HP3 node to the site's _meta, otherwise this HP instance will not be visible to parent HPs.");
-                                    std::process::abort();
-                                }
-                                let sub_hps = collect_sub_hps(&[], &sites);
-                                let mut sites_info = collect_sites(&[], &sites);
-                                for (path, site_info) in &mut sites_info {
-                                    if let Some((prefix, _)) = find_longest_path_prefix(&sub_hps, path) {
-                                        site_info.sub_hp = prefix.into();
-                                    } else {
-                                        log::error!("Cannot find sub HP for site {path}");
-                                        site_info.sub_hp = path.clone();
-                                    }
-                                }
-                                break 'sites_get_loop (Arc::new(sites_info), Arc::new(sub_hps));
-                            }
+        'sites_loop: loop {
+            let mut state = match reload_sites(shv_api_version.clone(), &client_cmd_tx, &app_state).await {
+                Some(s) => s,
+                None => continue 'main_loop,
+            };
+
+            periodic_sync_tx
+                .unbounded_send(PeriodicSyncCommand::Enable)
+                .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
+
+            loop {
+                futures::select! {
+                    _event = client_evt_rx.as_mut().peek() => continue 'main_loop,
+                    sites_command = sites_cmd_rx.select_next_some() => match sites_command {
+                        SitesCommand::ReloadSites => {
+                            continue 'sites_loop;
+                        },
+                    },
+                    mntchng_frame = state.mntchng_subscribers.select_next_some() => {
+                        let msg = match mntchng_frame.to_rpcmesage() {
+                            Ok(msg) => msg,
                             Err(err) => {
-                                match err.error() {
-                                    CallRpcMethodErrorKind::ConnectionClosed => {
-                                        log::warn!("Connection closed while getting sites info");
-                                        continue 'main_loop;
-                                    }
-                                    _ => {
-                                        log::error!("Get sites info error: {err}");
-                                    }
-                                }
-                                tokio::time::sleep(Duration::from_secs(1)).await;
-                            }
-                        }
-                    };
-
-                    log::debug!("Loaded sites:\n{}", sites_info
-                        .iter()
-                        .map(|(path, site)| format!(" {path}: {site:?}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                    );
-
-                    log::debug!("Loaded sub HPs:\n{}", sub_hps
-                        .iter()
-                        .map(|(path, hp)| format!(" {path}: {hp:?}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                    );
-
-                    // Subscribe mntchng
-                    mntchng_subscribers = sites_info
-                        .iter()
-                        .filter(|(_, site)| sub_hps
-                            .get(&site.sub_hp)
-                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
-                        )
-                        .map(|(path, _)| {
-                            subscribe(&client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
-                        })
-                        .collect::<FuturesUnordered<_>>()
-                        .collect::<SelectAll<_>>()
-                        .await;
-
-                    log::info!("Loading typeinfo");
-                    subscribers = sites_info
-                        .iter()
-                        .filter(|(_, site)| sub_hps
-                            .get(&site.sub_hp)
-                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
-                        )
-                        .flat_map(|(path, _)| {
-                            let shv_path = join_path!("shv", path);
-                            let sub_chng = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
-                            const SIG_CMDLOG: &str = "cmdlog";
-                            let sub_cmdlog = subscribe(&client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
-                            [sub_chng, sub_cmdlog]
-                        })
-                        .collect::<FuturesUnordered<_>>()
-                        .collect::<SelectAll<_>>()
-                        .await;
-
-                    let typeinfos = sites_info
-                        .iter()
-                        .filter(|(_, site)| sub_hps
-                            .get(&site.sub_hp)
-                            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
-                        )
-                        .map(|(path, _)| {
-                            let client_cmd_tx = client_cmd_tx.clone();
-                            async move {
-                                let result = 'result: {
-                                    let files_path = join_path!("sites", &path, "_files");
-                                    let files = RpcCallLsList::new(&files_path).exec(&client_cmd_tx)
-                                        .await
-                                        .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
-                                    let Some(type_info_filename) = files
-                                        .into_iter()
-                                        .find(|file| file == "typeInfo.cpon" || file == "nodesTree.cpon") else {
-                                            break 'result Err(format!("No typeInfo.cpon or nodesTree.cpon found for site {path}"));
-                                        };
-                                    let type_info_filepath = join_path!(files_path, type_info_filename);
-                                    let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read").exec(&client_cmd_tx)
-                                        .await
-                                        .unwrap_or_else(|err| panic!("Retrieving {type_info_filepath} failed: {err}"));
-                                    RpcValue::from_cpon(String::from_utf8_lossy(type_info_file.as_blob()))
-                                        .map_err(|err| format!("Couldn't parse typeinfo file as cpon: {err}"))
-                                        .and_then(|rv| rv.try_into().map_err(|err| format!("Failed to parse typeinfo for {path}: {err}")))
-                                };
-
-                                (path.clone(), result)
-                            }
-                        })
-                        .collect::<FuturesUnordered<_>>()
-                        .collect::<BTreeMap<_, _>>()
-                        .await;
-
-                    let typeinfos = Arc::new(typeinfos);
-
-                    *app_state.sites_data.write().await = SitesData {
-                        sites_info: sites_info.clone(),
-                        sub_hps: sub_hps.clone(),
-                        typeinfos: typeinfos.clone()
-                    };
-
-                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
-
-                    let mut online_status_workers = Vec::new();
-
-                    for (site, info) in sites_info.iter() {
-                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
-
-                        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
-                            continue
-                        };
-                        let (tx, rx) = futures::channel::mpsc::unbounded();
-                        online_status_channels.insert(site.to_string(), tx);
-                        online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
-                    }
-
-                    let alarms = &mut *app_state.alarms.write().await;
-                    let state_alarms = &mut *app_state.state_alarms.write().await;
-
-                    online_status_task = Some(tokio::spawn(async move {
-                        debug!(target: "OnlineStatus", "online status task starts");
-                        futures::future::join_all(online_status_workers).await;
-                        debug!(target: "OnlineStatus", "online status task finish");
-                    }));
-
-                    let params = shvrpc::journalrw::GetLog2Params {
-                        since: shvrpc::journalrw::GetLog2Since::LastEntry,
-                        with_snapshot: true,
-                        ..Default::default()
-                    };
-
-                    for site_path in sites_info.keys() {
-                        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
-                        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
-                            // No typeinfo for this site - skip
-                            continue;
-                        };
-
-                        let log = match getlog_handler(site_path, &params, app_state.clone()).await {
-                            Ok(log) => log,
-                            Err(err) => {
-                                log::error!("couldn't init alarms: getlog failed: {err}");
+                                warn!("Ignoring wrong mntchng RpcFrame: {err}, frame: {mntchng_frame:?}");
                                 continue;
                             }
                         };
+                        let Some(ParsedNotification { site_path, signal, param, .. }) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
+                            continue
+                        };
 
-                        let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
-                        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
-                            let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
+                        if signal != "mntchng" {
+                            continue;
+                        }
+                        let mounted = param.as_bool();
+                        if mounted {
+                            log::info!("Site mounted: {site_path}");
+                            app_state.sync_cmd_tx
+                                .send(crate::sync::SyncCommand::SyncSite(site_path.clone()))
+                                .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
 
-                            for entry in chained_entries.clone()  {
-                                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+                            if let Some(tx) = state.online_status_channels.get(&site_path) {
+                                tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                            }
+                        } else {
+                            log::info!("Site unmounted: {site_path}");
+                            if let Some(tx) = state.online_status_channels.get(&site_path) {
+                                tx.unbounded_send(SiteOnlineStatus::Offline).ok();
+                            }
+                        }
+                    }
+                    notification_frame = state.subscribers.select_next_some() => {
+                        let msg = match notification_frame.to_rpcmesage() {
+                            Ok(msg) => msg,
+                            Err(err) => {
+                                warn!("Ignoring wrong notification RpcFrame: {err}, frame: {notification_frame:?}");
+                                continue;
+                            }
+                        };
+                        let Some(parsed_notification) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
+                            continue
+                        };
+                        if let Some(tx) = state.online_status_channels.get(&parsed_notification.site_path) {
+                            tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                        }
+
+                        app_state.dirtylog_cmd_tx
+                            .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
+                            .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
+
+                        let typeinfos = &app_state.sites_data.read().await.typeinfos;
+                        let Some(Ok(type_info)) = typeinfos.get(&parsed_notification.site_path) else {
+                            continue;
+                        };
+
+                        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector, signal_name| {
+                            let alarms_for_site = alarm_table.entry(parsed_notification.site_path.clone()).or_default();
+
+                            let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
+                            if !updated.is_empty() {
+                                client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name))
+                                    .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                             }
                         };
 
-                        impl_update_alarms(alarms, collect_alarms);
-                        impl_update_alarms(state_alarms, collect_state_alarms);
+                        impl_update_alarms(&mut *app_state.alarms.write().await, collect_alarms, "alarmmod");
+                        impl_update_alarms(&mut *app_state.state_alarms.write().await, collect_state_alarms, "statealarmmod");
                     }
-
-                    periodic_sync_tx
-                        .unbounded_send(PeriodicSyncCommand::Enable)
-                        .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
-
-                }
-                _ => {
-                    subscribers.clear();
-                    mntchng_subscribers.clear();
-                    online_status_channels.clear();
-                    periodic_sync_tx
-                        .unbounded_send(PeriodicSyncCommand::Disable)
-                        .unwrap_or_else(|e| log::error!("Cannot send periodic sync disable command: {e}"));
-                }
-            },
-            mntchng_frame = mntchng_subscribers.select_next_some() => {
-                let msg = match mntchng_frame.to_rpcmesage() {
-                    Ok(msg) => msg,
-                    Err(err) => {
-                        warn!("Ignoring wrong mntchng RpcFrame: {err}, frame: {mntchng_frame:?}");
-                        continue;
-                    }
-                };
-                let Some(ParsedNotification { site_path, signal, param, .. }) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
-                    continue
-                };
-
-                if signal != "mntchng" {
-                    continue;
-                }
-                let mounted = param.as_bool();
-                if mounted {
-                    log::info!("Site mounted: {site_path}");
-                    app_state.sync_cmd_tx
-                        .send(crate::sync::SyncCommand::SyncSite(site_path.clone()))
-                        .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
-
-                    if let Some(tx) = online_status_channels.get(&site_path) {
-                        tx.unbounded_send(SiteOnlineStatus::Online).ok();
-                    }
-                } else {
-                    log::info!("Site unmounted: {site_path}");
-                    if let Some(tx) = online_status_channels.get(&site_path) {
-                        tx.unbounded_send(SiteOnlineStatus::Offline).ok();
-                    }
+                    complete => break 'main_loop,
                 }
             }
-            notification_frame = subscribers.select_next_some() => {
-                let msg = match notification_frame.to_rpcmesage() {
-                    Ok(msg) => msg,
-                    Err(err) => {
-                        warn!("Ignoring wrong notification RpcFrame: {err}, frame: {notification_frame:?}");
-                        continue;
-                    }
-                };
-                let Some(parsed_notification) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
-                    continue
-                };
-                if let Some(tx) = online_status_channels.get(&parsed_notification.site_path) {
-                    tx.unbounded_send(SiteOnlineStatus::Online).ok();
-                }
-
-                app_state.dirtylog_cmd_tx
-                    .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
-                    .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
-
-                let typeinfos = &app_state.sites_data.read().await.typeinfos;
-                let Some(Ok(type_info)) = typeinfos.get(&parsed_notification.site_path) else {
-                    continue;
-                };
-
-                let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector, signal_name| {
-                    let alarms_for_site = alarm_table.entry(parsed_notification.site_path.clone()).or_default();
-
-                    let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
-                    if !updated.is_empty() {
-                        client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name))
-                            .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
-                    }
-                };
-
-                impl_update_alarms(&mut *app_state.alarms.write().await, collect_alarms, "alarmmod");
-                impl_update_alarms(&mut *app_state.state_alarms.write().await, collect_state_alarms, "statealarmmod");
-            }
-            complete => break,
         }
     }
+
     drop(periodic_sync_tx);
     log::debug!("waiting for periodic sync task to finish");
     if let Err(err) = periodic_sync_task.await {
         log::error!("Failed to join periodic_sync_task: {err}")
     }
 
-    if let Some(online_status_task) = online_status_task {
-        online_status_channels.clear();
+    if let Some(online_status_task) = state.online_status_task {
+        state.online_status_channels.clear();
         if let Err(err) = online_status_task.await {
             log::error!("Failed to join online_status_task: {err}")
         };
@@ -711,7 +754,7 @@ mod tests {
     use shvproto::RpcValue;
     use shvrpc::{RpcMessageMetaTags, rpcframe::RpcFrame};
 
-    use crate::{dirtylog::DirtyLogCommand, sites::{sites_task, SiteInfo}, sync::SyncCommand, util::{init_logger, testing::{run_test, ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep}, DedupReceiver}};
+    use crate::{dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesCommand, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
 
     #[test]
     fn parse_notification() {
@@ -790,9 +833,9 @@ mod tests {
     impl TestStep<SitesTaskTestState> for ExpectDirtylogCommand {
         async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
             let event = state.dirtylog_cmd_rx.select_next_some().await;
-            match (event, self) {
+            match (&event, self) {
                 (DirtyLogCommand::ProcessNotification(..), ExpectDirtylogCommand::ProcessNotification) => {
-                    log::debug!(target: "test-driver", "Got expected notification");
+                    log::debug!(target: "test-driver", "Got expected notification: {event:?}");
                 },
                 (got, expected) => {
                     panic!("Unexpected dirtylog command: {got:?}, expected: {expected:?}")
@@ -833,6 +876,7 @@ mod tests {
         sender: Sender<ClientEvent>,
         dirtylog_cmd_rx: UnboundedReceiver<DirtyLogCommand>,
         sync_cmd_rx: DedupReceiver<SyncCommand>,
+        sites_cmd_tx: UnboundedSender<SitesCommand>,
     }
 
     struct TestCase<'a> {
@@ -974,15 +1018,18 @@ mod tests {
                 test_case.starting_files,
                 test_case.expected_file_paths,
                 |ccs, ces, cer, dirtylog_cmd_rx, sync_cmd_rx, state| {
+                    let (sites_cmd_tx, sites_cmd_rx) = futures::channel::mpsc::unbounded();
                     let task_state = SitesTaskTestState {
                         sender: ces,
                         dirtylog_cmd_rx,
                         sync_cmd_rx,
+                        sites_cmd_tx,
                     };
-                    let sites_task = tokio::spawn(sites_task(ccs, cer, state));
+                    let sites_task = tokio::spawn(sites_task(ccs, cer, state, sites_cmd_rx));
                     (sites_task, task_state)
                 },
                 |state| {
+                    state.sites_cmd_tx.close_channel();
                     state.sender.close();
                 },
                 test_case.cleanup_steps
