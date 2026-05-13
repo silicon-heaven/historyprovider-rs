@@ -128,8 +128,8 @@ impl AppTasks {
 
 #[allow(clippy::type_complexity)]
 pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result<(Arc<State>, shvclient::Client<Full>, impl FnOnce(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver))> {
-    info!("Max journal dir size: {}", &hp_config.max_journal_dir_size);
-    info!("Setting up journal dir: {}", &hp_config.journal_dir);
+    info!("Max journal dir size: {}", hp_config.max_journal_dir_size);
+    info!("Setting up journal dir: {}", hp_config.journal_dir);
     std::fs::create_dir_all(&hp_config.journal_dir)?;
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
 
