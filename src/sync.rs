@@ -142,7 +142,7 @@ impl SyncLogger for SyncSiteLogger {
             time::OffsetDateTime::now_utc().format(&Iso8601::DATE_TIME_OFFSET).unwrap_or_else(|e| e.to_string()),
             msg.as_ref()
         );
-        let log_msg = format!("{}: {}", &self.site, &msg);
+        let log_msg = format!("{}: {}", self.site, msg);
         match level {
             log::Level::Error => log::error!("{log_msg}"),
             log::Level::Warn => log::warn!("{log_msg}"),
@@ -319,7 +319,7 @@ async fn sync_site_by_download(
                             sync_logger.log(
                                 log::Level::Info,
                                 format!("{}: will sync (remote size: {}, local size: {})",
-                                &remote_file.name,
+                                remote_file.name,
                                 remote_file.size,
                                 local_size)
                             );
@@ -329,14 +329,14 @@ async fn sync_site_by_download(
                             sync_logger.log(
                                 log::Level::Info,
                                 format!("{}: will be replaced (remote size: {}, local size: {})",
-                                &remote_file.name,
+                                remote_file.name,
                                 remote_file.size,
                                 local_size)
                             );
                             0
                         }
                         Ordering::Equal => {
-                            sync_logger.log(log::Level::Info, format!("{}: up-to-date", &remote_file.name));
+                            sync_logger.log(log::Level::Info, format!("{}: up-to-date", remote_file.name));
                             return None;
                         }
                     };
@@ -347,7 +347,7 @@ async fn sync_site_by_download(
                     sync_logger.log(
                         log::Level::Info,
                         format!("{}: will sync (remote size: {}, local size: <not found>)",
-                        &remote_file.name,
+                        remote_file.name,
                         remote_file.size,
                         )
                     );
@@ -357,7 +357,7 @@ async fn sync_site_by_download(
                     sync_logger.log(
                         log::Level::Info,
                         format!("{}: will try to sync (remote size: {}, local size: <I/O error: {}>)",
-                        &remote_file.name,
+                        remote_file.name,
                         remote_file.size,
                         err,
                         )
