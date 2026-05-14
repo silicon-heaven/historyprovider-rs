@@ -71,7 +71,7 @@ pub(crate) async fn getlog_handler(
             async move {
                 match tokio::fs::File::open(&file_path).await {
                     Ok(file) => {
-                        if file_path.ends_with(".log3") {
+                        if file_path.to_string_lossy().ends_with(".log3") {
                             JournalReaderLog3::new(BufReader::new(file.compat())).next().await.is_some()
                         } else {
                             JournalReaderLog2::new(BufReader::new(file.compat())).next().await.is_some()
@@ -120,7 +120,13 @@ pub(crate) async fn getlog_handler(
             tokio::fs::File::open(&file_path)
                 .await
                 .map_err(|err| format!("Cannot open file {file_path} in call to getLog: {err}", file_path = file_path.to_string_lossy()))
-                .map(|file| JournalReaderLog2::new(BufReader::new(file.compat())))
+                .map(|file|
+                    if file_path.to_string_lossy().ends_with(".log3") {
+                        Box::pin(JournalReaderLog3::new(BufReader::new(file.compat()))) as JournalEntryStream
+                    } else {
+                        Box::pin(JournalReaderLog2::new(BufReader::new(file.compat()))) as JournalEntryStream
+                    }
+                )
         })
         .try_collect::<Vec<_>>()
         .await
@@ -138,7 +144,7 @@ pub(crate) async fn getlog_handler(
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot get dirtylog: {err}")))?;
 
-    Ok(getlog_impl(site_path, file_readers.into_iter().map(|s| Box::pin(s) as _), dirtylog, params).await)
+    Ok(getlog_impl(site_path, file_readers, dirtylog, params).await)
 }
 
 pub(crate) type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;

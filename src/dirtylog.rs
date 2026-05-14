@@ -142,7 +142,7 @@ pub(crate) async fn dirtylog_task(
                             async move {
                                 match tokio::fs::File::open(&file_path).await {
                                     Ok(file) => {
-                                        if file_path.ends_with(".log3") {
+                                        if file_path.to_string_lossy().ends_with(".log3") {
                                             let reader = JournalReaderLog3::new(BufReader::new(file.compat()));
                                             reader.fold(None, async |_, entry| entry.ok()).await
                                         } else {
