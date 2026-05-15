@@ -28,7 +28,7 @@ pub(crate) async fn collect_log_files(dir: impl AsRef<Path>) -> io::Result<Vec<L
 
             if metadata.is_dir() {
                 dirs.push(path);
-            } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "log2" || ext == "log3")
+            } else if metadata.is_file() && path.to_str().is_some_and(|p| p.ends_with(".log2") || p.ends_with(".log3"))
                 && let (Some(file_name), Some(parent)) = (path.file_name(), path.parent()) {
                     result.push(LogFile {
                         name: file_name.into(),
@@ -47,7 +47,7 @@ pub(crate) async fn cleanup_log_files(dir: impl AsRef<Path>, size_limit: u64, da
     let files = collect_log_files(dir).await?;
     let mut files_size: u64 = files.iter().map(|f| f.size).sum();
 
-    info!("log2 files size: {files_size}, size limit: {size_limit}, days_to_keep: {days_to_keep}");
+    info!("log files size: {files_size}, size limit: {size_limit}, days_to_keep: {days_to_keep}");
     if files_size < size_limit {
         info!("Size limit not hit, nothing to cleanup");
         return Ok(());
@@ -76,7 +76,7 @@ pub(crate) async fn cleanup_log_files(dir: impl AsRef<Path>, size_limit: u64, da
         deletable_files.extend(group
             .into_iter()
             .skip(2)
-            .filter(|log_file| if log_file.name.ends_with(".log2") {
+            .filter(|log_file| if log_file.name.to_string_lossy().ends_with(".log2") {
                 log_file.name < oldest_log2_file_to_keep
             } else {
                 log_file.name < oldest_log3_file_to_keep

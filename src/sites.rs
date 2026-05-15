@@ -316,6 +316,7 @@ pub(crate) struct ParsedNotification {
     pub(crate) signal: String,
     pub(crate) source: String,
     pub(crate) param: RpcValue,
+    pub(crate) user_id: Option<String>,
 }
 
 pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap<String, SiteInfo>) -> Option<ParsedNotification> {
@@ -324,12 +325,14 @@ pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap
     let signal = msg.method().unwrap_or_default().to_string();
     let source = msg.source().unwrap_or_default().to_string();
     let param = msg.param().unwrap_or_default();
+    let user_id = msg.user_id().map(String::from);
     Some(ParsedNotification {
         site_path: site_path.to_string(),
         property_path: property_path.to_string(),
         signal,
         source,
         param: param.clone(),
+        user_id,
     })
 }
 
@@ -703,7 +706,7 @@ mod tests {
     use futures::{channel::mpsc::{UnboundedReceiver, UnboundedSender}, StreamExt};
     use shvclient::{clientapi::ClientCommand, ClientEvent};
     use shvproto::RpcValue;
-    use shvrpc::rpcframe::RpcFrame;
+    use shvrpc::{RpcMessageMetaTags, rpcframe::RpcFrame};
 
     use crate::{dirtylog::DirtyLogCommand, sites::{sites_task, SiteInfo}, sync::SyncCommand, util::{init_logger, testing::{run_test, ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep}, DedupReceiver}};
 
@@ -724,16 +727,18 @@ mod tests {
                 signal: "chng".into(),
                 source: String::default(),
                 param: 20.into(),
+                user_id: None,
             })
         );
         assert_eq!(
-            super::parse_notification(&shvrpc::RpcMessage::new_signal("shv/foo/site2/none", "chng"), &sites_info),
+            super::parse_notification(shvrpc::RpcMessage::new_signal("shv/foo/site2/none", "chng").set_user_id("user"), &sites_info),
             Some(super::ParsedNotification {
                 site_path: "foo/site2".into(),
                 property_path: "none".into(),
                 signal: "chng".into(),
                 source: String::default(),
                 param: RpcValue::null(),
+                user_id: Some("user".into()),
             })
         );
     }

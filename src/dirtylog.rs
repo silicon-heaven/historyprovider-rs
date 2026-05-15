@@ -142,7 +142,7 @@ pub(crate) async fn dirtylog_task(
                             async move {
                                 match tokio::fs::File::open(&file_path).await {
                                     Ok(file) => {
-                                        if file_path.ends_with(".log3") {
+                                        if file_path.to_string_lossy().ends_with(".log3") {
                                             let reader = JournalReaderLog3::new(BufReader::new(file.compat()));
                                             reader.fold(None, async |_, entry| entry.ok()).await
                                         } else {
@@ -282,7 +282,7 @@ pub(crate) async fn dirtylog_task(
                 DirtyLogCommand::Get { site, response_tx } => {
                     request_scheduler.schedule_new(site, Request::Get(response_tx));
                 }
-                DirtyLogCommand::ProcessNotification(ParsedNotification { site_path, property_path, signal, source, param }) => {
+                DirtyLogCommand::ProcessNotification(ParsedNotification { site_path, property_path, signal, source, param, user_id }) => {
                     let data_change = DataChange::from(param);
                     let journal_entry = JournalEntry {
                         epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
@@ -292,7 +292,7 @@ pub(crate) async fn dirtylog_task(
                         value: data_change.value,
                         access_level: AccessLevel::Read as _,
                         short_time: data_change.short_time.unwrap_or(-1),
-                        user_id: shvproto::RpcValue::null(),
+                        user_id: user_id.unwrap_or_default(),
                         repeat: !data_change.value_flags.contains(ValueFlags::SPONTANEOUS),
                         provisional: true,
                     };
@@ -377,7 +377,7 @@ mod tests {
             TestCase {
                 name: "ProcessNotification: journaldir doesn't exist",
                 steps: &[
-                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), source: "get".into(), param: 20.into() })))
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), source: "get".into(), param: 20.into(), user_id: None })))
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
@@ -390,7 +390,9 @@ mod tests {
                         date_time: Some(DateTime::from_iso_str("2022-07-07T00:00:00.000").expect("DateTime must work")),
                         value_flags: ValueFlags::empty(),
                         short_time: None,
-                    }.into() }))),
+                    }.into(),
+                    user_id: None,
+                    }))),
                 ],
                 starting_files: vec![("site1/2022-07-07T18-06-15-000.log2", "")],
                 expected_file_paths: vec![
@@ -398,6 +400,27 @@ mod tests {
                     (
                         "site1/dirtylog",
                         "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\t\n"
+                    )
+                ],
+            },
+            TestCase {
+                name: "ProcessNotification: notifications with user_id get written to disk",
+                steps: &[
+                    Box::new(TestDirtyLogCommand(DirtyLogCommand::ProcessNotification(crate::sites::ParsedNotification { site_path: "site1".into(), property_path: "some_value_node".into(), signal: "chng".into(), source: "get".into(), param: DataChange{
+                        value: 20.into(),
+                        date_time: Some(DateTime::from_iso_str("2022-07-07T00:00:00.000").expect("DateTime must work")),
+                        value_flags: ValueFlags::empty(),
+                        short_time: None,
+                    }.into(),
+                    user_id: Some("user".into()),
+                    }))),
+                ],
+                starting_files: vec![("site1/2022-07-07T18-06-15-000.log2", "")],
+                expected_file_paths: vec![
+                    ("site1/2022-07-07T18-06-15-000.log2", ""),
+                    (
+                        "site1/dirtylog",
+                        "2022-07-07T00:00:00.000Z\t\tsome_value_node\t20\t\tchng\t4\tuser\n"
                     )
                 ],
             },
@@ -440,7 +463,7 @@ mod tests {
                             value: 20.into(),
                             access_level: 8,
                             short_time: -1,
-                            user_id: shvproto::RpcValue::null(),
+                            user_id: String::default(),
                             repeat: true,
                             provisional: true
                         }],
@@ -464,7 +487,7 @@ mod tests {
                             value: 20.into(),
                             access_level: 8,
                             short_time: -1,
-                            user_id: shvproto::RpcValue::null(),
+                            user_id: String::default(),
                             repeat: true,
                             provisional: true
                         }],
