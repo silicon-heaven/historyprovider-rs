@@ -222,6 +222,7 @@ async fn set_online_status(
 
     const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
 
+    drop(online_states);
     let mut alarms = app_state.alarms.write().await;
     let Some(site_alarms) = alarms.get_mut(site) else {
         return;
