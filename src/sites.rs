@@ -222,6 +222,7 @@ async fn set_online_status(
 
     const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
 
+    drop(online_states);
     let mut alarms = app_state.alarms.write().await;
     let Some(site_alarms) = alarms.get_mut(site) else {
         return;
@@ -536,7 +537,10 @@ pub(crate) async fn sites_task(
                         typeinfos: typeinfos.clone()
                     };
 
+                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+
                     let mut online_status_workers = Vec::new();
+
                     for (site, info) in sites_info.iter() {
                         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
@@ -549,20 +553,22 @@ pub(crate) async fn sites_task(
                         online_status_channels.insert(site.to_string(), tx);
                         online_status_workers.push(online_status_worker(site.clone(), rx, client_cmd_tx.clone(), app_state.clone()));
                     }
+
+                    let alarms = &mut *app_state.alarms.write().await;
+                    let state_alarms = &mut *app_state.state_alarms.write().await;
+
                     online_status_task = Some(tokio::spawn(async move {
                         debug!(target: "OnlineStatus", "online status task starts");
                         futures::future::join_all(online_status_workers).await;
                         debug!(target: "OnlineStatus", "online status task finish");
                     }));
-                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
                     let params = shvrpc::journalrw::GetLog2Params {
                         since: shvrpc::journalrw::GetLog2Since::LastEntry,
                         with_snapshot: true,
                         ..Default::default()
                     };
-                    let mut alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
-                    let mut state_alarms = BTreeMap::<String, Vec<AlarmWithTimestamp>>::new();
+
                     for site_path in sites_info.keys() {
                         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
@@ -589,12 +595,9 @@ pub(crate) async fn sites_task(
                             }
                         };
 
-                        impl_update_alarms(&mut alarms, collect_alarms);
-                        impl_update_alarms(&mut state_alarms, collect_state_alarms);
+                        impl_update_alarms(alarms, collect_alarms);
+                        impl_update_alarms(state_alarms, collect_state_alarms);
                     }
-
-                    *app_state.alarms.write().await = alarms;
-                    *app_state.state_alarms.write().await = state_alarms;
 
                     periodic_sync_tx
                         .unbounded_send(PeriodicSyncCommand::Enable)
