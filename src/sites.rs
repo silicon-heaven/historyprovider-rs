@@ -537,7 +537,10 @@ pub(crate) async fn sites_task(
                         typeinfos: typeinfos.clone()
                     };
 
+                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+
                     let mut online_status_workers = Vec::new();
+
                     for (site, info) in sites_info.iter() {
                         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
@@ -555,7 +558,6 @@ pub(crate) async fn sites_task(
                         futures::future::join_all(online_status_workers).await;
                         debug!(target: "OnlineStatus", "online status task finish");
                     }));
-                    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
                     let params = shvrpc::journalrw::GetLog2Params {
                         since: shvrpc::journalrw::GetLog2Since::LastEntry,
