@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use async_compression::tokio::write::GzipEncoder;
+use futures::channel::mpsc::UnboundedSender;
 use futures::{StreamExt, TryStreamExt};
 use log::error;
 use sha1::Digest;
@@ -48,6 +50,7 @@ const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, s
 const METH_VERSION: &str = "version";
 const METH_UPTIME: &str = "uptime";
 const METH_RELOAD_SITES: &str = "reloadSites";
+const METH_LAST_SITES_LOADED: &str = "lastSitesLoaded";
 
 // File nodes methods
 const METH_HASH: &str = "hash";
@@ -576,7 +579,9 @@ async fn ls_empty() -> Result<Vec<String>, RpcError> {
 pub(crate) async fn request_handler(
     rq: RpcMessage,
     client_cmd_tx: ClientCommandSender,
+    sites_cmd_tx: UnboundedSender<crate::sites::SitesCommand>,
     app_state: Arc<State>,
+
 ) -> RequestHandlerResult
 {
     let path = rq.shv_path().map_or_else(String::new, String::from);
@@ -612,6 +617,7 @@ pub(crate) async fn request_handler(
                 MetaMethod::new_static(METH_VERSION, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "String", &[], ""),
                 MetaMethod::new_static(METH_UPTIME, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "String", &[], ""),
                 MetaMethod::new_static(METH_RELOAD_SITES, shvrpc::metamethod::Flags::None, AccessLevel::Write, "Null", "Bool", &[], ""),
+                MetaMethod::new_static(METH_LAST_SITES_LOADED, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "DateTime", &[], ""),
                 META_METHOD_ALARM_LOG,
                 // TODO: All root node methods:
                 // appName
@@ -646,6 +652,16 @@ pub(crate) async fn request_handler(
                         let params = AlarmLogParams::try_from(param)
                             .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmLog parameters: {err}")))?;
                         Ok(alarmlog_impl(&path, &params, app_state).await)
+                    }),
+                    METH_RELOAD_SITES => m.resolve(METHODS, async move || {
+                        if app_state.sites_reload_in_progress.load(Ordering::SeqCst) {
+                            return Err(RpcError::new(RpcErrorCode::MethodCallException, "Sites reload already in progress"));
+                        }
+                        sites_cmd_tx.unbounded_send(crate::sites::SitesCommand::ReloadSites).map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Couldn't reload sites: {err}")))?;
+                        Ok("Sites queued for a reload. This might take a while.".to_string())
+                    }),
+                    METH_LAST_SITES_LOADED => m.resolve(METHODS, async move || {
+                        Ok(app_state.last_sites_loaded.read().await.map(|last_sites_loaded| humantime::format_duration(std::time::Duration::from_secs(last_sites_loaded.elapsed().as_secs())).to_string()))
                     }),
                     _ => err_unresolved_request(),
                 }
