@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot::Sender as OneshotSender;
@@ -100,6 +100,25 @@ pub(crate) async fn dirtylog_task(
                             return;
                         }
                     };
+                if let Ok(metadata) = dirty_log_file.metadata().await {
+                    let size = metadata.len();
+
+                    static DIRTY_LOG_SIZE_MAX: OnceLock<u64> = OnceLock::new();
+                    let max_size = *DIRTY_LOG_SIZE_MAX.get_or_init(|| {
+                        std::env::var("DIRTY_LOG_SIZE_MAX")
+                            .ok()
+                            .and_then(|val| val.parse::<u64>().ok())
+                            .unwrap_or(100 * 1024 * 1024)
+                    });
+
+                    if size > max_size {
+                        log::trace!(
+                            "Dirty log {path} max size exceeded ({size} > {max_size}), dropping journal entry {journal_entry:?}",
+                            path = dirty_log_path.display()
+                        );
+                        return;
+                    }
+                }
                 let mut writer = JournalWriterLog2::new(dirty_log_file.compat());
                 writer.append(&journal_entry)
                     .await
