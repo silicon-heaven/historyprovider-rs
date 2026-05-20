@@ -253,6 +253,11 @@ async fn get_files_to_sync(
         .collect()
 }
 
+enum ShouldTrim {
+    Yes,
+    No,
+}
+
 async fn sync_site_by_download(
     site_path: impl AsRef<str>,
     remote_journal_path: impl AsRef<str>,
@@ -261,7 +266,7 @@ async fn sync_site_by_download(
     journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
     file_list: Option<&[LsFilesEntry]>,
-) -> Result<(), String>
+) -> Result<ShouldTrim, String>
 {
     let (site_path, remote_journal_path) = (site_path.as_ref(), remote_journal_path.as_ref());
     let local_journal_path = Path::new(journal_dir.as_ref()).join(site_path);
@@ -369,32 +374,34 @@ async fn sync_site_by_download(
         .collect::<Vec<_>>()
         .await;
 
-    if let Some((first_file, _, _)) = files_to_sync.first() {
-        let read_api = RpcCall::new(&join_path!(remote_journal_path, first_file), METH_DIR)
-            .param("sha1")
-            .exec(&client_cmd_tx)
-            .await
-            .map(|v: RpcValue| if v.is_imap() { ReadApi::List } else { ReadApi::Map })
-            .map_err(|e| format!("Cannot get read param API for {remote_journal_path}: {e}"))?;
+    let Some((first_file, _, _)) = files_to_sync.first() else {
+        return Ok(ShouldTrim::No);
+    };
 
-        // Sync from the remote to the sync directory
-        for (file_name, sync_offset, file_size) in files_to_sync {
-            sync_file(
-                client_cmd_tx.clone(),
-                join_path!(remote_journal_path, &file_name),
-                local_journal_path.join(&file_name),
-                download_chunk_size,
-                sync_offset,
-                file_size,
-                read_api,
-                sync_logger.clone(),
-            )
-            .await
-            .map_err(to_string)?;
-        }
+    let read_api = RpcCall::new(&join_path!(remote_journal_path, first_file), METH_DIR)
+        .param("sha1")
+        .exec(&client_cmd_tx)
+        .await
+        .map(|v: RpcValue| if v.is_imap() { ReadApi::List } else { ReadApi::Map })
+        .map_err(|e| format!("Cannot get read param API for {remote_journal_path}: {e}"))?;
+
+    // Sync from the remote to the sync directory
+    for (file_name, sync_offset, file_size) in files_to_sync {
+        sync_file(
+            client_cmd_tx.clone(),
+            join_path!(remote_journal_path, &file_name),
+            local_journal_path.join(&file_name),
+            download_chunk_size,
+            sync_offset,
+            file_size,
+            read_api,
+            sync_logger.clone(),
+        )
+        .await
+        .map_err(to_string)?;
     }
 
-    Ok(())
+    Ok(ShouldTrim::Yes)
 }
 
 #[derive(Copy,Clone)]
@@ -504,7 +511,7 @@ async fn sync_site_legacy(
     client_cmd_tx: ClientCommandSender,
     journal_dir: impl AsRef<str>,
     sync_logger: impl SyncLogger,
-) -> Result<(), String>
+) -> Result<ShouldTrim, String>
 {
     let (site_path, getlog_path) = (site_path.as_ref(), getlog_path.as_ref());
     let local_journal_path = Path::new(journal_dir.as_ref()).join(site_path);
@@ -644,6 +651,8 @@ async fn sync_site_legacy(
         Ok(())
     }
 
+    let mut should_trim = ShouldTrim::No;
+
     loop {
         sync_logger.log(
             log::Level::Info,
@@ -687,6 +696,8 @@ async fn sync_site_legacy(
             break;
         };
 
+        should_trim = ShouldTrim::Yes;
+
         log_file_entries.append(&mut log_entries);
 
         getlog_params.since = GetLog2Since::DateTime(shvproto::DateTime::from_epoch_msec(last_entry_ms));
@@ -706,7 +717,7 @@ async fn sync_site_legacy(
             getlog_params.with_snapshot = false;
         }
     }
-    Ok(())
+    Ok(should_trim)
 }
 
 pub(crate) async fn sync_task(
@@ -739,11 +750,21 @@ pub(crate) async fn sync_task(
     let days_to_keep = app_state.config.days_to_keep;
 
     while let Some(cmd) = sync_cmd_rx.next().await {
-        fn send_trim(site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>) {
-            if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
-                let err_msg = e.to_string();
-                let command = e.into_inner();
-                log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+        fn send_trim(sync_result: Result<ShouldTrim, String>, site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>, sync_logger: &SyncSiteLogger) {
+            match sync_result {
+                Ok(ShouldTrim::Yes) => {
+                    if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
+                        let err_msg = e.to_string();
+                        let command = e.into_inner();
+                        log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+                    }
+                },
+                Ok(ShouldTrim::No) => {
+                    sync_logger.log(log::Level::Info, format!("Not trimming {site_path}, because no changes were made"));
+                },
+                Err(err) => {
+                    sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
+                },
             }
         }
 
@@ -804,11 +825,8 @@ pub(crate) async fn sync_task(
                                         sync_logger.clone(),
                                         Some(&file_list),
                                     ).await;
-                                    if let Err(err) = sync_result {
-                                        sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                                    }
                                     sync_logger.log(log::Level::Info, "syncing done");
-                                    send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
+                                    send_trim(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -826,11 +844,8 @@ pub(crate) async fn sync_task(
                                     &app_state.config.journal_dir,
                                     sync_logger.clone()
                                 ).await;
-                                if let Err(err) = sync_result {
-                                    sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                                }
                                 sync_logger.log(log::Level::Info, "syncing done");
-                                send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
+                                send_trim(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                                 drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -876,10 +891,7 @@ pub(crate) async fn sync_task(
                                 sync_logger.clone(),
                                 None,
                             ).await;
-                            if let Err(err) = sync_result {
-                                sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                            }
-                            send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
+                            send_trim(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Legacy { getlog_path } => {
@@ -894,10 +906,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone()
                             ).await;
-                            if let Err(err) = sync_result {
-                                sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-                            }
-                            send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
+                            send_trim(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::PushLog => {
