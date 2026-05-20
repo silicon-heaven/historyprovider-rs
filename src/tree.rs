@@ -14,6 +14,7 @@ use shvclient::clientnode::StaticNode;
 use shvclient::shvproto::RpcValue;
 use shvclient::ClientCommandSender;
 use shvrpc::metamethod::{AccessLevel, MetaMethod};
+use shvrpc::rpc::ShvRI;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::util::children_on_path;
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
@@ -478,6 +479,25 @@ async fn pushlog_handler(
     }
 
     Ok(pushlog_impl(log_reader, site_path, app_state).await.into())
+}
+
+#[derive(shvproto::FromRpcValue)]
+pub struct GetLog3Params {
+    pub since: Option<shvproto::DateTime>,
+    pub until: Option<shvproto::DateTime>,
+    pub count: Option<i64>,
+    pub path_pattern: Option<ShvRI>,
+}
+
+async fn getlog3_handler_rq(
+    site_path: &str,
+    param: &RpcValue,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let params = GetLog3Params::try_from(param)
+        .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
+
+    Ok(().into())
 }
 
 async fn getlog_handler_rq(
