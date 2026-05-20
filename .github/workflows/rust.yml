@@ -19,6 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
         target:
           - aarch64-unknown-linux-gnu
@@ -27,10 +28,13 @@ jobs:
         include:
           - target: aarch64-unknown-linux-gnu
             filename_suffix: arm64
+            features: --all-features
           - target: armv7-unknown-linux-gnueabihf
             filename_suffix: armv7
+            features: --no-default-features
           - target: x86_64-unknown-linux-gnu
             filename_suffix: amd64
+            features: --all-features
 
     steps:
       - uses: actions/checkout@v7
@@ -41,9 +45,9 @@ jobs:
           cross-args: --target ${{matrix.target}}
 
       - name: Clippy
-        run: cargo cross clippy --release --all-targets --all-features --target ${{matrix.target}}
+        run: cargo cross clippy --release --all-targets ${{matrix.features}} --target ${{matrix.target}}
       - name: Build
-        run: cargo cross build --release --all-features --target ${{matrix.target}}
+        run: cargo cross build --release ${{matrix.features}} --target ${{matrix.target}}
       - name: Run tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo cross test --release --all-features --target ${{matrix.target}}

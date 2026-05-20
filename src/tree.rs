@@ -16,7 +16,7 @@ use shvclient::ClientCommandSender;
 use shvrpc::metamethod::{AccessLevel, MetaMethod};
 use shvrpc::rpc::ShvRI;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
-use shvrpc::util::children_on_path;
+use shvrpc::util::{children_on_path, find_longest_path_prefix};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
 use shvrpc::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -28,7 +28,8 @@ use crate::alarmlog::{alarmlog_impl, AlarmLogParams};
 use crate::cleanup::collect_log_files;
 use crate::getlog::getlog_handler;
 use crate::pushlog::pushlog_impl;
-use crate::sites::SubHpInfo;
+use crate::records;
+use crate::sites::{SitesData, SubHpInfo};
 use crate::{AlarmWithTimestamp, HpConfig, State};
 
 // History site node methods
@@ -46,6 +47,11 @@ const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TA
 const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("statealarmmod", Some("Null"))], "");
 const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map", "List", &[], "");
 const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Write, "RpcValue", "RpcValue", &[], "");
+
+const METH_FETCH: &str = "fetch";
+const META_METHOD_FETCH: MetaMethod = MetaMethod::new_static(METH_FETCH, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Service, "[i:offset,i(0,):count]", "!historyRecords", &[], "");
+const METH_SPAN: &str = "span";
+const META_METHOD_SPAN: MetaMethod = MetaMethod::new_static(METH_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "", "[i:smallest,i:biggest,i(1,):span]", &[], "");
 
 // Root node methods
 const METH_VERSION: &str = "version";
@@ -85,6 +91,9 @@ enum NodeType {
     ValueCache,
     ShvJournal,
     History,
+    History3,
+    Records,
+    RecordsNode,
 }
 
 impl NodeType {
@@ -94,6 +103,9 @@ impl NodeType {
             ".app" => Self::DotApp,
             "_valuecache" => Self::ValueCache,
             path if path.starts_with("_shvjournal") => Self::ShvJournal,
+            path if path.starts_with(".history") && path.ends_with(".records") => Self::Records,
+            path if path.starts_with(".history") && path.contains("/.records/") => Self::RecordsNode,
+            path if path.starts_with(".history") => Self::History3,
             _ => Self::History,
         }
     }
@@ -497,7 +509,54 @@ async fn getlog3_handler_rq(
     let params = GetLog3Params::try_from(param)
         .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
 
-    Ok(().into())
+    let (site_path, path_prefix, record_names) = {
+        let sites_data = app_state.sites_data.read().await;
+        records_site_for_path(&sites_data, site_path)
+            .ok_or_else(|| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")))?
+    };
+    let now = shvproto::DateTime::now();
+    let since = params.since.unwrap_or(now);
+    let until = params.until.unwrap_or(now);
+    let records = records::getlog_records(
+        &app_state.config.journal_dir,
+        &site_path,
+        &record_names,
+        &path_prefix,
+        since,
+        until,
+        params.count,
+        params.path_pattern.as_ref(),
+    )
+    .await
+    .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get records log: {err}")))?;
+
+    Ok(records.into())
+}
+
+fn records_site_for_path(sites_data: &SitesData, path: &str) -> Option<(String, String, Vec<String>)> {
+    let (site_path, path_prefix) = find_longest_path_prefix(sites_data.sites_info.as_ref(), path)?;
+    let site_info = sites_data.sites_info.get(site_path)?;
+    match sites_data.sub_hps.get(&site_info.sub_hp)? {
+        SubHpInfo::Records { records } if !records.is_empty() => Some((site_path.to_string(), path_prefix.to_string(), records.clone())),
+        _ => None,
+    }
+}
+
+fn records_site_paths(sites_data: &SitesData) -> BTreeMap<String, ()> {
+    sites_data.sites_info.iter()
+        .filter(|(_, site_info)| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| match sub_hp {
+            SubHpInfo::Records { records } => !records.is_empty(),
+            _ => false,
+        }))
+        .map(|(site_path, _)| (site_path.clone(), ()))
+        .collect()
+}
+
+fn has_records_leaf(sites_data: &SitesData) -> bool {
+    sites_data.sites_info.values().any(|site_info| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| match sub_hp {
+        SubHpInfo::Records { records } => !records.is_empty(),
+        _ => false,
+    }))
 }
 
 async fn getlog_handler_rq(
@@ -584,6 +643,40 @@ async fn alarmlog_handler(
     Ok(alarmlog_impl(path, &params, app_state).await.into())
 }
 
+struct FetchParam {
+    offset: i64,
+    count: i64,
+}
+
+async fn fetch_handler(
+    path: &str,
+    record_name: &str,
+    param: FetchParam,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    if param.offset < 0 || param.count < 0 {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, "Fetch offset and count must be non-negative"));
+    }
+
+    let db_path = records::db_path(&app_state.config.journal_dir, path, record_name);
+    let records = records::fetch_records(db_path, param.offset, param.count)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot fetch records: {err}")))?;
+    Ok(records.into())
+}
+
+async fn span_handler(
+    path: &str,
+    record_name: &str,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let db_path = records::db_path(&app_state.config.journal_dir, path, record_name);
+    let (smallest, biggest, span) = records::span_records(db_path)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get records span: {err}")))?;
+    Ok(shvproto::make_list!(smallest, biggest, span).into())
+}
+
 fn rpc_error_not_implemented() -> RpcError {
     RpcError::new(RpcErrorCode::NotImplemented, "Method is not implemented")
 }
@@ -658,7 +751,11 @@ pub(crate) async fn request_handler(
                             "_valuecache".to_string()
                         ];
                         const ROOT_PATH: &str = "";
-                        nodes.append(&mut children_on_path(&app_state.sites_data.read().await.sites_info, ROOT_PATH).unwrap_or_default());
+                        let sites_data = app_state.sites_data.read().await;
+                        if has_records_leaf(&sites_data) {
+                            nodes.push(".history".to_string());
+                        }
+                        nodes.append(&mut children_on_path(&sites_data.sites_info, ROOT_PATH).unwrap_or_default());
                         Ok(nodes)
                     };
                     ls.resolve(METHODS, ls_handler)
@@ -734,5 +831,184 @@ pub(crate) async fn request_handler(
                 },
             }
         }
+        NodeType::History3 => {
+            let path2 = path.strip_prefix(".history").expect("NodeType::History must have the .history prefix");
+            let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
+            let (methods, is_site_path, records_site) = {
+                let sites_data = app_state.sites_data.read().await;
+                let records_site_paths = records_site_paths(&sites_data);
+                let children = children_on_path(&records_site_paths, &path);
+                let records_site = records_site_for_path(&sites_data, &path);
+                if children.is_none() && records_site.is_none() {
+                    return err_unresolved_request();
+                }
+                let methods = if records_site.is_some() {
+                    const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG];
+                    METHODS
+                } else {
+                    const METHODS: &[MetaMethod] = &[];
+                    METHODS
+                };
+                let is_site_path = children.as_ref().is_some_and(Vec::is_empty);
+                (methods, is_site_path, records_site)
+            };
+            match method {
+                Method::Dir(dir) => dir.resolve(methods),
+                Method::Ls(ls) => {
+                    ls.resolve(methods, async move || {
+                        let sites_data = app_state.sites_data.read().await;
+                        let records_site_paths = records_site_paths(&sites_data);
+                        let mut children = children_on_path(&records_site_paths, &path).unwrap_or_default();
+                        if is_site_path {
+                            children.push(".records".into());
+                        }
+                        if let Some((site_path, path_prefix, record_names)) = records_site {
+                            children.extend(records::children_for_path(
+                                &app_state.config.journal_dir,
+                                &site_path,
+                                &record_names,
+                                &path_prefix,
+                            ).await.map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot list records children: {err}")))?);
+                        }
+                        children.sort();
+                        children.dedup();
+                        Ok(children)
+                    })
+                }
+                Method::Other(m) => match m.method() {
+                    METH_GET_LOG if records_site.is_some() => m.resolve(methods, async move || { getlog3_handler_rq(&path, &param, app_state).await }),
+                    _ => err_unresolved_request(),
+                },
+            }
+        },
+        NodeType::Records => {
+            let path2 = path.strip_prefix(".history").expect("NodeType::Records must have the .history prefix");
+            let path2 = path2.strip_suffix("/.records").expect("NodeType::Records must have the .records suffix");
+            let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
+            let records = {
+                let sites_data = app_state.sites_data.read().await;
+                let Some(records) = sites_data.sites_info.get(&path)
+                    .and_then(|site_info| sites_data.sub_hps.get(&site_info.sub_hp))
+                    .and_then(|sub_hp| match sub_hp {
+                        SubHpInfo::Records { records } => Some(records.clone()),
+                        _ => None,
+                    }) else {
+                        return err_unresolved_request();
+                    };
+                if records.is_empty() {
+                    return err_unresolved_request();
+                }
+                records
+            };
+            const METHODS: &[MetaMethod] = &[];
+            match method {
+                Method::Dir(dir) => dir.resolve(METHODS),
+                Method::Ls(ls) => ls.resolve(METHODS, async move || {
+                    Ok(records)
+                }),
+                Method::Other(_) => err_unresolved_request(),
+            }
+        }
+        NodeType::RecordsNode => {
+            let path2 = path.strip_prefix(".history").expect("NodeType::Records must have the .history prefix");
+            let path2 = path2.strip_prefix("/").unwrap_or(path2);
+            let Some((path, record_name)) = path2.split_once("/.records/") else {
+                return err_unresolved_request();
+            };
+            let path = path.to_string();
+            let record_name = record_name.to_string();
+            let methods = {
+                let sites_data = app_state.sites_data.read().await;
+                children_on_path(&sites_data.sites_info, &path).ok_or(UnresolvedRequest)?;
+                let record_exists = sites_data.sites_info.get(&path)
+                    .and_then(|site_info| sites_data.sub_hps.get(&site_info.sub_hp))
+                    .is_some_and(|sub_hp| match sub_hp {
+                        SubHpInfo::Records { records } => records.iter().any(|record| record == &record_name),
+                        _ => false,
+                    });
+                if !record_exists {
+                    return err_unresolved_request();
+                }
+                const METHODS: &[MetaMethod] = &[META_METHOD_FETCH, META_METHOD_SPAN];
+                METHODS
+            };
+            match method {
+                Method::Dir(dir) => dir.resolve(methods),
+                Method::Ls(ls) => {
+                    ls.resolve(methods, async move || {
+                        Ok(vec![])
+                    })
+                }
+                Method::Other(m) => match m.method() {
+                    METH_FETCH => m.resolve(methods, async move || {
+                        let (offset, count) = <(i64, i64)>::try_from(param)
+                            .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong fetch parameters: {err}")))?;
+
+                        fetch_handler(&path, &record_name, FetchParam { offset, count }, app_state).await
+                    }),
+                    METH_SPAN => m.resolve(methods, async move || {
+                        span_handler(&path, &record_name, app_state).await
+                    }),
+                    _ => err_unresolved_request(),
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use crate::sites::{SiteInfo, SitesData, SubHpInfo};
+
+    fn site_info(sub_hp: &str) -> SiteInfo {
+        SiteInfo {
+            name: "site".to_string(),
+            site_type: "type".to_string(),
+            sub_hp: sub_hp.to_string(),
+        }
+    }
+
+    #[test]
+    fn history_subtree_requires_records_leaf_with_nodes() {
+        let sites_data = SitesData {
+            sites_info: Arc::new(BTreeMap::from([
+                ("normal".to_string(), site_info("normal")),
+                ("empty_records".to_string(), site_info("empty_records")),
+            ])),
+            sub_hps: Arc::new(BTreeMap::from([
+                ("normal".to_string(), SubHpInfo::Normal {
+                    sync_path: ".app/history".to_string(),
+                    download_chunk_size: 1,
+                }),
+                ("empty_records".to_string(), SubHpInfo::Records {
+                    records: vec![],
+                }),
+            ])),
+            typeinfos: Default::default(),
+        };
+
+        assert!(!super::has_records_leaf(&sites_data));
+        assert!(super::records_site_paths(&sites_data).is_empty());
+    }
+
+    #[test]
+    fn history_subtree_uses_records_leaf_with_nodes() {
+        let sites_data = SitesData {
+            sites_info: Arc::new(BTreeMap::from([
+                ("records".to_string(), site_info("records")),
+            ])),
+            sub_hps: Arc::new(BTreeMap::from([
+                ("records".to_string(), SubHpInfo::Records {
+                    records: vec!["maintenance".to_string()],
+                }),
+            ])),
+            typeinfos: Default::default(),
+        };
+
+        assert!(super::has_records_leaf(&sites_data));
+        assert_eq!(super::records_site_paths(&sites_data).keys().cloned().collect::<Vec<_>>(), vec!["records".to_string()]);
     }
 }

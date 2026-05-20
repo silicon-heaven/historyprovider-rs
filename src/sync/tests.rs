@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use crate::dirtylog::DirtyLogCommand;
+use crate::record::IMap;
+use crate::sites::{SiteInfo, SitesData, SubHpInfo};
 use crate::util::{dedup_channel, testing::*};
-use crate::{sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}};
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use crate::{State, records, sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}};
+use futures::{StreamExt, channel::mpsc::{UnboundedReceiver, UnboundedSender}};
 use log::debug;
 use shvclient::clientapi::ClientCommand;
 use shvproto::{make_list, make_map, RpcValue};
@@ -13,6 +16,7 @@ use shvrpc::rpcmessage::RpcError;
 struct SyncTaskTestState {
     dedup_sender: DedupSender<SyncCommand>,
     _dirtylog_cmd_rx: UnboundedReceiver<DirtyLogCommand>,
+    state: Arc<State>,
 }
 
 #[async_trait::async_trait]
@@ -31,6 +35,49 @@ struct TestCase<'a> {
     expected_file_paths: Vec<(&'static str, &'a str)>,
 }
 
+struct UseRecordsSite;
+
+#[async_trait::async_trait]
+impl TestStep<SyncTaskTestState> for UseRecordsSite {
+    async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
+        *state.state.sites_data.write().await = SitesData {
+            sites_info: Arc::new(BTreeMap::from([
+                ("site1".to_string(), SiteInfo{
+                    name: "lol".into(),
+                    site_type: "Type".to_string(),
+                    sub_hp: "site1".to_owned(),
+                })
+            ])),
+            sub_hps: Arc::new(BTreeMap::from([
+                ("site1".to_string(), SubHpInfo::Records {
+                    records: vec!["maintenance".to_string()],
+                })
+            ])),
+            typeinfos: Default::default(),
+        };
+    }
+}
+
+struct ExpectRecordsDb {
+    record_name: &'static str,
+    expected: Vec<IMap>,
+}
+
+#[async_trait::async_trait]
+impl TestStep<SyncTaskTestState> for ExpectRecordsDb {
+    async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
+        let Some(DirtyLogCommand::Trim { site }) = state._dirtylog_cmd_rx.next().await else {
+            panic!("Expected dirtylog Trim command");
+        };
+        assert_eq!(site, "site1");
+        let db_path = records::db_path(&state.state.config.journal_dir, "site1", self.record_name);
+        assert_eq!(records::fetch_records(&db_path, 0, 10).await.unwrap(), self.expected);
+        let _ = tokio::fs::remove_file(&db_path).await;
+        let _ = tokio::fs::remove_file(format!("{}-wal", db_path.to_string_lossy())).await;
+        let _ = tokio::fs::remove_file(format!("{}-shm", db_path.to_string_lossy())).await;
+    }
+}
+
 #[tokio::test]
 async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
     init_logger();
@@ -42,12 +89,35 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
 ";
 
     let very_large_log_file: String = "2022-07-07T18:06:17.784Z\t809781\tzone1/system/sig/plcDisconnected\tfalse\t\tchng\t2\t\n".to_string().repeat(50000);
+    let records_timestamp = shvproto::DateTime::from_epoch_msec(1_700_000_000_000);
+    let records_record = IMap::from([
+        (0, 1.into()),
+        (1, records_timestamp.into()),
+        (2, "some/path".into()),
+        (5, 42.into()),
+        (9, 0.into()),
+    ]);
     let test_cases = [
         TestCase {
             name: "SyncSite: Remote and local - empty",
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(Vec::<RpcValue>::new().into()))),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![],
+        },
+        TestCase {
+            name: "SyncSite: records fetch",
+            steps: &[
+                Box::new(UseRecordsSite),
+                Box::new(SyncCommand::SyncSite("site1".to_string())),
+                Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
+                Box::new(ExpectRecordsDb {
+                    record_name: "maintenance",
+                    expected: vec![records_record.clone()],
+                }),
             ],
             starting_files: vec![],
             expected_file_paths: vec![],
@@ -205,6 +275,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 let task_state = SyncTaskTestState {
                     dedup_sender,
                     _dirtylog_cmd_rx: dirtylog_cmd_rx,
+                    state: state.clone(),
                 };
                 let sync_task = tokio::spawn(sync_task(ccs, cer, state, receiver));
                 (sync_task, task_state)
@@ -390,6 +461,7 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
                 let task_state = SyncTaskTestState {
                     dedup_sender,
                     _dirtylog_cmd_rx: dirtylog_cmd_rx,
+                    state: state.clone(),
                 };
                 let sync_task = tokio::spawn(sync_task(ccs, cer, state, receiver));
                 (sync_task, task_state)
