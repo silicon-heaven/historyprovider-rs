@@ -739,6 +739,14 @@ pub(crate) async fn sync_task(
     let days_to_keep = app_state.config.days_to_keep;
 
     while let Some(cmd) = sync_cmd_rx.next().await {
+        fn send_trim(site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>) {
+            if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
+                let err_msg = e.to_string();
+                let command = e.into_inner();
+                log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+            }
+        }
+
         match cmd {
             SyncCommand::SyncAll => {
                 log::info!("Sync logs start");
@@ -777,14 +785,6 @@ pub(crate) async fn sync_task(
                     let site_path = site_path.clone();
                     let app_state = app_state.clone();
                     let logger_tx = logger_tx.clone();
-
-                    fn send_trim(site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>) {
-                        if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
-                            let err_msg = e.to_string();
-                            let command = e.into_inner();
-                            log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
-                        }
-                    }
 
                     match sub_hp {
                         SubHpInfo::Normal { sync_path, download_chunk_size } => {
@@ -868,7 +868,7 @@ pub(crate) async fn sync_task(
                             let download_chunk_size = *download_chunk_size;
                             let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                             let sync_result = sync_site_by_download(
-                                site_path,
+                                site_path.clone(),
                                 remote_journal_path,
                                 download_chunk_size,
                                 client_cmd_tx,
@@ -879,6 +879,7 @@ pub(crate) async fn sync_task(
                             if let Err(err) = sync_result {
                                 sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
                             }
+                            send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Legacy { getlog_path } => {
@@ -887,7 +888,7 @@ pub(crate) async fn sync_task(
                             let remote_getlog_path = join_path!("shv", &site_info.sub_hp, getlog_path, site_suffix);
                             let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                             let sync_result = sync_site_legacy(
-                                site_path,
+                                site_path.clone(),
                                 remote_getlog_path,
                                 client_cmd_tx,
                                 &app_state.config.journal_dir,
@@ -896,16 +897,13 @@ pub(crate) async fn sync_task(
                             if let Err(err) = sync_result {
                                 sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
                             }
+                            send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::PushLog => {
                             // No op
                         }
                     }
-                    app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
-                        .unwrap_or_else(|e|
-                            panic!("Cannot send dirtylog Trim command for site {site}: {e}")
-                        );
                     match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                         Ok(_) => info!("Cleanup journal dir done"),
                         Err(err) => error!("Cleanup journal dir error: {err}"),
