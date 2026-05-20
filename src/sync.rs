@@ -777,6 +777,15 @@ pub(crate) async fn sync_task(
                     let site_path = site_path.clone();
                     let app_state = app_state.clone();
                     let logger_tx = logger_tx.clone();
+
+                    fn send_trim(site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>) {
+                        if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
+                            let err_msg = e.to_string();
+                            let command = e.into_inner();
+                            log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+                        }
+                    }
+
                     match sub_hp {
                         SubHpInfo::Normal { sync_path, download_chunk_size } => {
                             let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
@@ -787,7 +796,7 @@ pub(crate) async fn sync_task(
                             let sync_task = tokio::spawn(async move {
                                     let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                                     let sync_result = sync_site_by_download(
-                                        site_path,
+                                        site_path.clone(),
                                         remote_journal_path,
                                         download_chunk_size,
                                         client_cmd_tx,
@@ -799,6 +808,7 @@ pub(crate) async fn sync_task(
                                         sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
                                     }
                                     sync_logger.log(log::Level::Info, "syncing done");
+                                    send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -810,7 +820,7 @@ pub(crate) async fn sync_task(
                             let sync_task = tokio::spawn(async move {
                                 let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                                 let sync_result = sync_site_legacy(
-                                    site_path,
+                                    site_path.clone(),
                                     remote_getlog_path,
                                     client_cmd_tx,
                                     &app_state.config.journal_dir,
@@ -820,6 +830,7 @@ pub(crate) async fn sync_task(
                                     sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
                                 }
                                 sync_logger.log(log::Level::Info, "syncing done");
+                                send_trim(site_path, app_state.dirtylog_cmd_tx.clone());
                                 drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -831,14 +842,6 @@ pub(crate) async fn sync_task(
                 }
                 futures::future::join_all(sync_tasks).await;
                 log::info!("Sync logs done in {} s", sync_start.elapsed().as_secs());
-                sites_to_trim
-                    .into_iter()
-                    .for_each(|site|
-                        app_state.dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site.clone() })
-                        .unwrap_or_else(|e|
-                            log::error!("Cannot send dirtylog Trim command for site {site}: {e}")
-                        )
-                    );
                 match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
                     Ok(_) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
