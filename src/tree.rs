@@ -47,6 +47,9 @@ const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ST
 const META_METHOD_ALARM_LOG: MetaMethod = MetaMethod::new_static(METH_ALARM_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map", "List", &[], "");
 const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Write, "RpcValue", "RpcValue", &[], "");
 
+const METH_FETCH: &str = "fetch";
+const META_METHOD_FETCH: MetaMethod = MetaMethod::new_static(METH_FETCH, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Service, "[i:offset,i(0,):count]", "!historyRecords", &[], "");
+
 // Root node methods
 const METH_VERSION: &str = "version";
 const METH_UPTIME: &str = "uptime";
@@ -85,6 +88,9 @@ enum NodeType {
     ValueCache,
     ShvJournal,
     History,
+    History3,
+    Records,
+    RecordsDefault,
 }
 
 impl NodeType {
@@ -94,6 +100,9 @@ impl NodeType {
             ".app" => Self::DotApp,
             "_valuecache" => Self::ValueCache,
             path if path.starts_with("_shvjournal") => Self::ShvJournal,
+            path if path.starts_with(".history") && path.ends_with(".records") => Self::Records,
+            path if path.starts_with(".history") && path.ends_with(".records/default") => Self::RecordsDefault,
+            path if path.starts_with(".history") => Self::History3,
             _ => Self::History,
         }
     }
@@ -584,6 +593,19 @@ async fn alarmlog_handler(
     Ok(alarmlog_impl(path, &params, app_state).await.into())
 }
 
+struct FetchParam {
+    offset: i32,
+    count: i32,
+}
+
+async fn fetch_handler(
+    path: &str,
+    param: FetchParam,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    Ok(().into())
+}
+
 fn rpc_error_not_implemented() -> RpcError {
     RpcError::new(RpcErrorCode::NotImplemented, "Method is not implemented")
 }
@@ -654,6 +676,7 @@ pub(crate) async fn request_handler(
                     let ls_handler = async move || {
                         let mut nodes = vec![
                             ".app".to_string(),
+                            ".history".to_string(),
                             "_shvjournal".to_string(),
                             "_valuecache".to_string()
                         ];
@@ -730,6 +753,82 @@ pub(crate) async fn request_handler(
                     METH_STATE_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<StateAlarm>(&path, app_state).await }),
                     METH_ALARM_LOG => m.resolve(methods, async move || { alarmlog_handler(&path, &param, app_state).await }),
                     METH_PUSH_LOG => m.resolve(methods, async move || { pushlog_handler(&path, param, app_state).await }),
+                    _ => err_unresolved_request(),
+                },
+            }
+        }
+        NodeType::History3 => {
+            let path2 = path.strip_prefix(".history").expect("NodeType::History must have the .history prefix");
+            let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
+            let (methods, is_site_path) = {
+                let sites_data = app_state.sites_data.read().await;
+                children_on_path(&sites_data.sites_info, &path) .ok_or(UnresolvedRequest)?;
+                const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG];
+                let is_site_path = children_on_path(&sites_data.sites_info, &path)
+                    .ok_or(UnresolvedRequest)?
+                    .is_empty();
+                (METHODS, is_site_path)
+            };
+            match method {
+                Method::Dir(dir) => dir.resolve(methods),
+                Method::Ls(ls) => {
+                    ls.resolve(methods, async move || {
+                        if is_site_path {
+                            return Ok(vec![".records".into()]);
+                        }
+                        let children = children_on_path(&app_state.sites_data.read().await.sites_info, &path)
+                            .unwrap_or_else(|| panic!("Children on path `{path}` should be Some after methods processing"));
+                        Ok(children)
+                    })
+                }
+                Method::Other(m) => match m.method() {
+                    METH_GET_LOG => m.resolve(methods, async move || { getlog3_handler_rq(&path, &param, app_state).await }),
+                    _ => err_unresolved_request(),
+                },
+            }
+        },
+        NodeType::Records => {
+            let path2 = path.strip_prefix(".history").expect("NodeType::Records must have the .history prefix");
+            let path2 = path2.strip_suffix("/.records").expect("NodeType::Records must have the .records suffix");
+            let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
+            let methods = {
+                let sites_data = app_state.sites_data.read().await;
+                children_on_path(&sites_data.sites_info, &path) .ok_or(UnresolvedRequest)?;
+                const METHODS: &[MetaMethod] = &[];
+                METHODS
+            };
+            match method {
+                Method::Dir(dir) => dir.resolve(methods),
+                Method::Ls(ls) => ls.resolve(methods, async move || {
+                    Ok(vec!["default".into()])
+                }),
+                Method::Other(_) => err_unresolved_request(),
+            }
+        }
+        NodeType::RecordsDefault => {
+            let path2 = path.strip_prefix(".history").expect("NodeType::Records must have the .history prefix");
+            let path2 = path2.strip_suffix("/.records/default").expect("NodeType::Records must have the .records/default suffix");
+            let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
+            let methods = {
+                let sites_data = app_state.sites_data.read().await;
+                children_on_path(&sites_data.sites_info, &path).ok_or(UnresolvedRequest)?;
+                const METHODS: &[MetaMethod] = &[META_METHOD_FETCH];
+                METHODS
+            };
+            match method {
+                Method::Dir(dir) => dir.resolve(methods),
+                Method::Ls(ls) => {
+                    ls.resolve(methods, async move || {
+                        Ok(vec![])
+                    })
+                }
+                Method::Other(m) => match m.method() {
+                    METH_FETCH => m.resolve(methods, async move || {
+                        let (offset, count) = <(i32, i32)>::try_from(param)
+                            .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong fetch parameters: {err}")))?;
+
+                        fetch_handler(&path, FetchParam { offset, count }, app_state).await
+                    }),
                     _ => err_unresolved_request(),
                 },
             }
