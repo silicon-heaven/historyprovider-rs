@@ -779,14 +779,11 @@ pub(crate) async fn sync_task(
                     let logger_tx = logger_tx.clone();
 
                     fn send_trim(site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>) {
-                        dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path })
-                            .unwrap_or_else(|e| {
-                                let err_msg = e.to_string();
-                                let DirtyLogCommand::Trim {site} = e.into_inner() else {
-                                    panic!("Logic error")
-                                };
-                                log::error!("Cannot send dirtylog Trim command for site {site}: {err_msg}")
-                            });
+                        if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
+                            let err_msg = e.to_string();
+                            let command = e.into_inner();
+                            log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+                        }
                     }
 
                     match sub_hp {
