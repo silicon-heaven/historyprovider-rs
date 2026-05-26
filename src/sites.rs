@@ -14,10 +14,11 @@ use shvrpc::rpcmessage::RpcError;
 use shvrpc::typeinfo::TypeInfo;
 use shvrpc::util::find_longest_path_prefix;
 use shvrpc::{join_path, RpcMessageMetaTags};
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
-use crate::getlog::getlog_handler;
+use crate::getlog::{getlog_handler};
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, State};
 
@@ -524,39 +525,62 @@ async fn reload_sites(
     }));
     *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
-    let params = shvrpc::journalrw::GetLog2Params {
+    let params = Arc::new(shvrpc::journalrw::GetLog2Params {
         since: shvrpc::journalrw::GetLog2Since::LastEntry,
         with_snapshot: true,
         ..Default::default()
-    };
+    });
 
     let alarm_load_start = std::time::Instant::now();
-    let mut loaded_count = 0u32;
 
-    for site_path in sites_info.keys() {
+    let valid_sites: Vec<_> = sites_info
+        .keys()
+        .filter_map(|path| typeinfos.get(path).and_then(|type_info| type_info.as_ref().ok()).map(|type_info| (path, type_info)))
+        .collect();
+
+    let semaphore = Arc::new(Semaphore::new(app_state.config.max_sync_tasks));
+
+    let results: Vec<_> = valid_sites
+        .into_iter()
+        .map(|(site_path, type_info)| {
+            let params = Arc::clone(&params);
+            let app_state = Arc::clone(app_state);
+            let semaphore = Arc::clone(&semaphore);
+            let site_path = site_path.clone();
+            async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
+                let log = getlog_handler(&site_path, &params, app_state).await;
+                (site_path, type_info, log)
+            }
+        })
+        .collect::<FuturesUnordered<_>>()
+        .filter_map(|(site_path, type_info, result)| async move {
+            match result {
+                Ok(log) => Some((site_path, type_info, log)),
+                Err(err) => {
+                    log::error!("couldn't init alarms: getlog failed: {err}");
+                    None
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    let loaded_count = results.len() as u32;
+
+    for (site_path, type_info, log) in results {
         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
-        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
-            continue;
-        };
-
-        let log = match getlog_handler(site_path, &params, Arc::clone(app_state)).await {
-            Ok(log) => {
-                loaded_count += 1;
-                log
-            },
-            Err(err) => {
-                log::error!("couldn't init alarms: getlog failed: {err}");
-                continue;
-            }
-        };
 
         let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
         let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
             let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
 
-            for entry in chained_entries.clone()  {
+            for entry in chained_entries.clone() {
                 update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
             }
         };
