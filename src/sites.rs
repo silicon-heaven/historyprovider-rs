@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::StreamExt;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList, Subscriber};
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEvent, ClientEventsReceiver};
@@ -530,6 +530,9 @@ async fn reload_sites(
         ..Default::default()
     };
 
+    let alarm_load_start = std::time::Instant::now();
+    let mut loaded_count = 0u32;
+
     for site_path in sites_info.keys() {
         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
             break;
@@ -539,7 +542,10 @@ async fn reload_sites(
         };
 
         let log = match getlog_handler(site_path, &params, Arc::clone(app_state)).await {
-            Ok(log) => log,
+            Ok(log) => {
+                loaded_count += 1;
+                log
+            },
             Err(err) => {
                 log::error!("couldn't init alarms: getlog failed: {err}");
                 continue;
@@ -559,6 +565,7 @@ async fn reload_sites(
         impl_update_alarms(state_alarms, collect_state_alarms);
     }
 
+    info!("Alarm init done: {loaded_count} sites in {:?}", alarm_load_start.elapsed());
     *app_state.last_sites_loaded.write().await = Some(std::time::Instant::now());
     Some(SitesTaskState { mntchng_subscribers, subscribers, online_status_channels, online_status_task })
 }
