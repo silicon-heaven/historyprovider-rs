@@ -10,7 +10,7 @@ use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, Rp
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEvent, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
-use shvrpc::rpcmessage::RpcError;
+use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::typeinfo::TypeInfo;
 use shvrpc::util::find_longest_path_prefix;
 use shvrpc::{join_path, RpcMessageMetaTags};
@@ -552,6 +552,11 @@ async fn reload_sites(
                     .acquire()
                     .await
                     .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
+
+                if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                    return (site_path, type_info, Err(RpcError::new(RpcErrorCode::InternalError, "App is closing")));
+                }
+
                 let log = getlog_handler(&site_path, &params, app_state).await;
                 (site_path, type_info, log)
             }
@@ -561,7 +566,9 @@ async fn reload_sites(
             match result {
                 Ok(log) => Some((site_path, type_info, log)),
                 Err(err) => {
-                    log::error!("couldn't init alarms: getlog failed: {err}");
+                    if !app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                        log::error!("couldn't init alarms: getlog failed: {err}");
+                    }
                     None
                 }
             }
