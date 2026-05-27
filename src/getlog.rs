@@ -64,31 +64,6 @@ pub(crate) async fn getlog_handler(
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
     log_files.sort_by_key(|entry| entry.file_name());
 
-    // Skip files with no journal entries
-    let log_files = tokio_stream::iter(log_files)
-        .filter(|file_entry| {
-            let file_path = file_entry.path();
-            async move {
-                match tokio::fs::File::open(&file_path).await {
-                    Ok(file) => {
-                        if file_path.to_string_lossy().ends_with(".log3") {
-                            JournalReaderLog3::new(BufReader::new(file.compat())).next().await.is_some()
-                        } else {
-                            JournalReaderLog2::new(BufReader::new(file.compat())).next().await.is_some()
-                        }
-                    }
-                    Err(err) => {
-                        error!("Cannot open file {file_path} in call to getLog: {err}",
-                            file_path = file_path.to_string_lossy()
-                        );
-                        false
-                    }
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .await;
-
     let file_start_index: usize = {
         if log_files.is_empty() {
             0
@@ -114,7 +89,32 @@ pub(crate) async fn getlog_handler(
         }
     };
 
-    let file_readers = tokio_stream::iter(&log_files[file_start_index..])
+    // Skip files with no journal entries
+    let log_files = tokio_stream::iter(&log_files[file_start_index..])
+        .filter(|file_entry| {
+            let file_path = file_entry.path();
+            async move {
+                match tokio::fs::File::open(&file_path).await {
+                    Ok(file) => {
+                        if file_path.to_string_lossy().ends_with(".log3") {
+                            JournalReaderLog3::new(BufReader::new(file.compat())).next().await.is_some()
+                        } else {
+                            JournalReaderLog2::new(BufReader::new(file.compat())).next().await.is_some()
+                        }
+                    }
+                    Err(err) => {
+                        error!("Cannot open file {file_path} in call to getLog: {err}",
+                            file_path = file_path.to_string_lossy()
+                        );
+                        false
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    let file_readers = tokio_stream::iter(log_files)
         .then(|file_entry| async {
             let file_path = file_entry.path();
             tokio::fs::File::open(&file_path)
