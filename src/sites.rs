@@ -1069,11 +1069,11 @@ mod tests {
                     Box::new(ExpectSignal("node", "onlinestatuschng", 2.into())),
                     Box::new(ExpectSyncCommand::SyncSite { expected_site: "node".to_string() }),
                     Box::new(ClientEvent::Disconnected),
+                    Box::new(ExpectSignal("node", "onlinestatuschng", 0.into())),
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
                 cleanup_steps: &[
-                    Box::new(ExpectSignal("node", "onlinestatuschng", 0.into())),
                     Box::new(ExpectUnsubscription),
                     Box::new(ExpectUnsubscription),
                     Box::new(ExpectUnsubscription),
