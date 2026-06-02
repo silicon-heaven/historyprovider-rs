@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "2.13.1"
+version = "2.13.2"
 edition = "2024"
 
 [profile.release]
@@ -17,8 +17,8 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "6.1.9"
-shvrpc = { version = "16.0", features = ["journal"] }
+shvproto = "6.1.10"
+shvrpc = { version = "16.1", features = ["journal"] }
 shvclient = { version = "6.0", features = ["tokio"] }
 futures = "0.3.32"
 log = "0.4.30"
