@@ -3,21 +3,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures::stream::{FuturesUnordered, SelectAll};
+use futures::stream::{FusedStream, FuturesUnordered};
 use futures::StreamExt;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList, Subscriber};
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEvent, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
-use shvrpc::rpcmessage::RpcError;
+use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::typeinfo::TypeInfo;
 use shvrpc::util::find_longest_path_prefix;
 use shvrpc::{join_path, RpcMessageMetaTags};
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
+use tokio_stream::StreamMap;
 
 use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
-use crate::getlog::getlog_handler;
+use crate::getlog::{getlog_handler};
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, State};
 
@@ -342,10 +344,39 @@ pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap
 }
 
 struct SitesTaskState {
-    mntchng_subscribers: SelectAll<Subscriber>,
-    subscribers: SelectAll<Subscriber>,
+    mntchng_subscribers: StreamMap<String, Subscriber>,
+    subscribers: StreamMap<String, Subscriber>,
     online_status_channels: BTreeMap<String, UnboundedSender<SiteOnlineStatus>>,
     online_status_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+async fn init_subscribers(
+    old_subscribers: &mut StreamMap<String, Subscriber>,
+    client_cmd_tx: &ClientCommandSender,
+    subscriptions: impl IntoIterator<Item = (String, String)>,
+) -> StreamMap<String, Subscriber> {
+    let mut subscribers = StreamMap::new();
+    let mut new_sub_futures = vec![];
+    for (path, signal) in subscriptions {
+        let key = format!("{path}:*:{signal}");
+
+        if let Some(subscriber) = old_subscribers.remove(&key) {
+            // Keep existing subscriber
+            subscribers.insert(key, subscriber);
+        } else {
+            // Queue up creation for missing subscriber
+            new_sub_futures.push(async move {
+                let subscriber = subscribe(client_cmd_tx, &path, &signal).await;
+                (key, subscriber)
+            });
+        }
+    }
+
+    for (key, subscriber) in futures::future::join_all(new_sub_futures).await {
+        subscribers.insert(key, subscriber);
+    }
+
+    subscribers
 }
 
 enum PeriodicSyncCommand {
@@ -358,6 +389,7 @@ async fn reload_sites(
     shv_api_version: shvclient::clientapi::ShvApiVersion,
     client_cmd_tx: &ClientCommandSender,
     app_state: &Arc<State>,
+    old_state: &mut SitesTaskState,
 ) -> Option<SitesTaskState>
 {
     let _reload_guard = crate::ReloadGuard::new(&app_state.sites_reload_in_progress);
@@ -423,44 +455,35 @@ async fn reload_sites(
         .join("\n")
     );
 
-    // Subscribe mntchng
-    let mntchng_subscribers = sites_info
+    let sites_without_pushlog = sites_info
         .iter()
         .filter(|(_, site)| sub_hps
             .get(&site.sub_hp)
             .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
-        )
-        .map(|(path, _)| {
-            subscribe(client_cmd_tx, subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng")
-        })
-        .collect::<FuturesUnordered<_>>()
-        .collect::<SelectAll<_>>()
-        .await;
+        );
+
+    // Subscribe mntchng
+    let mntchng_subscribers = init_subscribers(
+        &mut old_state.mntchng_subscribers,
+        client_cmd_tx,
+        sites_without_pushlog.clone().map(|(path, _)| (subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng".to_string()))
+    ).await;
 
     log::info!("Loading typeinfo");
-    let subscribers = sites_info
-        .iter()
-        .filter(|(_, site)| sub_hps
-            .get(&site.sub_hp)
-            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
-        )
-        .flat_map(|(path, _)| {
-            let shv_path = join_path!("shv", path);
-            let sub_chng = subscribe(client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG);
-            const SIG_CMDLOG: &str = "cmdlog";
-            let sub_cmdlog = subscribe(client_cmd_tx, subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG);
-            [sub_chng, sub_cmdlog]
-        })
-        .collect::<FuturesUnordered<_>>()
-        .collect::<SelectAll<_>>()
-        .await;
+    let subscribers = init_subscribers(
+        &mut old_state.subscribers,
+        client_cmd_tx,
+        sites_without_pushlog.clone().flat_map(|(path, _)| {
+                let shv_path = join_path!("shv", path);
+                const SIG_CMDLOG: &str = "cmdlog";
+                [
+                    (subscription_prefix_path(&shv_path, &shv_api_version), SIG_CHNG.to_string()),
+                    (subscription_prefix_path(&shv_path, &shv_api_version), SIG_CMDLOG.to_string()),
+                ]
+            })
+    ).await;
 
-    let typeinfos = sites_info
-        .iter()
-        .filter(|(_, site)| sub_hps
-            .get(&site.sub_hp)
-            .is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog))
-        )
+    let typeinfos = sites_without_pushlog
         .map(|(path, _)| {
             let client_cmd_tx = ClientCommandSender::clone(client_cmd_tx);
             async move {
@@ -524,33 +547,69 @@ async fn reload_sites(
     }));
     *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
-    let params = shvrpc::journalrw::GetLog2Params {
+    let params = Arc::new(shvrpc::journalrw::GetLog2Params {
         since: shvrpc::journalrw::GetLog2Since::LastEntry,
         with_snapshot: true,
         ..Default::default()
-    };
+    });
 
-    for site_path in sites_info.keys() {
+    let alarm_load_start = std::time::Instant::now();
+
+    let valid_sites: Vec<_> = sites_info
+        .keys()
+        .filter_map(|path| typeinfos.get(path).and_then(|type_info| type_info.as_ref().ok()).map(|type_info| (path, type_info)))
+        .collect();
+
+    let semaphore = Arc::new(Semaphore::new(app_state.config.max_sync_tasks));
+
+    let results: Vec<_> = valid_sites
+        .into_iter()
+        .map(|(site_path, type_info)| {
+            let params = Arc::clone(&params);
+            let app_state = Arc::clone(app_state);
+            let semaphore = Arc::clone(&semaphore);
+            let site_path = site_path.clone();
+            async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
+
+                if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                    return (site_path, type_info, Err(RpcError::new(RpcErrorCode::InternalError, "App is closing")));
+                }
+
+                let log = getlog_handler(&site_path, &params, app_state).await;
+                (site_path, type_info, log)
+            }
+        })
+        .collect::<FuturesUnordered<_>>()
+        .filter_map(|(site_path, type_info, result)| async move {
+            match result {
+                Ok(log) => Some((site_path, type_info, log)),
+                Err(err) => {
+                    if !app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
+                        log::error!("couldn't init alarms: getlog failed: {err}");
+                    }
+                    None
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    let loaded_count = results.len() as u32;
+
+    for (site_path, type_info, log) in results {
         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
-        let Some(Ok(type_info)) = typeinfos.get(site_path) else {
-            continue;
-        };
-
-        let log = match getlog_handler(site_path, &params, Arc::clone(app_state)).await {
-            Ok(log) => log,
-            Err(err) => {
-                log::error!("couldn't init alarms: getlog failed: {err}");
-                continue;
-            }
-        };
 
         let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
         let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
             let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
 
-            for entry in chained_entries.clone()  {
+            for entry in chained_entries.clone() {
                 update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
             }
         };
@@ -559,6 +618,7 @@ async fn reload_sites(
         impl_update_alarms(state_alarms, collect_state_alarms);
     }
 
+    info!("Alarm init done: {loaded_count} sites in {:?}", alarm_load_start.elapsed());
     *app_state.last_sites_loaded.write().await = Some(std::time::Instant::now());
     Some(SitesTaskState { mntchng_subscribers, subscribers, online_status_channels, online_status_task })
 }
@@ -573,12 +633,11 @@ pub(crate) async fn sites_task(
     let mut client_evt_rx = std::pin::pin!(client_evt_rx.fuse().peekable());
 
     let mut state = SitesTaskState {
-        mntchng_subscribers: SelectAll::<Subscriber>::default(),
-        subscribers: SelectAll::<Subscriber>::default(),
+        mntchng_subscribers: StreamMap::new(),
+        subscribers: StreamMap::new(),
         online_status_channels: BTreeMap::new(),
         online_status_task: None,
     };
-
 
     let (periodic_sync_tx, mut periodic_sync_rx) = futures::channel::mpsc::unbounded();
     let periodic_sync_task = {
@@ -630,13 +689,27 @@ pub(crate) async fn sites_task(
         let shv_api_version = loop {
             match client_evt_rx.next().await {
                 Some(ClientEvent::Connected(shv_api_version)) => break shv_api_version,
-                Some(ClientEvent::ConnectionFailed(_)) | Some(ClientEvent::Disconnected) => (),
+                Some(ClientEvent::ConnectionFailed(_)) | Some(ClientEvent::Disconnected) => {
+                    if let Some(online_status_task) = state.online_status_task {
+                        state.online_status_channels.clear();
+                        if let Err(err) = online_status_task.await {
+                            log::error!("Failed to join online_status_task: {err}")
+                        };
+                    }
+
+                    state = SitesTaskState {
+                        mntchng_subscribers: StreamMap::new(),
+                        subscribers: StreamMap::new(),
+                        online_status_channels: BTreeMap::new(),
+                        online_status_task: None,
+                    };
+                },
                 None => break 'main_loop,
             }
         };
 
         'sites_loop: loop {
-            let mut state = match reload_sites(shv_api_version.clone(), &client_cmd_tx, &app_state).await {
+            state = match reload_sites(shv_api_version.clone(), &client_cmd_tx, &app_state, &mut state).await {
                 Some(s) => s,
                 None => continue 'main_loop,
             };
@@ -646,14 +719,18 @@ pub(crate) async fn sites_task(
                 .unwrap_or_else(|e| log::error!("Cannot send periodic sync enable command: {e}"));
 
             loop {
-                futures::select! {
+                tokio::select! {
                     _event = client_evt_rx.as_mut().peek() => continue 'main_loop,
-                    sites_command = sites_cmd_rx.select_next_some() => match sites_command {
-                        SitesCommand::ReloadSites => {
+                    sites_command = sites_cmd_rx.next(), if !sites_cmd_rx.is_terminated() => match sites_command {
+                        Some(SitesCommand::ReloadSites) => {
                             continue 'sites_loop;
                         },
+                        None => (),
                     },
-                    mntchng_frame = state.mntchng_subscribers.select_next_some() => {
+                    mntchng_frame = state.mntchng_subscribers.next(), if !state.mntchng_subscribers.is_empty() => {
+                        let Some((_, mntchng_frame)) = mntchng_frame else {
+                            continue;
+                        };
                         let msg = match mntchng_frame.to_rpcmesage() {
                             Ok(msg) => msg,
                             Err(err) => {
@@ -685,7 +762,10 @@ pub(crate) async fn sites_task(
                             }
                         }
                     }
-                    notification_frame = state.subscribers.select_next_some() => {
+                    notification_frame = state.subscribers.next(), if !state.subscribers.is_empty() => {
+                        let Some((_, notification_frame)) = notification_frame else {
+                            continue;
+                        };
                         let msg = match notification_frame.to_rpcmesage() {
                             Ok(msg) => msg,
                             Err(err) => {
@@ -722,7 +802,7 @@ pub(crate) async fn sites_task(
                         impl_update_alarms(&mut *app_state.alarms.write().await, collect_alarms, "alarmmod");
                         impl_update_alarms(&mut *app_state.state_alarms.write().await, collect_state_alarms, "statealarmmod");
                     }
-                    complete => break 'main_loop,
+                    else => break 'main_loop,
                 }
             }
         }
@@ -821,6 +901,15 @@ mod tests {
         async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
             let x = state.sender.clone();
             x.broadcast(self.clone()).await.expect("Sending ClientEvents must work");
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TestStep<SitesTaskTestState> for SitesCommand {
+        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+            match self {
+                SitesCommand::ReloadSites => state.sites_cmd_tx.unbounded_send(SitesCommand::ReloadSites).unwrap(),
+            }
         }
     }
 
@@ -980,6 +1069,7 @@ mod tests {
                     Box::new(ExpectSignal("node", "onlinestatuschng", 2.into())),
                     Box::new(ExpectSyncCommand::SyncSite { expected_site: "node".to_string() }),
                     Box::new(ClientEvent::Disconnected),
+                    Box::new(ExpectSignal("node", "onlinestatuschng", 0.into())),
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
@@ -993,7 +1083,45 @@ mod tests {
                     Box::new(ExpectUnsubscription),
                     Box::new(ExpectUnsubscription),
                     Box::new(ExpectUnsubscription),
-                    Box::new(ExpectSignal("node", "onlinestatuschng", 0.into())),
+                ],
+            },
+            TestCase {
+                name: "Reload sites reuses subscriptions",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
+                    Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectCall("sites/legacy_sync_path_device/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectCall("sites/node/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectSyncCommand::SyncAll),
+                    Box::new(SitesCommand::ReloadSites),
+                    Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
+                    Box::new(ExpectCall("sites/legacy_sync_path_device/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectCall("sites/node/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectSyncCommand::SyncAll),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
                 ],
             },
             TestCase {
@@ -1039,4 +1167,3 @@ mod tests {
         Ok(())
     }
 }
-
