@@ -56,7 +56,7 @@ jobs:
 
       - name: Rename artifacts
         run: |
-          mv "target/${{matrix.target}}/release/hp" "target/${{matrix.target}}/release/historyprovider-${{steps.get-version.outputs.version}}-${{matrix.target}}"
+          mv "target/${{matrix.target}}/release/hp" "target/${{matrix.target}}/release/historyprovider-${{steps.get-version.outputs.version}}-${{matrix.filename_suffix}}"
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -76,7 +76,7 @@ jobs:
   create-releases:
     name: Create releases
     needs: [build]
-    # if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
