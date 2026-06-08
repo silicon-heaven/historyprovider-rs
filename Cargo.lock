@@ -227,9 +227,9 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -840,7 +840,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "2.13.3"
+version = "2.13.4"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1149,9 +1149,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "log"
-version = "0.4.30"
+version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
+checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "macro_magic"
@@ -1652,9 +1652,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shvclient"
-version = "6.0.0"
+version = "6.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cccb02b09511c2dcf275d17b8375d911293878571ca302f10748e9bcf52bb55"
+checksum = "d1775ce4543cdec61476684d3cacbd9b0df9aeab25590185f4d7e9dea0ee9601"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1677,9 +1677,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.1.10"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddf50615a1187c06a9d9cbd8a5af59b0e531650bcbde75332b8393d01007f17"
+checksum = "862081758dbca491ff261008675e85bf9c700cbf495695724890a9deda82aca1"
 dependencies = [
  "chrono",
  "clap",
