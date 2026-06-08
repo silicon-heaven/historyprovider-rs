@@ -17,17 +17,52 @@ permissions:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+          - x86_64-unknown-linux-gnu
+        include:
+          - target: aarch64-unknown-linux-gnu
+            filename_suffix: arm64
+          - target: armv7-unknown-linux-gnueabihf
+            filename_suffix: armv7
+          - target: x86_64-unknown-linux-gnu
+            filename_suffix: amd64
 
     steps:
-    - uses: actions/checkout@v6
-    - name: Clippy
-      run: cargo clippy --verbose --all-targets --all-features
-    - name: Build
-      run: cargo build --verbose --all-features
-    - name: Run tests
-      run: cargo test --verbose --all-features
+      - uses: actions/checkout@v4
+      - name: Configure cross environment
+        uses: zijiren233/cargo-cross@v1
+        with:
+          command: setup
+          cross-args: --target ${{matrix.target}}
+
+      - name: Clippy
+        run: cargo cross clippy --release --all-targets --all-features --target ${{matrix.target}}
+      - name: Build
+        run: cargo cross build --release --all-features --target ${{matrix.target}}
+      - name: Run tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo cross test --release --all-features --target ${{matrix.target}}
+
+      - name: Get version from Cargo.toml
+        id: get-version
+        run: |
+          version="$(grep '^version' Cargo.toml | head -n1 | sed 's/version\s*=\s*"\(.*\)"/\1/')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Rename artifacts
+        run: |
+          mv "target/${{matrix.target}}/release/hp" "target/${{matrix.target}}/release/historyprovider-${{steps.get-version.outputs.version}}-${{matrix.target}}"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{matrix.target}}
+          path: target/${{matrix.target}}/release/historyprovider-${{steps.get-version.outputs.version}}-${{matrix.filename_suffix}}
 
   coverage:
     name: Code coverage
@@ -40,22 +75,17 @@ jobs:
 
   create-releases:
     name: Create releases
-    if: github.ref == 'refs/heads/main'
-    # Build on the older Ubuntu for older glibc.
+    needs: [build]
+    # if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt-get install -y libudev-dev pkg-config
 
-      - name: Build and Install Binary
-        run: |
-          mkdir -p ${{github.workspace}}/install
-          cargo install --path '${{github.workspace}}' --root '${{github.workspace}}/install' --all-features --locked
-        shell: bash
+      - name: Consolidate artifacts
+        uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
 
       - name: Get version from Cargo.toml
         id: get-version
@@ -67,10 +97,6 @@ jobs:
         uses: rickstaa/action-create-tag@v1
         with:
           tag: ${{ steps.get-version.outputs.version }}
-
-      - name: Rename artifacts
-        run: |
-          mv "${{github.workspace}}/install/bin/hp" "${{github.workspace}}/install/bin/historyprovider-${{ steps.get-version.outputs.version }}"
 
       - name: Release
         uses: softprops/action-gh-release@v3
@@ -84,4 +110,4 @@ jobs:
 
             If you find any bugs, please report them to the repository's issue tracker.
           files: |
-            ${{github.workspace}}/install/bin/historyprovider*${{ steps.get-version.outputs.version }}*
+            ${{github.workspace}}/historyprovider-${{ steps.get-version.outputs.version }}-*
