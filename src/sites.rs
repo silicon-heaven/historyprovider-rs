@@ -1057,6 +1057,23 @@ mod tests {
         }"#).unwrap()
     }
 
+    fn records_broker() -> RpcValue {
+        RpcValue::from_cpon(r#"{
+            "_meta":{
+                "HP3":{"type": "HP3"}
+            },
+            "records_node":{
+                "_meta":{
+                    "HP3":{
+                        "type":"records",
+                        "records":["maintenance", "passage"]
+                    },
+                    "type":"some_type"
+                }
+            },
+        }"#).unwrap()
+    }
+
     #[tokio::test]
     async fn sites_task_test() -> std::result::Result<(), PrettyJoinError> {
         init_logger();
@@ -1080,6 +1097,30 @@ mod tests {
                 starting_files: vec![],
                 expected_file_paths: vec![],
                 cleanup_steps: &[],
+            },
+            TestCase {
+                name: "Records HP subscriptions and sync trigger",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(records_broker()))),
+                    Box::new(ExpectSubscription("shv/records_node/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/records_node/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/records_node/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectCall("sites/records_node/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectSyncCommand::SyncAll),
+                    Box::new(SendSignal("shv/records_node/*:*:mntchng".to_string(), "shv/records_node".to_string(), "mntchng".to_string(), true.into())),
+                    Box::new(ExpectSignal("records_node", "onlinestatuschng", 2.into())),
+                    Box::new(ExpectSyncCommand::SyncSite { expected_site: "records_node".to_string() }),
+                    Box::new(ClientEvent::Disconnected),
+                    Box::new(ExpectSignal("records_node", "onlinestatuschng", 0.into())),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                ],
             },
             TestCase {
                 name: "Test everything",
