@@ -28,6 +28,7 @@ use crate::alarmlog::{alarmlog_impl, AlarmLogParams};
 use crate::cleanup::collect_log_files;
 use crate::getlog::getlog_handler;
 use crate::pushlog::pushlog_impl;
+use crate::records;
 use crate::sites::SubHpInfo;
 use crate::{AlarmWithTimestamp, HpConfig, State};
 
@@ -90,7 +91,7 @@ enum NodeType {
     History,
     History3,
     Records,
-    RecordsDefault,
+    RecordsNode,
 }
 
 impl NodeType {
@@ -101,7 +102,7 @@ impl NodeType {
             "_valuecache" => Self::ValueCache,
             path if path.starts_with("_shvjournal") => Self::ShvJournal,
             path if path.starts_with(".history") && path.ends_with(".records") => Self::Records,
-            path if path.starts_with(".history") && path.ends_with(".records/default") => Self::RecordsDefault,
+            path if path.starts_with(".history") && path.contains("/.records/") => Self::RecordsNode,
             path if path.starts_with(".history") => Self::History3,
             _ => Self::History,
         }
@@ -594,16 +595,25 @@ async fn alarmlog_handler(
 }
 
 struct FetchParam {
-    offset: i32,
-    count: i32,
+    offset: i64,
+    count: i64,
 }
 
 async fn fetch_handler(
     path: &str,
+    record_name: &str,
     param: FetchParam,
     app_state: Arc<State>,
 ) -> Result<RpcValue, RpcError> {
-    Ok(().into())
+    if param.offset < 0 || param.count < 0 {
+        return Err(RpcError::new(RpcErrorCode::InvalidParam, "Fetch offset and count must be non-negative"));
+    }
+
+    let db_path = records::db_path(&app_state.config.journal_dir, path, record_name);
+    let records = records::fetch_records(db_path, param.offset, param.count)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot fetch records: {err}")))?;
+    Ok(records.into())
 }
 
 fn rpc_error_not_implemented() -> RpcError {
@@ -791,27 +801,46 @@ pub(crate) async fn request_handler(
             let path2 = path.strip_prefix(".history").expect("NodeType::Records must have the .history prefix");
             let path2 = path2.strip_suffix("/.records").expect("NodeType::Records must have the .records suffix");
             let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
-            let methods = {
+            let records = {
                 let sites_data = app_state.sites_data.read().await;
-                children_on_path(&sites_data.sites_info, &path) .ok_or(UnresolvedRequest)?;
-                const METHODS: &[MetaMethod] = &[];
-                METHODS
+                children_on_path(&sites_data.sites_info, &path).ok_or(UnresolvedRequest)?;
+                sites_data.sites_info.get(&path)
+                    .and_then(|site_info| sites_data.sub_hps.get(&site_info.sub_hp))
+                    .and_then(|sub_hp| match sub_hp {
+                        SubHpInfo::Records { records } => Some(records.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default()
             };
+            const METHODS: &[MetaMethod] = &[];
             match method {
-                Method::Dir(dir) => dir.resolve(methods),
-                Method::Ls(ls) => ls.resolve(methods, async move || {
-                    Ok(vec!["default".into()])
+                Method::Dir(dir) => dir.resolve(METHODS),
+                Method::Ls(ls) => ls.resolve(METHODS, async move || {
+                    Ok(records)
                 }),
                 Method::Other(_) => err_unresolved_request(),
             }
         }
-        NodeType::RecordsDefault => {
+        NodeType::RecordsNode => {
             let path2 = path.strip_prefix(".history").expect("NodeType::Records must have the .history prefix");
-            let path2 = path2.strip_suffix("/.records/default").expect("NodeType::Records must have the .records/default suffix");
-            let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
+            let path2 = path2.strip_prefix("/").unwrap_or(path2);
+            let Some((path, record_name)) = path2.split_once("/.records/") else {
+                return err_unresolved_request();
+            };
+            let path = path.to_string();
+            let record_name = record_name.to_string();
             let methods = {
                 let sites_data = app_state.sites_data.read().await;
                 children_on_path(&sites_data.sites_info, &path).ok_or(UnresolvedRequest)?;
+                let record_exists = sites_data.sites_info.get(&path)
+                    .and_then(|site_info| sites_data.sub_hps.get(&site_info.sub_hp))
+                    .is_some_and(|sub_hp| match sub_hp {
+                        SubHpInfo::Records { records } => records.iter().any(|record| record == &record_name),
+                        _ => false,
+                    });
+                if !record_exists {
+                    return err_unresolved_request();
+                }
                 const METHODS: &[MetaMethod] = &[META_METHOD_FETCH];
                 METHODS
             };
@@ -824,10 +853,10 @@ pub(crate) async fn request_handler(
                 }
                 Method::Other(m) => match m.method() {
                     METH_FETCH => m.resolve(methods, async move || {
-                        let (offset, count) = <(i32, i32)>::try_from(param)
+                        let (offset, count) = <(i64, i64)>::try_from(param)
                             .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong fetch parameters: {err}")))?;
 
-                        fetch_handler(&path, FetchParam { offset, count }, app_state).await
+                        fetch_handler(&path, &record_name, FetchParam { offset, count }, app_state).await
                     }),
                     _ => err_unresolved_request(),
                 },

@@ -20,6 +20,7 @@ use tokio_stream::StreamMap;
 
 use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
 use crate::getlog::{getlog_handler};
+use crate::records::{record_name_is_valid, record_names_from_rpc};
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, State};
 
@@ -59,9 +60,12 @@ fn collect_sites(
         let is_site = sites_subtree.contains_key("HP") ||
             sites_subtree.get("HP3")
             .and_then(|hp3_node| shvproto::Map::try_from(hp3_node).ok())
-            .is_some_and(|hp3_node|
-                hp3_node.get("type").is_none_or(|ty| ty.as_str() == "device")
-            );
+            .is_some_and(|hp3_node| {
+                hp3_node.get("type").is_none_or(|ty| {
+                    let ty = ty.as_str();
+                    ty == "device" || ty == "records"
+                })
+            });
 
         return if is_site {
             let get_or_default = |key: &str, default: &str| sites_subtree
@@ -103,6 +107,9 @@ pub(crate) enum SubHpInfo {
         // SHV path of the legacy HP relative to the sub HP node
         getlog_path: String,
     },
+    Records {
+        records: Vec<String>,
+    },
     PushLog,
 }
 
@@ -133,6 +140,16 @@ fn collect_sub_hps(
                         let hp = hp.as_map();
                         if hp.get("pushLog").is_some_and(RpcValue::as_bool) {
                             SubHpInfo::PushLog
+                        } else if hp.get("type").is_some_and(|ty| ty.as_str() == "records") {
+                            SubHpInfo::Records {
+                                records: hp
+                                    .get("records")
+                                    .map(record_names_from_rpc)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter(|record| record_name_is_valid(record))
+                                    .collect(),
+                            }
                         } else if meta.contains_key("HP") {
                             SubHpInfo::Legacy {
                                 getlog_path: if is_device { LEGACY_SYNC_PATH_DEVICE } else { LEGACY_SYNC_PATH_HP }.to_string(),
@@ -894,6 +911,25 @@ mod tests {
         ]
         .into_iter()
         .collect::<BTreeMap<_,_>>());
+    }
+
+    #[test]
+    fn collect_records_sub_hp() {
+        let sites_tree = RpcValue::from_cpon(r#"{
+            "records_site":{
+                "_meta":{
+                    "HP3":{
+                        "type":"records",
+                        "records":["passages", "maintenance"]
+                    }
+                }
+            }
+        }"#).unwrap();
+        let sub_hps = super::collect_sub_hps(&[], sites_tree.as_map());
+        let Some(super::SubHpInfo::Records { records }) = sub_hps.get("records_site") else {
+            panic!("records_site should be a records sub HP");
+        };
+        assert_eq!(records, &vec!["passages".to_string(), "maintenance".to_string()]);
     }
 
     #[async_trait::async_trait]

@@ -27,12 +27,12 @@ pub enum Severity {
 impl From<i32> for Severity {
     fn from(value: i32) -> Self {
         match value {
-            v if v == Self::Fatal as _ => Self::Fatal,
-            v if v == Self::Error as _ => Self::Error,
-            v if v == Self::Warning as _ => Self::Warning,
-            v if v == Self::Info as _ => Self::Info,
-            v if v == Self::Message as _ => Self::Message,
-            v if v == Self::Debug as _ => Self::Debug,
+            v if v == Self::Fatal as i32 => Self::Fatal,
+            v if v == Self::Error as i32 => Self::Error,
+            v if v == Self::Warning as i32 => Self::Warning,
+            v if v == Self::Info as i32 => Self::Info,
+            v if v == Self::Message as i32 => Self::Message,
+            v if v == Self::Debug as i32 => Self::Debug,
             _ => Self::Invalid,
         }
     }

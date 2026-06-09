@@ -97,7 +97,7 @@ impl LogRecord {
                 if let Some(value) = &entry.value {
                     map.insert(LogField::Value as i32, value.clone());
                 }
-                if entry.access_level != shvrpc::metamethod::AccessLevel::Read as _ {
+                if entry.access_level != shvrpc::metamethod::AccessLevel::Read as i64 {
                     map.insert(LogField::AccessLevel as i32, entry.access_level.into());
                 }
                 if let Some(user_id) = &entry.user_id {
@@ -155,7 +155,7 @@ impl LogRecord {
     }
 }
 
-fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc::Result<Vec<LogRecord>> {
+pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc::Result<Vec<LogRecord>> {
     let mut result = Vec::<LogRecord>::with_capacity(srcs.len());
 
     for (i, src) in srcs.into_iter().enumerate() {
