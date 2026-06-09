@@ -740,16 +740,29 @@ async fn sync_site_records(
 
     for record_name in record_names {
         let db_path = records::db_path(journal_dir.as_ref(), site_path, record_name);
-        let mut offset = records::next_offset(&db_path).await?;
         let remote_records_path = join_path!(remote_history_path, ".records", record_name);
+        let span_value: RpcValue = RpcCall::new(&remote_records_path, "span")
+            .exec(&client_cmd_tx)
+            .await
+            .map_err(to_string)?;
+        let shvproto::Value::List(span) = &span_value.value else {
+            return Err(format!("Wrong span result for {remote_records_path}: {span_value}"));
+        };
+        if span.len() != 3 {
+            return Err(format!("Wrong span result length for {remote_records_path}: {}", span.len()));
+        }
+        let smallest = i64::try_from(&span[0]).map_err(to_string)?;
+        let biggest = i64::try_from(&span[1]).map_err(to_string)?;
+        let mut offset = records::next_offset(&db_path).await?.max(smallest);
 
-        loop {
+        while offset < biggest {
+            let count = records::fetch_count().min(biggest - offset);
             sync_logger.log(
                 log::Level::Info,
-                format!("Calling fetch, target: {}, offset: {}, count: {}", remote_records_path, offset, records::fetch_count())
+                format!("Calling fetch, target: {}, offset: {}, count: {}", remote_records_path, offset, count)
             );
             let fetched: RpcValue = RpcCall::new(&remote_records_path, "fetch")
-                .param(records::make_fetch_param(offset))
+                .param(shvproto::make_list!(offset, count))
                 .timeout(std::time::Duration::from_secs(60))
                 .exec(&client_cmd_tx)
                 .await

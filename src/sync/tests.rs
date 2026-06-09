@@ -6,7 +6,7 @@ use crate::record::IMap;
 use crate::sites::{SiteInfo, SitesData, SubHpInfo};
 use crate::util::{dedup_channel, testing::*};
 use crate::{State, records, sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}};
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::{StreamExt, channel::mpsc::{UnboundedReceiver, UnboundedSender}};
 use log::debug;
 use shvclient::clientapi::ClientCommand;
 use shvproto::{make_list, make_map, RpcValue};
@@ -66,6 +66,10 @@ struct ExpectRecordsDb {
 #[async_trait::async_trait]
 impl TestStep<SyncTaskTestState> for ExpectRecordsDb {
     async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
+        let Some(DirtyLogCommand::Trim { site }) = state._dirtylog_cmd_rx.next().await else {
+            panic!("Expected dirtylog Trim command");
+        };
+        assert_eq!(site, "site1");
         let db_path = records::db_path(&state.state.config.journal_dir, "site1", self.record_name);
         assert_eq!(records::fetch_records(&db_path, 0, 10).await.unwrap(), self.expected);
         let _ = tokio::fs::remove_file(&db_path).await;
@@ -108,8 +112,8 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(UseRecordsSite),
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
-                Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, records::fetch_count()].into(), Ok(vec![records_record.clone()].into()))),
-                Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![1, records::fetch_count()].into(), Ok(Vec::<IMap>::new().into()))),
+                Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
                 Box::new(ExpectRecordsDb {
                     record_name: "maintenance",
                     expected: vec![records_record.clone()],

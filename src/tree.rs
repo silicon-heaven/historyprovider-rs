@@ -50,6 +50,8 @@ const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, s
 
 const METH_FETCH: &str = "fetch";
 const META_METHOD_FETCH: MetaMethod = MetaMethod::new_static(METH_FETCH, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Service, "[i:offset,i(0,):count]", "!historyRecords", &[], "");
+const METH_SPAN: &str = "span";
+const META_METHOD_SPAN: MetaMethod = MetaMethod::new_static(METH_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "", "[i:smallest,i:biggest,i(1,):span]", &[], "");
 
 // Root node methods
 const METH_VERSION: &str = "version";
@@ -616,6 +618,18 @@ async fn fetch_handler(
     Ok(records.into())
 }
 
+async fn span_handler(
+    path: &str,
+    record_name: &str,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let db_path = records::db_path(&app_state.config.journal_dir, path, record_name);
+    let (smallest, biggest, span) = records::span_records(db_path)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get records span: {err}")))?;
+    Ok(shvproto::make_list!(smallest, biggest, span).into())
+}
+
 fn rpc_error_not_implemented() -> RpcError {
     RpcError::new(RpcErrorCode::NotImplemented, "Method is not implemented")
 }
@@ -841,7 +855,7 @@ pub(crate) async fn request_handler(
                 if !record_exists {
                     return err_unresolved_request();
                 }
-                const METHODS: &[MetaMethod] = &[META_METHOD_FETCH];
+                const METHODS: &[MetaMethod] = &[META_METHOD_FETCH, META_METHOD_SPAN];
                 METHODS
             };
             match method {
@@ -857,6 +871,9 @@ pub(crate) async fn request_handler(
                             .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong fetch parameters: {err}")))?;
 
                         fetch_handler(&path, &record_name, FetchParam { offset, count }, app_state).await
+                    }),
+                    METH_SPAN => m.resolve(methods, async move || {
+                        span_handler(&path, &record_name, app_state).await
                     }),
                     _ => err_unresolved_request(),
                 },
