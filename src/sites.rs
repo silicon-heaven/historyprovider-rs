@@ -651,11 +651,11 @@ pub(crate) async fn sites_task(
                         Some(event) => {
                             match event {
                                 PeriodicSyncCommand::Enable => {
-                                    log::info!("periodic sync enable");
+                                    log::info!("Periodic sync enable");
                                     interval = Some(tokio::time::interval(tokio::time::Duration::from_secs(periodic_sync_interval)));
                                 }
                                 PeriodicSyncCommand::Disable => {
-                                    log::info!("periodic sync disable");
+                                    log::info!("Periodic sync disable");
                                     interval = None;
                                 }
                             }
@@ -667,7 +667,7 @@ pub(crate) async fn sites_task(
                             i.tick().await;
                         }
                     }, if interval.is_some() => {
-                        log::info!("periodic sync trigger");
+                        log::info!("Periodic sync trigger");
                         app_state
                             .sync_cmd_tx
                             .send(crate::sync::SyncCommand::SyncAll)
@@ -676,7 +676,7 @@ pub(crate) async fn sites_task(
                     }
                 }
             }
-            log::debug!("periodic sync task finished");
+            log::debug!("Periodic sync task finished");
         })
     };
 

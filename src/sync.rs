@@ -341,7 +341,7 @@ async fn sync_site_by_download(
                             0
                         }
                         Ordering::Equal => {
-                            sync_logger.log(log::Level::Info, format!("{}: up-to-date", remote_file.name));
+                            sync_logger.log(log::Level::Debug, format!("{}: up-to-date", remote_file.name));
                             return None;
                         }
                     };
@@ -825,7 +825,7 @@ pub(crate) async fn sync_task(
                                         sync_logger.clone(),
                                         Some(&file_list),
                                     ).await;
-                                    sync_logger.log(log::Level::Info, "syncing done");
+                                    sync_logger.log(log::Level::Info, "Syncing done");
                                     on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                                     drop(permit);
                             });
@@ -844,7 +844,7 @@ pub(crate) async fn sync_task(
                                     &app_state.config.journal_dir,
                                     sync_logger.clone()
                                 ).await;
-                                sync_logger.log(log::Level::Info, "syncing done");
+                                sync_logger.log(log::Level::Info, "Syncing done");
                                 on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                                 drop(permit);
                             });
