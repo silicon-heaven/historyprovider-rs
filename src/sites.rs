@@ -541,9 +541,9 @@ async fn reload_sites(
     let state_alarms = &mut *app_state.state_alarms.write().await;
 
     let online_status_task = Some(tokio::spawn(async move {
-        debug!(target: "OnlineStatus", "online status task starts");
+        debug!(target: "OnlineStatus", "Online status task starts");
         futures::future::join_all(online_status_workers).await;
-        debug!(target: "OnlineStatus", "online status task finish");
+        debug!(target: "OnlineStatus", "Online status task finish");
     }));
     *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
 
@@ -651,11 +651,11 @@ pub(crate) async fn sites_task(
                         Some(event) => {
                             match event {
                                 PeriodicSyncCommand::Enable => {
-                                    log::info!("periodic sync enable");
+                                    log::info!("Periodic sync enable");
                                     interval = Some(tokio::time::interval(tokio::time::Duration::from_secs(periodic_sync_interval)));
                                 }
                                 PeriodicSyncCommand::Disable => {
-                                    log::info!("periodic sync disable");
+                                    log::info!("Periodic sync disable");
                                     interval = None;
                                 }
                             }
@@ -667,7 +667,7 @@ pub(crate) async fn sites_task(
                             i.tick().await;
                         }
                     }, if interval.is_some() => {
-                        log::info!("periodic sync trigger");
+                        log::info!("Periodic sync trigger");
                         app_state
                             .sync_cmd_tx
                             .send(crate::sync::SyncCommand::SyncAll)
@@ -676,7 +676,7 @@ pub(crate) async fn sites_task(
                     }
                 }
             }
-            log::debug!("periodic sync task finished");
+            log::debug!("Periodic sync task finished");
         })
     };
 
@@ -809,7 +809,7 @@ pub(crate) async fn sites_task(
     }
 
     drop(periodic_sync_tx);
-    log::debug!("waiting for periodic sync task to finish");
+    log::debug!("Waiting for periodic sync task to finish");
     if let Err(err) = periodic_sync_task.await {
         log::error!("Failed to join periodic_sync_task: {err}")
     }
@@ -821,7 +821,7 @@ pub(crate) async fn sites_task(
         };
     }
 
-    log::debug!("sites task finished");
+    log::debug!("Sites task finished");
 }
 
 #[cfg(test)]
