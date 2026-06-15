@@ -305,6 +305,7 @@ pub(crate) async fn dirtylog_task(
                     let data_change = DataChange::from(param);
                     let journal_entry = JournalEntry {
                         epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
+                        epoch_msec_orig: None,
                         path: property_path,
                         signal,
                         source,
@@ -476,6 +477,7 @@ mod tests {
                         site: "site1".to_string(),
                         expected: vec![JournalEntry {
                             epoch_msec: 1657152000000,
+                            epoch_msec_orig: None,
                             path: "some_value_node".into(),
                             signal: "chng".into(),
                             source: "get".into(),
@@ -500,6 +502,7 @@ mod tests {
                         site: "site1".to_string(),
                         expected: vec![JournalEntry {
                             epoch_msec: 1657152000000,
+                            epoch_msec_orig: None,
                             path: "some_value_node".into(),
                             signal: "chng".into(),
                             source: "get".into(),
