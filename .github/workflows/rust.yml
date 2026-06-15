@@ -33,7 +33,7 @@ jobs:
             filename_suffix: amd64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Configure cross environment
         uses: zijiren233/cargo-cross@v1
         with:
@@ -59,7 +59,7 @@ jobs:
           mv "target/${{matrix.target}}/release/hp" "target/${{matrix.target}}/release/historyprovider-${{steps.get-version.outputs.version}}-${{matrix.filename_suffix}}"
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{matrix.target}}
           path: target/${{matrix.target}}/release/historyprovider-${{steps.get-version.outputs.version}}-${{matrix.filename_suffix}}
