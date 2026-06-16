@@ -255,7 +255,12 @@ pub(crate) async fn getlog_impl(
     'outer: for mut reader in journal_readers {
         while let Some(entry_res) = reader.next().await {
             match entry_res {
-                Ok(entry) => {
+                Ok(mut entry) => {
+                    // Fixup non-monotonic timestamps to the timestamp of the last monotonic entry
+                    if let Some(last_entry) = context.last_entry.as_ref() && entry.epoch_msec < last_entry.epoch_msec {
+                        entry.epoch_msec_orig = Some(entry.epoch_msec);
+                        entry.epoch_msec = last_entry.epoch_msec;
+                    }
                     if !process_journal_entry(entry, &mut context) {
                         break 'outer;
                     }
@@ -268,10 +273,17 @@ pub(crate) async fn getlog_impl(
     // Only append entries from the dirtylog if they are adjacent to the journal entries or else
     // the resulting `until` will be incorrectly taken from the first dirtylog entry.
     if !context.record_count_limit_hit {
-        for entry in dirty_log {
+        let synced_files_last_entry = context.last_entry.clone();
+        for mut entry in dirty_log {
             // Filter out entries that overlap with the entries from the synced files
-            if context.last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
+            if synced_files_last_entry.as_ref().is_some_and(|last_entry| entry.epoch_msec < last_entry.epoch_msec) {
                 continue;
+            }
+
+            // Fixup non-monotonic timestamps to the timestamp of the last monotonic entry
+            if let Some(last_entry) = context.last_entry.as_ref() && entry.epoch_msec < last_entry.epoch_msec {
+                entry.epoch_msec_orig = Some(entry.epoch_msec);
+                entry.epoch_msec = last_entry.epoch_msec;
             }
 
             if !process_journal_entry(entry, &mut context) {
@@ -380,6 +392,7 @@ mod tests {
         Ok(JournalEntry {
             path: path.to_string(),
             epoch_msec: DateTime::from_iso_str(timestamp).unwrap().epoch_msec(),
+            epoch_msec_orig: None,
             signal: "chng".to_string(),
             short_time: -1,
             access_level: 32,
@@ -397,6 +410,78 @@ mod tests {
 
     async fn get_log_entries(site: &str, readers: Vec<JournalEntryStream>, params: GetLog2Params) -> GetLogResult {
         getlog_impl(site, readers, [], &params).await
+    }
+
+    #[tokio::test]
+    async fn dirtylog_non_monotonic_timestamps_are_fixed_up() {
+        let fixed_msec = ts("2022-07-07T18:06:11.000Z").epoch_msec();
+        let original_msec = ts("2022-07-07T18:06:10.500Z").epoch_msec();
+
+        let result = getlog_impl(
+            "test",
+            vec![create_reader(vec![
+                make_entry("2022-07-07T18:06:10.000Z", "synced", 1),
+            ])],
+            vec![
+                make_entry("2022-07-07T18:06:09.000Z", "overlap", 2).unwrap(),
+                make_entry("2022-07-07T18:06:11.000Z", "dirty_monotonic", 3).unwrap(),
+                make_entry("2022-07-07T18:06:10.500Z", "dirty_non_monotonic", 4).unwrap(),
+                make_entry("2022-07-07T18:06:12.000Z", "dirty_later", 5).unwrap(),
+            ],
+            &Default::default(),
+        ).await;
+
+        assert_eq!(result.snapshot_entries.len(), 1);
+        assert_eq!(result.snapshot_entries[0].path, "synced");
+
+        let event_entries = result.event_entries;
+        assert_eq!(event_entries.len(), 3);
+        assert_eq!(event_entries[0].path, "dirty_monotonic");
+        assert_eq!(event_entries[0].epoch_msec, fixed_msec);
+        assert_eq!(event_entries[0].epoch_msec_orig, None);
+        assert_eq!(event_entries[1].path, "dirty_non_monotonic");
+        assert_eq!(event_entries[1].epoch_msec, fixed_msec);
+        assert_eq!(event_entries[1].epoch_msec_orig, Some(original_msec));
+        assert_eq!(event_entries[2].path, "dirty_later");
+        assert_eq!(event_entries[2].epoch_msec, ts("2022-07-07T18:06:12.000Z").epoch_msec());
+        assert_eq!(event_entries[2].epoch_msec_orig, None);
+    }
+
+    #[tokio::test]
+    async fn journal_readers_non_monotonic_timestamps_are_fixed_up() {
+        let fixed_msec = ts("2022-07-07T18:06:11.000Z").epoch_msec();
+        let original_msec = ts("2022-07-07T18:06:10.500Z").epoch_msec();
+
+        let result = getlog_impl(
+            "test",
+            vec![
+                create_reader(vec![
+                    make_entry("2022-07-07T18:06:10.000Z", "synced_snapshot", 1),
+                    make_entry("2022-07-07T18:06:11.000Z", "synced_monotonic", 2),
+                ]),
+                create_reader(vec![
+                    make_entry("2022-07-07T18:06:10.500Z", "synced_non_monotonic", 3),
+                    make_entry("2022-07-07T18:06:12.000Z", "synced_later", 4),
+                ]),
+            ],
+            [],
+            &Default::default(),
+        ).await;
+
+        assert_eq!(result.snapshot_entries.len(), 1);
+        assert_eq!(result.snapshot_entries[0].path, "synced_snapshot");
+
+        let event_entries = result.event_entries;
+        assert_eq!(event_entries.len(), 3);
+        assert_eq!(event_entries[0].path, "synced_monotonic");
+        assert_eq!(event_entries[0].epoch_msec, fixed_msec);
+        assert_eq!(event_entries[0].epoch_msec_orig, None);
+        assert_eq!(event_entries[1].path, "synced_non_monotonic");
+        assert_eq!(event_entries[1].epoch_msec, fixed_msec);
+        assert_eq!(event_entries[1].epoch_msec_orig, Some(original_msec));
+        assert_eq!(event_entries[2].path, "synced_later");
+        assert_eq!(event_entries[2].epoch_msec, ts("2022-07-07T18:06:12.000Z").epoch_msec());
+        assert_eq!(event_entries[2].epoch_msec_orig, None);
     }
 
     #[tokio::test]
