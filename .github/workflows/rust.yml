@@ -33,7 +33,7 @@ jobs:
             filename_suffix: amd64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Configure cross environment
         uses: zijiren233/cargo-cross@v1
         with:
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Consolidate artifacts
         uses: actions/download-artifact@v8
