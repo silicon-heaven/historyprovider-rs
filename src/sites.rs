@@ -384,6 +384,7 @@ enum PeriodicSyncCommand {
     Disable,
 }
 
+const SITES_PATH: &str = "sites";
 
 async fn reload_sites(
     shv_api_version: shvclient::clientapi::ShvApiVersion,
@@ -396,7 +397,7 @@ async fn reload_sites(
     log::info!("Getting sites info");
 
     let (sites_info, sub_hps) = 'sites_get_loop: loop {
-        let sites: Result<shvproto::Map, _> = RpcCall::new("sites", "getSites")
+        let sites: Result<shvproto::Map, _> = RpcCall::new(SITES_PATH, "getSites")
             .exec(client_cmd_tx)
             .await;
 
@@ -488,7 +489,7 @@ async fn reload_sites(
             let client_cmd_tx = ClientCommandSender::clone(client_cmd_tx);
             async move {
                 let result = 'result: {
-                    let files_path = join_path!("sites", &path, "_files");
+                    let files_path = join_path!(SITES_PATH, &path, "_files");
                     let files = RpcCallLsList::new(&files_path).exec(&client_cmd_tx)
                         .await
                         .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
@@ -834,7 +835,7 @@ mod tests {
     use shvproto::RpcValue;
     use shvrpc::{RpcMessageMetaTags, rpcframe::RpcFrame};
 
-    use crate::{dirtylog::DirtyLogCommand, sites::{SiteInfo, SitesCommand, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
+    use crate::{dirtylog::DirtyLogCommand, sites::{SITES_PATH, SiteInfo, SitesCommand, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
 
     #[test]
     fn parse_notification() {
@@ -1039,7 +1040,7 @@ mod tests {
                 name: "Empty sites",
                 steps: &[
                     Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
-                    Box::new(ExpectCall("sites", "getSites", Ok(no_sites()))),
+                    Box::new(ExpectCall(SITES_PATH, "getSites", Ok(no_sites()))),
                 ],
                 starting_files: vec![],
                 expected_file_paths: vec![],
@@ -1049,7 +1050,7 @@ mod tests {
                 name: "Test everything",
                 steps: &[
                     Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
-                    Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
+                    Box::new(ExpectCall(SITES_PATH, "getSites", Ok(some_broker()))),
                     Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:mntchng".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node/*:*:mntchng".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:mntchng".try_into().unwrap())),
@@ -1089,7 +1090,7 @@ mod tests {
                 name: "Reload sites reuses subscriptions",
                 steps: &[
                     Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
-                    Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
+                    Box::new(ExpectCall(SITES_PATH, "getSites", Ok(some_broker()))),
                     Box::new(ExpectSubscription("shv/legacy_sync_path_device/*:*:mntchng".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node/*:*:mntchng".try_into().unwrap())),
                     Box::new(ExpectSubscription("shv/node_with_hp_meta/*:*:mntchng".try_into().unwrap())),
@@ -1104,7 +1105,7 @@ mod tests {
                     Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(SitesCommand::ReloadSites),
-                    Box::new(ExpectCall("sites", "getSites", Ok(some_broker()))),
+                    Box::new(ExpectCall(SITES_PATH, "getSites", Ok(some_broker()))),
                     Box::new(ExpectCall("sites/legacy_sync_path_device/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectCall("sites/node/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
@@ -1128,7 +1129,7 @@ mod tests {
                 name: "Periodic sync",
                 steps: &[
                     Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
-                    Box::new(ExpectCall("sites", "getSites", Ok(no_sites()))),
+                    Box::new(ExpectCall(SITES_PATH, "getSites", Ok(no_sites()))),
                     Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(ExpectSyncCommand::SyncAll),
                 ],
