@@ -20,11 +20,13 @@ use self::util::DedupSender;
 mod getlog;
 mod alarmlog;
 mod pushlog;
+mod record;
 mod sites;
 mod tree;
 mod sync;
 mod cleanup;
 mod dirtylog;
+mod records;
 mod util;
 pub mod alarm;
 

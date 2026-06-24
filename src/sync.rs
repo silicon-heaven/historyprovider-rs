@@ -22,6 +22,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::cleanup::cleanup_log_files;
 use crate::dirtylog::DirtyLogCommand;
+use crate::records;
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
 use crate::util::{DedupReceiver, get_files, is_log_file, is_log2_file, msec_to_log2_filename};
@@ -720,6 +721,62 @@ async fn sync_site_legacy(
     Ok(should_trim)
 }
 
+async fn sync_site_records(
+    site_path: impl AsRef<str>,
+    remote_history_path: impl AsRef<str>,
+    record_names: &[String],
+    client_cmd_tx: ClientCommandSender,
+    journal_dir: impl AsRef<str>,
+    sync_logger: impl SyncLogger,
+) -> Result<ShouldTrim, String>
+{
+    let (site_path, remote_history_path) = (site_path.as_ref(), remote_history_path.as_ref());
+    sync_logger.log(
+        log::Level::Info,
+        format!("Start syncing records from {} to {}", remote_history_path, Path::new(journal_dir.as_ref()).join(site_path).to_string_lossy())
+    );
+
+    let mut should_trim = ShouldTrim::No;
+
+    for record_name in record_names {
+        let db_path = records::db_path(journal_dir.as_ref(), site_path, record_name);
+        let remote_records_path = join_path!(remote_history_path, ".records", record_name);
+        let span_value: RpcValue = RpcCall::new(&remote_records_path, "span")
+            .exec(&client_cmd_tx)
+            .await
+            .map_err(to_string)?;
+        let (smallest, biggest, _span): (i64, i64, i64) = span_value.try_into().map_err(|err| format!("Wrong span result for {remote_records_path}: {err}"))?;
+        let mut offset = records::next_offset(&db_path).await?.max(smallest);
+
+        while offset < biggest {
+            let count = records::RECORD_FETCH_COUNT.min(biggest - offset);
+            sync_logger.log(
+                log::Level::Info,
+                format!("Calling fetch, target: {}, offset: {}, count: {}, remaining: {}", remote_records_path, offset, count, biggest - offset)
+            );
+            let fetched: RpcValue = RpcCall::new(&remote_records_path, "fetch")
+                .param(shvproto::make_list!(offset, count))
+                .timeout(std::time::Duration::from_secs(60))
+                .exec(&client_cmd_tx)
+                .await
+                .map_err(to_string)?;
+            let log_records = records::rpcvalue_to_records(offset, &fetched)?;
+            let Some(last_record_id) = log_records.last().map(|record| record.id) else {
+                break;
+            };
+            records::insert_records(&db_path, &log_records).await?;
+            should_trim = ShouldTrim::Yes;
+            let next_offset = last_record_id + 1;
+            if next_offset <= offset {
+                return Err(format!("Records fetch did not advance offset for {remote_records_path}"));
+            }
+            offset = next_offset;
+        }
+    }
+
+    Ok(should_trim)
+}
+
 pub(crate) async fn sync_task(
     client_cmd_tx: ClientCommandSender,
     _client_evt_rx: ClientEventsReceiver,
@@ -850,6 +907,31 @@ pub(crate) async fn sync_task(
                             });
                             sync_tasks.push(sync_task);
                         }
+                        SubHpInfo::Records { records } => {
+                            let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
+                                .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
+                            let remote_history_path = if site_suffix.is_empty() {
+                                join_path!("shv", &site_info.sub_hp, ".history")
+                            } else {
+                                join_path!("shv", &site_info.sub_hp, ".history", site_suffix)
+                            };
+                            let records = records.clone();
+                            let sync_task = tokio::spawn(async move {
+                                    let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
+                                    let sync_result = sync_site_records(
+                                        site_path.clone(),
+                                        remote_history_path,
+                                        &records,
+                                        client_cmd_tx,
+                                        &app_state.config.journal_dir,
+                                        sync_logger.clone(),
+                                    ).await;
+                                    sync_logger.log(log::Level::Info, "syncing done");
+                                    on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                    drop(permit);
+                            });
+                            sync_tasks.push(sync_task);
+                        }
                         SubHpInfo::PushLog => {
                             // No op
                         }
@@ -905,6 +987,26 @@ pub(crate) async fn sync_task(
                                 client_cmd_tx,
                                 &app_state.config.journal_dir,
                                 sync_logger.clone()
+                            ).await;
+                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            sync_logger.log(log::Level::Info, "syncing done");
+                        }
+                        SubHpInfo::Records { records } => {
+                            let site_suffix = shvrpc::util::strip_prefix_path(&site_path, &site_info.sub_hp)
+                                .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
+                            let remote_history_path = if site_suffix.is_empty() {
+                                join_path!("shv", &site_info.sub_hp, ".history")
+                            } else {
+                                join_path!("shv", &site_info.sub_hp, ".history", site_suffix)
+                            };
+                            let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
+                            let sync_result = sync_site_records(
+                                site_path.clone(),
+                                remote_history_path,
+                                records,
+                                client_cmd_tx,
+                                &app_state.config.journal_dir,
+                                sync_logger.clone(),
                             ).await;
                             on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");

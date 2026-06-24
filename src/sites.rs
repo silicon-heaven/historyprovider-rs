@@ -60,7 +60,10 @@ fn collect_sites(
             sites_subtree.get("HP3")
             .and_then(|hp3_node| shvproto::Map::try_from(hp3_node).ok())
             .is_some_and(|hp3_node|
-                hp3_node.get("type").is_none_or(|ty| ty.as_str() == "device")
+                hp3_node.get("type").is_none_or(|ty| {
+                    let ty = ty.as_str();
+                    ty == "device" || ty == "records"
+                })
             );
 
         return if is_site {
@@ -103,6 +106,9 @@ pub(crate) enum SubHpInfo {
         // SHV path of the legacy HP relative to the sub HP node
         getlog_path: String,
     },
+    Records {
+        records: Vec<String>,
+    },
     PushLog,
 }
 
@@ -114,6 +120,14 @@ const DOWNLOAD_CHUNK_SIZE_MAX: i64 = 256 << 10;
 // intermediate legacy HP because of flaws in getLog design.
 const LEGACY_SYNC_PATH_DEVICE: &str = "";
 const LEGACY_SYNC_PATH_HP: &str = ".local/history";
+
+fn record_names_from_rpc(value: &RpcValue) -> Vec<String> {
+    value.try_into().unwrap_or_default()
+}
+
+fn record_name_is_valid(record_name: &str) -> bool {
+    !record_name.is_empty() && !record_name.contains('/')
+}
 
 fn collect_sub_hps(
     path_segments: &[&str],
@@ -133,6 +147,16 @@ fn collect_sub_hps(
                         let hp = hp.as_map();
                         if hp.get("pushLog").is_some_and(RpcValue::as_bool) {
                             SubHpInfo::PushLog
+                        } else if hp.get("type").is_some_and(|ty| ty.as_str() == "records") {
+                            SubHpInfo::Records {
+                                records: hp
+                                    .get("records")
+                                    .map(record_names_from_rpc)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter(|record| record_name_is_valid(record))
+                                    .collect(),
+                            }
                         } else if meta.contains_key("HP") {
                             SubHpInfo::Legacy {
                                 getlog_path: if is_device { LEGACY_SYNC_PATH_DEVICE } else { LEGACY_SYNC_PATH_HP }.to_string(),
@@ -897,6 +921,25 @@ mod tests {
         .collect::<BTreeMap<_,_>>());
     }
 
+    #[test]
+    fn collect_records_sub_hp() {
+        let sites_tree = RpcValue::from_cpon(r#"{
+            "records_site":{
+                "_meta":{
+                    "HP3":{
+                        "type":"records",
+                        "records":["passages", "maintenance"]
+                    }
+                }
+            }
+        }"#).unwrap();
+        let sub_hps = super::collect_sub_hps(&[], sites_tree.as_map());
+        let Some(super::SubHpInfo::Records { records }) = sub_hps.get("records_site") else {
+            panic!("records_site should be a records sub HP");
+        };
+        assert_eq!(records, &vec!["passages".to_string(), "maintenance".to_string()]);
+    }
+
     #[async_trait::async_trait]
     impl TestStep<SitesTaskTestState> for ClientEvent {
         async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
@@ -1022,6 +1065,23 @@ mod tests {
         }"#).unwrap()
     }
 
+    fn records_broker() -> RpcValue {
+        RpcValue::from_cpon(r#"{
+            "_meta":{
+                "HP3":{"type": "HP3"}
+            },
+            "records_node":{
+                "_meta":{
+                    "HP3":{
+                        "type":"records",
+                        "records":["maintenance", "passage"]
+                    },
+                    "type":"some_type"
+                }
+            },
+        }"#).unwrap()
+    }
+
     #[tokio::test]
     async fn sites_task_test() -> std::result::Result<(), PrettyJoinError> {
         init_logger();
@@ -1045,6 +1105,30 @@ mod tests {
                 starting_files: vec![],
                 expected_file_paths: vec![],
                 cleanup_steps: &[],
+            },
+            TestCase {
+                name: "Records HP subscriptions and sync trigger",
+                steps: &[
+                    Box::new(ClientEvent::Connected(shvclient::clientapi::ShvApiVersion::V3)),
+                    Box::new(ExpectCall("sites", "getSites", Ok(records_broker()))),
+                    Box::new(ExpectSubscription("shv/records_node/*:*:mntchng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/records_node/*:*:chng".try_into().unwrap())),
+                    Box::new(ExpectSubscription("shv/records_node/*:*:cmdlog".try_into().unwrap())),
+                    Box::new(ExpectCall("sites/records_node/_files", "ls", Ok(shvproto::List::new().into()))),
+                    Box::new(ExpectSyncCommand::SyncAll),
+                    Box::new(SendSignal("shv/records_node/*:*:mntchng".to_string(), "shv/records_node".to_string(), "mntchng".to_string(), true.into())),
+                    Box::new(ExpectSignal("records_node", "onlinestatuschng", 2.into())),
+                    Box::new(ExpectSyncCommand::SyncSite { expected_site: "records_node".to_string() }),
+                    Box::new(ClientEvent::Disconnected),
+                    Box::new(ExpectSignal("records_node", "onlinestatuschng", 0.into())),
+                ],
+                starting_files: vec![],
+                expected_file_paths: vec![],
+                cleanup_steps: &[
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                    Box::new(ExpectUnsubscription),
+                ],
             },
             TestCase {
                 name: "Test everything",

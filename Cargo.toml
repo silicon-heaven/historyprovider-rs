@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "3.0.4"
+version = "3.1.0"
 edition = "2024"
 
 [profile.release]
@@ -38,6 +38,7 @@ time = { version = "0.3.51", features = ["formatting"] }
 chrono = "0.4.45"
 humantime = "2.3.0"
 size = { version = "0.5.0", features = ["serde"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 
 # [patch.crates-io]
 # shvrpc = { path = "../libshvrpc-rs" }
