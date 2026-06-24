@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "3.0.3"
+version = "3.0.4"
 edition = "2024"
 
 [profile.release]
@@ -17,17 +17,17 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "6.2.0"
-shvrpc = { version = "17.0", features = ["journal"] }
-shvclient = { version = "7.0", features = ["tokio"] }
+shvproto = "6.2.2"
+shvrpc = { version = "18.0", features = ["journal"] }
+shvclient = { version = "8.0", features = ["tokio"] }
 futures = "0.3.32"
-log = "0.4.32"
-clap = { version = "4.6.0", features = ["derive"] }
+log = "0.4.33"
+clap = { version = "4.6.1", features = ["derive"] }
 # simple_logger = { version = "5.0.0", features = ["stderr"] }
 simple_logger = { version = "5.2.0" }
 url = "2.5.8"
 duration-str = "0.21"
-sha1 = { version = "0.10.6", features = ["asm", "sha1-asm"] }
+sha1 = "0.11.0"
 hex = "0.4.3"
 tokio-util = { version = "0.7.18", features = ["io"] }
 async-compression = { version = "0.4.42", features = ["gzip", "tokio"] }
@@ -47,6 +47,6 @@ size = { version = "0.5.0", features = ["serde"] }
 
 [dev-dependencies]
 async-broadcast = "0.7.2"
-async-trait = "0.1.80"
-shvclient = { version = "7.0", features = ["mocking", "tokio"] }
+async-trait = "0.1.89"
+shvclient = { version = "8.0", features = ["mocking", "tokio"] }
 tempfile = "3.27.0"
