@@ -428,7 +428,7 @@ mod tests {
                 make_entry("2022-07-07T18:06:10.500Z", "dirty_non_monotonic", 4).unwrap(),
                 make_entry("2022-07-07T18:06:12.000Z", "dirty_later", 5).unwrap(),
             ],
-            &Default::default(),
+            &GetLog2Params::default(),
         ).await;
 
         assert_eq!(result.snapshot_entries.len(), 1);
@@ -465,7 +465,7 @@ mod tests {
                 ]),
             ],
             [],
-            &Default::default(),
+            &GetLog2Params::default(),
         ).await;
 
         assert_eq!(result.snapshot_entries.len(), 1);
@@ -551,7 +551,7 @@ mod tests {
         let test_cases = [
             TestCase {
                 name: "default params (no snapshot)",
-                params: Default::default(),
+                params: GetLog2Params::default(),
                 expected: vec![
                     ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
                     ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
@@ -815,7 +815,7 @@ mod tests {
                 ..Default::default()
             },
         ].into_iter().map(|test_case| (data_2 as fn() -> _, test_case))).chain([
-            ("result since/until - default params", Default::default()),
+            ("result since/until - default params", GetLog2Params::default()),
             ("result since/until - since set", GetLog2Params { since: since("2022-07-07T18:06:15.557Z"), ..Default::default() }),
             ("result since/until - until set", GetLog2Params { until: Some(ts("2022-07-07T18:06:15.557Z")), ..Default::default() }),
             ("result since/until - both since/until set", GetLog2Params { since: since("2022-07-07T18:06:15.557Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default() }),
@@ -830,7 +830,7 @@ mod tests {
         }))).chain([
             TestCase {
                 name: "since/until not set",
-                params: Default::default(),
+                params: GetLog2Params::default(),
                 expected: vec![
                     ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
                     ("2022-07-07T18:06:15.557Z", "value2", 20.into()),

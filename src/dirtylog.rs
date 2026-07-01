@@ -245,9 +245,9 @@ pub(crate) async fn dirtylog_task(
     impl RequestScheduler {
         fn new(journal_dir: PathBuf) -> Self {
             Self {
-                per_site: Default::default(),
-                running: Default::default(),
-                inflight: Default::default(),
+                per_site: HashMap::default(),
+                running: HashSet::default(),
+                inflight: FuturesUnordered::default(),
                 journal_dir,
             }
         }

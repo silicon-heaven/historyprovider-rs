@@ -53,7 +53,7 @@ impl TestStep<SyncTaskTestState> for UseRecordsSite {
                     records: vec!["maintenance".to_string()],
                 })
             ])),
-            typeinfos: Default::default(),
+            typeinfos: Arc::default(),
         };
     }
 }

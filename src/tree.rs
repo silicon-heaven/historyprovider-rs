@@ -987,7 +987,7 @@ mod tests {
                     records: vec![],
                 }),
             ])),
-            typeinfos: Default::default(),
+            typeinfos: Arc::default(),
         };
 
         assert!(!super::has_records_leaf(&sites_data));
@@ -1005,7 +1005,7 @@ mod tests {
                     records: vec!["maintenance".to_string()],
                 }),
             ])),
-            typeinfos: Default::default(),
+            typeinfos: Arc::default(),
         };
 
         assert!(super::has_records_leaf(&sites_data));

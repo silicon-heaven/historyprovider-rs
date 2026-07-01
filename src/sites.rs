@@ -76,7 +76,7 @@ fn collect_sites(
                     SiteInfo {
                         name: get_or_default("name", "<undefined>"),
                         site_type: get_or_default("type", "<undefined>"),
-                        sub_hp: Default::default(),
+                        sub_hp: String::default(),
                     },
             )])
         } else {
@@ -546,7 +546,7 @@ async fn reload_sites(
         typeinfos: typeinfos.clone()
     };
 
-    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), SiteOnlineStatus::default())).collect();
     let mut online_status_channels = BTreeMap::new();
     let mut online_status_workers = Vec::new();
     for (site, info) in sites_info.iter() {
@@ -570,7 +570,7 @@ async fn reload_sites(
         futures::future::join_all(online_status_workers).await;
         debug!(target: "OnlineStatus", "Online status task finish");
     }));
-    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), SiteOnlineStatus::default())).collect();
 
     let params = Arc::new(shvrpc::journalrw::GetLog2Params {
         since: shvrpc::journalrw::GetLog2Since::LastEntry,
@@ -863,7 +863,7 @@ mod tests {
 
     #[test]
     fn parse_notification() {
-        let dummy_siteinfo = || SiteInfo { name: Default::default(), site_type: Default::default(), sub_hp: Default::default() };
+        let dummy_siteinfo = || SiteInfo { name: String::default(), site_type: String::default(), sub_hp: String::default() };
         let sites_info = BTreeMap::from([
             ("foo/site1".to_string(), dummy_siteinfo()),
             ("foo/site2".to_string(), dummy_siteinfo()),
@@ -914,7 +914,7 @@ mod tests {
             ("site".to_string(), SiteInfo {
                 name: "test1".to_string(),
                 site_type: "DepotG3".to_string(),
-                sub_hp: Default::default(),
+                sub_hp: String::default(),
             })
         ]
         .into_iter()

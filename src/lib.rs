@@ -14,6 +14,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 
 use crate::alarm::Alarm;
+use crate::sync::SyncInfo;
 use self::sites::SiteOnlineStatus;
 use self::util::DedupSender;
 
@@ -159,10 +160,10 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
     let app_state = Arc::new(State {
         start_time: std::time::Instant::now(),
         sites_data: RwLock::default(),
-        sync_info: Default::default(),
-        alarms: Default::default(),
-        state_alarms: Default::default(),
-        online_states: Default::default(),
+        sync_info: SyncInfo::default(),
+        alarms: RwLock::default(),
+        state_alarms: RwLock::default(),
+        online_states: RwLock::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
         dirtylog_cmd_tx,

@@ -63,7 +63,7 @@ struct TestApp {
 impl TestApp {
     fn new() -> Self {
         let (conn_evt_tx, conn_evt_rx) = futures::channel::mpsc::unbounded::<ConnectionEvent>();
-        let config = Default::default();
+        let config = HpConfig::default();
         let app = tokio::spawn(async move {
             mock_run(&config, conn_evt_rx).await
         });

@@ -86,7 +86,7 @@ fn load_client_config(cli_opts: Opts) -> shvrpc::Result<(ClientConfig, HpConfig)
             HpConfig::load(config_file)?,
         )
     } else {
-        (Default::default(), Default::default())
+        (ClientConfig::default(), HpConfig::default())
     };
     client_config.url = cli_opts.url.map_or_else(|| Ok(client_config.url), |url_str| Url::parse(&url_str))?;
     client_config.device_id = cli_opts.device_id.or(client_config.device_id);
