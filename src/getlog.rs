@@ -62,7 +62,7 @@ pub(crate) async fn getlog_handler(
     let mut log_files = get_files(&local_journal_path, is_log_file)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
-    log_files.sort_by_key(|entry| entry.file_name());
+    log_files.sort_by_key(DirEntry::file_name);
 
     let file_start_index: usize = {
         if log_files.is_empty() {
