@@ -425,7 +425,7 @@ pub mod testing {
                 sub_hps: Arc::new(BTreeMap::from([
                     ("site1".to_string(), SubHpInfo::Normal {
                         sync_path: ".app/shvjournal".to_string(),
-                        download_chunk_size: 1000000,
+                        download_chunk_size: 1_000_000,
                     })
                 ])),
                 typeinfos: Arc::default(),

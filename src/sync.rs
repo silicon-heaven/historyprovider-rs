@@ -563,7 +563,7 @@ async fn sync_site_legacy(
         }
     };
 
-    const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100000;
+    const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100_000;
     const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
     const RECORD_COUNT_LIMIT: i64 = 10000;
 

@@ -476,7 +476,7 @@ mod tests {
                     Box::new(TestGetDirtyLog{
                         site: "site1".to_string(),
                         expected: vec![JournalEntry {
-                            epoch_msec: 1657152000000,
+                            epoch_msec: 1_657_152_000_000,
                             epoch_msec_orig: None,
                             path: "some_value_node".into(),
                             signal: "chng".into(),
@@ -501,7 +501,7 @@ mod tests {
                     Box::new(TestGetDirtyLog{
                         site: "site1".to_string(),
                         expected: vec![JournalEntry {
-                            epoch_msec: 1657152000000,
+                            epoch_msec: 1_657_152_000_000,
                             epoch_msec_orig: None,
                             path: "some_value_node".into(),
                             signal: "chng".into(),
