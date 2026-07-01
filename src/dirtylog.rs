@@ -101,7 +101,7 @@ pub(crate) async fn dirtylog_task(
                         }
                     };
                 if let Ok(metadata) = dirty_log_file.metadata().await {
-                    let size = metadata.len();
+                    let dirtylog_size = metadata.len();
 
                     static DIRTY_LOG_SIZE_MAX: OnceLock<u64> = OnceLock::new();
                     let max_size = *DIRTY_LOG_SIZE_MAX.get_or_init(|| {
@@ -111,9 +111,9 @@ pub(crate) async fn dirtylog_task(
                             .unwrap_or(100 * 1024 * 1024)
                     });
 
-                    if size > max_size {
+                    if dirtylog_size > max_size {
                         log::trace!(
-                            "Dirty log {path} max size exceeded ({size} > {max_size}), dropping journal entry {journal_entry:?}",
+                            "Dirty log {path} max size exceeded ({dirtylog_size} > {max_size}), dropping journal entry {journal_entry:?}",
                             path = dirty_log_path.display()
                         );
                         return;

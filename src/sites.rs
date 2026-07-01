@@ -235,16 +235,16 @@ async fn set_online_status(
 {
     let site = site.as_ref();
     let mut online_states = app_state.online_states.write().await;
-    let Some(online_status) = online_states.get_mut(site) else {
+    let Some(online_state) = online_states.get_mut(site) else {
         error!(target: "OnlineStatus", "No onlineStatus for site {site}");
         return
     };
-    if *online_status == new_status {
+    if *online_state == new_status {
         return;
     }
 
     debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
-    *online_status = new_status;
+    *online_state = new_status;
 
     client_commands
         .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng").with_param(new_status as i32))
