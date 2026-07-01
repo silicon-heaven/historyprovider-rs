@@ -344,7 +344,7 @@ pub(crate) async fn getlog_records(
         if limit == 0 {
             records.clear();
         } else {
-            let boundary_ts = records[limit - 1].0;
+            let boundary_ts = records.get(limit - 1).expect("Record must be in range").0;
             let keep_count = records
                 .iter()
                 .enumerate()

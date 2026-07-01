@@ -90,7 +90,7 @@ pub(crate) async fn getlog_handler(
     };
 
     // Skip files with no journal entries
-    let log_files = tokio_stream::iter(&log_files[file_start_index..])
+    let log_files = tokio_stream::iter(log_files.get(file_start_index..).expect("We found the index ourselves"))
         .filter(|file_entry| {
             let file_path = file_entry.path();
             async move {

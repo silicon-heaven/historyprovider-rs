@@ -139,7 +139,7 @@ pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc
             let ref_index = i
                 .checked_sub(ref_offset + 1)
                 .ok_or_else(|| record_err(&format!("ref offset {ref_offset} out of range")))?;
-            let ref_record = &result[ref_index];
+            let ref_record = result.get(ref_index).expect("Ref index must be in range");
             let mut log_record = LogRecord {
                 timestamp,
                 id,

@@ -49,7 +49,7 @@ pub(crate) async fn alarmlog_impl(
 
     let site_path_matches_prefix = |site_path: &str|
         site_path.starts_with(site_path_prefix) && (site_path.len() == site_path_prefix.len()
-            || site_path.as_bytes()[site_path_prefix.len()] == b'/');
+            || *site_path.as_bytes().get(site_path_prefix.len()).expect("There must be another char") == b'/');
 
     const MAX_SYNC_TASKS_DEFAULT: usize = 8;
     let semaphore = Arc::new(Semaphore::new(MAX_SYNC_TASKS_DEFAULT));
