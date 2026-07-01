@@ -146,7 +146,7 @@ impl AppTasks {
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity, reason = "Can't put impl into a type alias")]
 pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result<(Arc<State>, shvclient::Client<Full>, impl FnOnce(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver))> {
     info!("Max journal dir size: {}", hp_config.max_journal_dir_size);
     info!("Setting up journal dir: {}", hp_config.journal_dir);

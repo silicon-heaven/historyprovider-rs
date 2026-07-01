@@ -408,7 +408,7 @@ async fn sync_site_by_download(
 #[derive(Copy,Clone)]
 enum ReadApi { List, Map }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "We're fine")]
 async fn sync_file(
     client_cmd_tx: ClientCommandSender,
     file_path_remote: impl AsRef<str>,
