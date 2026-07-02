@@ -22,7 +22,7 @@ pub fn init_logger() {
         SimpleLogger::new()
             .with_level(log::LevelFilter::Debug)
             .init()
-            .unwrap();
+            .expect("Logging must work");
         });
 }
 

@@ -67,7 +67,7 @@ fn init_logger(cli_opts: &Opts) {
             }
         }
     }
-    logger.init().unwrap();
+    logger.init().expect("Logger must work");
 }
 
 fn print_banner(text: impl AsRef<str>) {
