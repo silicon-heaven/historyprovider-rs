@@ -186,13 +186,13 @@ pub mod testing {
         }
     }
 
-    fn _list_files(vec: &mut Vec<PathBuf>, path: &Path) -> std::io::Result<()> {
+    fn impl_list_files(vec: &mut Vec<PathBuf>, path: &Path) -> std::io::Result<()> {
         if std::fs::metadata(path)?.is_dir() {
             let paths = std::fs::read_dir(path)?;
             for path_result in paths {
                 let full_path = path_result?.path();
                 if std::fs::metadata(&full_path)?.is_dir() {
-                    _list_files(vec, &full_path)?;
+                    impl_list_files(vec, &full_path)?;
                 } else {
                     vec.push(full_path);
                 }
@@ -203,7 +203,7 @@ pub mod testing {
 
     pub fn list_files(path: &Path) -> Vec<(String, String)> {
         let mut res = Vec::new();
-        _list_files(&mut res, path).expect("Failed to list journal files");
+        impl_list_files(&mut res, path).expect("Failed to list journal files");
         let mut res = res
             .into_iter()
             .map(|path| (path.to_string_lossy().to_string(), std::fs::read_to_string(path).expect("Reading file should work")))

@@ -251,7 +251,7 @@ pub(crate) async fn dirtylog_task(
             }
         }
 
-        fn _schedule_next(&mut self, site: String) {
+        fn impl_schedule_next(&mut self, site: String) {
             if self.running.contains(&site) {
                 return;
             }
@@ -268,12 +268,12 @@ pub(crate) async fn dirtylog_task(
 
         fn schedule_new(&mut self, site: String, request: Request) {
             self.per_site.entry(site.clone()).or_default().push_back(request);
-            self._schedule_next(site);
+            self.impl_schedule_next(site);
         }
 
         fn on_finished(&mut self, site: String) {
             self.running.remove(&site);
-            self._schedule_next(site);
+            self.impl_schedule_next(site);
         }
     }
 
