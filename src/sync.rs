@@ -105,6 +105,7 @@ impl TryFrom<&RpcValue> for LsFilesEntry {
     }
 }
 
+#[expect(clippy::needless_pass_by_value, reason = "It's alright")]
 fn to_string(v: impl ToString) -> String {
     v.to_string()
 }
@@ -809,7 +810,7 @@ pub(crate) async fn sync_task(
     let days_to_keep = app_state.config.days_to_keep;
 
     while let Some(cmd) = sync_cmd_rx.next().await {
-        fn on_sync_result(sync_result: Result<ShouldTrim, String>, site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>, sync_logger: &SyncSiteLogger) {
+        fn on_sync_result(sync_result: Result<ShouldTrim, String>, site_path: String, dirtylog_cmd_tx: &UnboundedSender<DirtyLogCommand>, sync_logger: &SyncSiteLogger) {
             match sync_result {
                 Ok(ShouldTrim::Yes) => {
                     if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
@@ -885,7 +886,7 @@ pub(crate) async fn sync_task(
                                         Some(&file_list),
                                     ).await;
                                     sync_logger.log(log::Level::Info, "Syncing done");
-                                    on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                    on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -904,7 +905,7 @@ pub(crate) async fn sync_task(
                                     sync_logger.clone()
                                 ).await;
                                 sync_logger.log(log::Level::Info, "Syncing done");
-                                on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                                 drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -929,7 +930,7 @@ pub(crate) async fn sync_task(
                                         sync_logger.clone(),
                                     ).await;
                                     sync_logger.log(log::Level::Info, "syncing done");
-                                    on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                    on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -975,7 +976,7 @@ pub(crate) async fn sync_task(
                                 sync_logger.clone(),
                                 None,
                             ).await;
-                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Legacy { getlog_path } => {
@@ -990,7 +991,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone()
                             ).await;
-                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Records { records } => {
@@ -1010,7 +1011,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone(),
                             ).await;
-                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::PushLog => {

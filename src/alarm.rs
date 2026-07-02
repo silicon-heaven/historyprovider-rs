@@ -57,22 +57,23 @@ impl Alarm {
         !self.path.is_empty()
     }
 
-    pub fn from_rpc_map(map: RpcMap) -> Self {
-        fn extract_key_or_default<T>(map: &RpcMap, key: impl AsRef<str>) -> T
+    pub fn from_rpc_map(mut map: RpcMap) -> Self {
+        fn extract_key_or_default<T>(map: &mut RpcMap, key: impl AsRef<str>) -> T
         where
-            T: for<'a> TryFrom<&'a RpcValue> + Default
+            T: TryFrom<RpcValue> + Default
         {
-            map.get(key.as_ref())
+            map.remove(key.as_ref())
                 .and_then(|v| T::try_from(v).ok())
                 .unwrap_or_default()
         }
+
         Self {
-            path: extract_key_or_default(&map, "path"),
-            is_active: extract_key_or_default(&map, "isActive"),
-            description: extract_key_or_default(&map, "description"),
-            label: extract_key_or_default(&map, "label"),
-            level: extract_key_or_default(&map, "alarmLevel"),
-            severity: extract_key_or_default::<i32>(&map, "severity").into(),
+            path: extract_key_or_default(&mut map, "path"),
+            is_active: extract_key_or_default(&mut map, "isActive"),
+            description: extract_key_or_default(&mut map, "description"),
+            label: extract_key_or_default(&mut map, "label"),
+            level: extract_key_or_default(&mut map, "alarmLevel"),
+            severity: extract_key_or_default::<i32>(&mut map, "severity").into(),
         }
     }
 

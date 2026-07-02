@@ -111,6 +111,7 @@ impl NodeType {
     }
 }
 
+#[expect(clippy::needless_pass_by_value, reason = "It's alright")]
 fn rpc_error_filesystem(err: std::io::Error) -> RpcError {
     RpcError::new(
         RpcErrorCode::MethodCallException,
