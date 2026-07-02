@@ -119,7 +119,7 @@ fn record_to_values(record: &LogRecord) -> Result<LogRecordRow, String> {
             if entry.access_level != AccessLevel::Read as i64 {
                 access_level = Some(entry.access_level);
             }
-            user_id = entry.user_id.clone();
+            user_id.clone_from(&entry.user_id);
             if entry.repeat {
                 repeat = Some(1);
             }

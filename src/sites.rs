@@ -449,7 +449,7 @@ async fn reload_sites(
                         site_info.sub_hp = prefix.into();
                     } else {
                         log::error!("Cannot find sub HP for site {path}");
-                        site_info.sub_hp = path.clone();
+                        site_info.sub_hp.clone_from(path)
                     }
                 }
                 break 'sites_get_loop (Arc::new(sites_info), Arc::new(sub_hps));
