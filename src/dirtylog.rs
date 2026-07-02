@@ -181,12 +181,11 @@ pub(crate) async fn dirtylog_task(
                         .next()
                         .await;
 
-                    match latest_entry {
-                        Some(entry) => entry,
-                        None => {
-                            info!("Trim dirty log done, no journal entries in synced files");
-                            return;
-                        }
+                    if let Some(entry) = latest_entry {
+                        entry
+                    } else {
+                        info!("Trim dirty log done, no journal entries in synced files");
+                        return;
                     }
                 };
 

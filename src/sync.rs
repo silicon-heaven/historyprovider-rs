@@ -570,46 +570,14 @@ async fn sync_site_legacy(
     const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
     const RECORD_COUNT_LIMIT: i64 = 10000;
 
-    let (mut getlog_params, mut log_file_path, mut log_file_entries) = match newest_log {
-        Some((newest_log_file, newest_log_entries)) => {
-            let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
-            let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
-            if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
-                // Start with a new file if it already contains too many records
-                sync_logger.log(
-                    log::Level::Info,
-                    format!("sync will create a new file since {}", since.to_iso_string())
-                );
-                let params = GetLog2Params {
-                    since: GetLog2Since::DateTime(since),
-                    until: None,
-                    path_pattern: None,
-                    with_paths_dict: true,
-                    with_snapshot: true,
-                    record_count_limit: RECORD_COUNT_LIMIT,
-                };
-                (params, None, Vec::new())
-            } else {
-                sync_logger.log(
-                    log::Level::Info,
-                    format!("sync will append to {}", newest_log_file.to_string_lossy())
-                );
-                let params = GetLog2Params {
-                    since: GetLog2Since::DateTime(since),
-                    until: None,
-                    path_pattern: None,
-                    with_paths_dict: true,
-                    with_snapshot: false,
-                    record_count_limit: RECORD_COUNT_LIMIT,
-                };
-                (params, Some(newest_log_file), newest_log_entries)
-            }
-        },
-        None => {
-            let since = shvproto::DateTime::now().add_days(-GETLOG_SINCE_DAYS_DEFAULT);
+    let (mut getlog_params, mut log_file_path, mut log_file_entries) = if let Some((newest_log_file, newest_log_entries)) = newest_log {
+        let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
+        let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
+        if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
+            // Start with a new file if it already contains too many records
             sync_logger.log(
                 log::Level::Info,
-                format!("sync to a new journal directory since {}", since.to_iso_string())
+                format!("sync will create a new file since {}", since.to_iso_string())
             );
             let params = GetLog2Params {
                 since: GetLog2Since::DateTime(since),
@@ -620,7 +588,36 @@ async fn sync_site_legacy(
                 record_count_limit: RECORD_COUNT_LIMIT,
             };
             (params, None, Vec::new())
+        } else {
+            sync_logger.log(
+                log::Level::Info,
+                format!("sync will append to {}", newest_log_file.to_string_lossy())
+            );
+            let params = GetLog2Params {
+                since: GetLog2Since::DateTime(since),
+                until: None,
+                path_pattern: None,
+                with_paths_dict: true,
+                with_snapshot: false,
+                record_count_limit: RECORD_COUNT_LIMIT,
+            };
+            (params, Some(newest_log_file), newest_log_entries)
         }
+    } else {
+        let since = shvproto::DateTime::now().add_days(-GETLOG_SINCE_DAYS_DEFAULT);
+        sync_logger.log(
+            log::Level::Info,
+            format!("sync to a new journal directory since {}", since.to_iso_string())
+        );
+        let params = GetLog2Params {
+            since: GetLog2Since::DateTime(since),
+            until: None,
+            path_pattern: None,
+            with_paths_dict: true,
+            with_snapshot: true,
+            record_count_limit: RECORD_COUNT_LIMIT,
+        };
+        (params, None, Vec::new())
     };
 
     enum JournalPath {
