@@ -422,7 +422,6 @@ impl TryFrom<&RpcValue> for ReadParams {
                 None => Ok(None),
                 Some(val) => {
                     i64::try_from(val)
-                        .map_err(|e| e.clone())
                         .and_then(|v| u64::try_from(v)
                             .map_err(|e| e.to_string())
                         )
