@@ -429,6 +429,7 @@ async fn reload_sites(
 
         match sites {
             Ok(sites) => {
+                #[expect(clippy::print_stderr, reason = "Fine here")]
                 if sites
                     .get("_meta")
                         .map(RpcValue::as_map)
