@@ -559,7 +559,7 @@ async fn reload_sites(
 
         if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
             continue
-        };
+        }
         let (tx, rx) = futures::channel::mpsc::unbounded();
         online_status_channels.insert(site.clone(), tx);
         online_status_workers.push(online_status_worker(site.clone(), rx, ClientCommandSender::clone(client_cmd_tx), Arc::clone(app_state)));
@@ -722,7 +722,7 @@ pub(crate) async fn sites_task(
                         state.online_status_channels.clear();
                         if let Err(err) = online_status_task.await {
                             log::error!("Failed to join online_status_task: {err}")
-                        };
+                        }
                     }
 
                     state = SitesTaskState {
@@ -846,7 +846,7 @@ pub(crate) async fn sites_task(
         state.online_status_channels.clear();
         if let Err(err) = online_status_task.await {
             log::error!("Failed to join online_status_task: {err}")
-        };
+        }
     }
 
     log::debug!("Sites task finished");
