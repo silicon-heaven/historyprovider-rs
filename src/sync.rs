@@ -665,7 +665,7 @@ async fn sync_site_legacy(
         );
         let log: RpcValue = RpcCall::new(getlog_path, "getLog")
             .param(getlog_params.clone())
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_mins(1))
             .exec(&client_cmd_tx)
             .await
             .map_err(to_string)?;
@@ -756,7 +756,7 @@ async fn sync_site_records(
             );
             let fetched: RpcValue = RpcCall::new(&remote_records_path, "fetch")
                 .param(shvproto::make_list!(offset, count))
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_mins(1))
                 .exec(&client_cmd_tx)
                 .await
                 .map_err(to_string)?;
