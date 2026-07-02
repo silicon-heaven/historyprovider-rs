@@ -418,17 +418,12 @@ impl TryFrom<&RpcValue> for ReadParams {
         let map: shvproto::rpcvalue::Map = value.try_into()?;
 
         let parse_param = |param_name: &str| -> Result<Option<u64>, String> {
-            match map.get(param_name) {
-                None => Ok(None),
-                Some(val) => {
-                    i64::try_from(val)
-                        .and_then(|v| u64::try_from(v)
-                            .map_err(|e| e.to_string())
-                        )
-                        .map_err(|e| format!("Error parsing `{param_name}` parameter: {e}"))
-                        .map(Some)
-                }
-            }
+            map.get(param_name).map_or(Ok(None), |val| i64::try_from(val)
+                .and_then(|v| u64::try_from(v)
+                    .map_err(|e| e.to_string())
+                )
+                .map_err(|e| format!("Error parsing `{param_name}` parameter: {e}"))
+                .map(Some))
         };
 
         let offset = parse_param("offset")?;
@@ -628,10 +623,9 @@ async fn alarmtable_handler<Getter: AlarmGetter>(
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmTable path: {site_path}")));
     }
 
-    match Getter::alarm_getter(&app_state).await.get(site_path) {
-        Some(alarms_for_site) => Ok(alarms_for_site.clone().into()),
-        None => Ok(Vec::<RpcValue>::new().into()),
-    }
+    Getter::alarm_getter(&app_state).await
+        .get(site_path)
+        .map_or_else(|| Ok(Vec::<RpcValue>::new().into()), |alarms_for_site| Ok(alarms_for_site.clone().into()))
 }
 
 async fn alarmlog_handler(

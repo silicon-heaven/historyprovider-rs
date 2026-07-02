@@ -78,8 +78,7 @@ pub(crate) async fn getlog_handler(
                         .enumerate()
                         .rev()
                         .find(|(_,file)| file_name_to_file_msec(&file.to_string_lossy()).is_ok_and(|ms| ms < since_ms))
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(0)
+                        .map_or(0, |(idx, _)| idx)
                 }
                 GetLog2Since::LastEntry => log_files.len() - 1,
                 GetLog2Since::None => 0,

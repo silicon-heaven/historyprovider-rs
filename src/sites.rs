@@ -164,14 +164,11 @@ fn collect_sub_hps(
                         } else {
                             SubHpInfo::Normal {
                                 sync_path: hp
-                                    .get("syncPath")
-                                    .map(RpcValue::as_str)
-                                    .unwrap_or_else(|| if is_device { DEFAULT_SYNC_PATH_DEVICE } else { DEFAULT_SYNC_PATH_HP })
+                                    .get("syncPath").map_or_else(|| if is_device { DEFAULT_SYNC_PATH_DEVICE } else { DEFAULT_SYNC_PATH_HP }, RpcValue::as_str)
                                     .to_string(),
                                 download_chunk_size: hp
                                     .get("readLogChunkLimit")
-                                    .map(|v| v.as_int().min(DOWNLOAD_CHUNK_SIZE_MAX))
-                                    .unwrap_or(DOWNLOAD_CHUNK_SIZE_MAX),
+                                    .map_or(DOWNLOAD_CHUNK_SIZE_MAX, |v| v.as_int().min(DOWNLOAD_CHUNK_SIZE_MAX)),
                             }
                         }
                     })
@@ -699,8 +696,7 @@ pub(crate) async fn sites_task(
                         app_state
                             .sync_cmd_tx
                             .send(crate::sync::SyncCommand::SyncAll)
-                            .map(|_|())
-                            .unwrap_or_else(|e| log::error!("Cannot send SyncAll command: {e}"));
+                            .map_or_else(|e| log::error!("Cannot send SyncAll command: {e}"), |_|());
                     }
                 }
             }

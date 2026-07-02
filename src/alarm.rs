@@ -229,28 +229,25 @@ fn collect_alarms_for_type<Getter: AlarmGetter>(type_info: &TypeInfo, shv_path: 
                 .into_iter()
                 .find(|field| Getter::alarm_getter(field).is_some_and(|alarm| !alarm.is_empty())
                     && field.bit_range().is_some_and(|bit_range| bit_range.as_u64() == value.as_u64()));
-            match active_alarm_field {
-                Some(field) => vec![
-                    Alarm {
-                        path: shv_path.into(),
-                        is_active: true,
-                        description: field.description().unwrap_or_default().into(),
-                        label: field.label().unwrap_or_default().into(),
-                        level: field.alarm_level().unwrap_or_default(),
-                        severity: Getter::alarm_getter(&field).unwrap_or_default().into(),
-                    }
-                ],
-                None => vec![
-                    Alarm {
-                        path: shv_path.into(),
-                        is_active: false,
-                        description: String::new(),
-                        label: String::new(),
-                        level: 0,
-                        severity: Severity::Invalid,
-                    }
-                ],
+            active_alarm_field.map_or_else(|| vec![
+                Alarm {
+                    path: shv_path.into(),
+                    is_active: false,
+                    description: String::new(),
+                    label: String::new(),
+                    level: 0,
+                    severity: Severity::Invalid,
             }
+            ], |field| vec![
+                Alarm {
+                    path: shv_path.into(),
+                    is_active: true,
+                    description: field.description().unwrap_or_default().into(),
+                    label: field.label().unwrap_or_default().into(),
+                    level: field.alarm_level().unwrap_or_default(),
+                    severity: Getter::alarm_getter(&field).unwrap_or_default().into(),
+                }
+            ])
         }
         _ => vec![],
     }

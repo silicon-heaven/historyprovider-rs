@@ -74,14 +74,14 @@ impl TryFrom<&RpcValue> for LsFilesEntry {
         };
         let mut list_iter = list.iter().fuse();
         let name = list_iter.next()
-            .ok_or("Missing `file_name` field".to_string())
+            .ok_or_else(|| "Missing `file_name` field".to_string())
             .and_then(|v| if let shvproto::Value::String(file_name) = &v.value {
                 Ok((**file_name).clone())
             } else {
                 Err("Invalid type of `file_name` field".to_string())
             })?;
         let ftype = list_iter.next()
-            .ok_or("Missing `file_type` field".to_string())
+            .ok_or_else(|| "Missing `file_type` field".to_string())
             .and_then(|v|
                 if let shvproto::Value::String(file_type) = &v.value {
                     Ok((**file_type).clone())
@@ -91,7 +91,7 @@ impl TryFrom<&RpcValue> for LsFilesEntry {
             )
             .and_then(FileType::try_from)?;
         let size = list_iter.next()
-            .ok_or("Missing `size` field".to_string())
+            .ok_or_else(|| "Missing `size` field".to_string())
             .and_then(|v| if let shvproto::Value::Int(size) = v.value {
                 Ok(size)
             } else {

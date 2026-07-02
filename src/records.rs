@@ -350,8 +350,7 @@ pub(crate) async fn getlog_records(
                 .enumerate()
                 .skip(limit)
                 .find(|(_, (ts, _))| *ts != boundary_ts)
-                .map(|(idx, _)| idx)
-                .unwrap_or(records.len());
+                .map_or(records.len(), |(idx, _)| idx);
             records.truncate(keep_count);
         }
     }
