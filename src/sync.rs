@@ -204,7 +204,7 @@ async fn get_files_to_sync(
         .flatten()
         .collect::<Vec<_>>();
 
-    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
+    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| size.cast_unsigned()).sum();
     info!("overall sync files size: {overall_size}, limit: {size_limit}");
 
     let mut sites_journal_files = sites_journal_files
@@ -240,7 +240,7 @@ async fn get_files_to_sync(
         if let Some(site_files) = sites_journal_files.get_mut(site) {
             site_files.remove(&file);
             debug!("excluding file from sync: site: {site}, file: {file_name}", file_name = file.name);
-            excluded_size += file.size as u64;
+            excluded_size += file.size.cast_unsigned();
             excluded_files_count += 1;
         }
     }
@@ -319,7 +319,7 @@ async fn sync_site_by_download(
             let local_file_path = local_journal_path.join(&remote_file.name);
             match tokio::fs::metadata(&local_file_path).await {
                 Ok(local_file) if local_file.is_file() => {
-                    let local_size = local_file.len() as i64;
+                    let local_size = local_file.len().cast_signed();
                     let sync_offset = match local_size.cmp(&remote_file.size) {
                         Ordering::Less => {
                             sync_logger.log(
@@ -458,6 +458,7 @@ async fn sync_file(
             .await
             .map_err(to_string)?;
 
+        #[expect(clippy::cast_possible_wrap, reason = "Chunks are small")]
         let chunk_len = chunk.len() as i64;
         if chunk_len > sync_size {
             return Err(format!("{file_path_remote}: Got chunk of size: {chunk_len}, which is larger than requested: {sync_size}"));
@@ -477,6 +478,7 @@ async fn sync_file(
         sync_offset += chunk_len;
         remaining_bytes -= chunk_len;
 
+        #[expect(clippy::cast_precision_loss, reason = "It's just logging")]
         sync_logger.log(log::Level::Info,
             format!("{}: got chunk of size: {}, remaining: {} ({:.2}%)",
                 file_path_remote,

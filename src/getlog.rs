@@ -149,6 +149,7 @@ pub(crate) async fn getlog_handler(
 
 pub(crate) type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
+#[expect(clippy::cast_sign_loss, clippy::cast_possible_wrap, reason = "Lots of painful conversions here")]
 pub(crate) async fn getlog_impl(
     site: &str,
     journal_readers: impl IntoIterator<Item = JournalEntryStream>,

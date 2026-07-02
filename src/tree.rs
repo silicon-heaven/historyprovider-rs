@@ -161,7 +161,7 @@ async fn shvjournal_request_handler(
                             .ok()?;
                         let name = entry.file_name().to_str().map(String::from)?;
                         let ftype = if meta.is_dir() { FileType::Directory } else if meta.is_file() { FileType::File } else { return None };
-                        let size = meta.len() as i64;
+                        let size = meta.len().cast_signed();
                         Some(LsFilesEntry { name, ftype, size })
                     }.await;
                     Ok(res)
@@ -193,7 +193,7 @@ async fn shvjournal_request_handler(
                 }
                 Ok(hex::encode(hasher.finalize()).into())
             }
-            METH_SIZE => Ok((file_size as i64).into()),
+            METH_SIZE => Ok((file_size.cast_signed()).into()),
             METH_READ => {
                 let read_params: ReadParams = param
                     .try_into()
@@ -204,8 +204,8 @@ async fn shvjournal_request_handler(
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
                 result_meta
-                    .insert("offset", (offset as i64).into())
-                    .insert("size", (res.len() as i64).into());
+                    .insert("offset", (offset.cast_signed()).into())
+                    .insert("size", (res.len().cast_signed()).into());
                 Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
             METH_READ_COMPRESSED => {
@@ -218,8 +218,8 @@ async fn shvjournal_request_handler(
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
                 result_meta
-                    .insert("offset", (offset as i64).into())
-                    .insert("size", (bytes_read as i64).into());
+                    .insert("offset", (offset.cast_signed()).into())
+                    .insert("size", (bytes_read.cast_signed()).into());
                 Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
             _ => Err(rpc_error_method_not_found()),
@@ -259,6 +259,7 @@ async fn shvjournal_request_handler(
                     .map(RpcValue::from)
                     .map_err(rpc_error_filesystem)
                 ),
+                #[expect(clippy::cast_precision_loss, reason = "It's fine")]
                 METH_LOG_USAGE => return m.resolve(METHODS, async move || total_log_size(&app_state.config)
                         .await
                         .map(|size| 100. * (size as f64) / (app_state.config.max_journal_dir_size.bytes() as f64))
@@ -354,7 +355,7 @@ impl From<LsFilesEntry> for RpcValue {
 async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {
     collect_log_files(&config.journal_dir)
         .await
-        .map(|files| files.into_iter().map(|f| f.size as i64).sum::<i64>())
+        .map(|files| files.into_iter().map(|f| f.size.cast_signed()).sum::<i64>())
 }
 
 async fn sync_log_request_handler(param: &RpcValue, app_state: Arc<State>) -> Result<Vec<String>, RpcError> {

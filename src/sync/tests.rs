@@ -127,10 +127,10 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE)],
@@ -140,11 +140,11 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes()[..100].into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 100, "size" => (DUMMY_LOGFILE.len() as i32) - 100).into(), Ok(DUMMY_LOGFILE.as_bytes()[100..].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes()[..100].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 100, "size" => (DUMMY_LOGFILE.len().cast_signed()) - 100).into(), Ok(DUMMY_LOGFILE.as_bytes()[100..].into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE)],
@@ -154,10 +154,10 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Err(RpcError::new(shvrpc::rpcmessage::RpcErrorCode::MethodCallTimeout, "Simulated test timeout")))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Err(RpcError::new(shvrpc::rpcmessage::RpcErrorCode::MethodCallTimeout, "Simulated test timeout")))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![],
@@ -167,12 +167,12 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncAll),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-08T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-08T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15-557.log2", DUMMY_LOGFILE)],
@@ -182,12 +182,12 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-08T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-08T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15-557.log2", DUMMY_LOGFILE)],
@@ -198,10 +198,10 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list![ "2022-07-05T18-06-15-557.log2", "f", 0 ],
-                        make_list![ "2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32]
+                        make_list![ "2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()]
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-05T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-05T18-06-15-557.log2", ""), ("site1/2022-07-07T18-06-15-557.log2", DUMMY_LOGFILE)],
@@ -211,7 +211,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-000.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15-000.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
             ],
             starting_files: vec![
@@ -225,7 +225,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-000.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15-000.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
             ],
             starting_files: vec![
@@ -238,10 +238,10 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(very_large_log_file.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(very_large_log_file.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![],
@@ -251,7 +251,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15-557.log2", "f", very_large_log_file.len() as i32],
+                        make_list!["2022-07-07T18-06-15-557.log2", "f", very_large_log_file.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "dir", "sha1".into(), Ok(true.into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15-557.log2", "read", make_map!("offset" => 0, "size" => 1_000_000).into(), Ok(very_large_log_file.as_bytes()[..1_000_000].into()))),
@@ -313,10 +313,10 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
@@ -326,11 +326,11 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes()[..10].into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 10, "size" => (DUMMY_LOGFILE.len() as i32) - 10).into(), Ok(DUMMY_LOGFILE.as_bytes()[10..].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes()[..10].into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 10, "size" => (DUMMY_LOGFILE.len().cast_signed()) - 10).into(), Ok(DUMMY_LOGFILE.as_bytes()[10..].into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
@@ -340,10 +340,10 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Err(RpcError::new(shvrpc::rpcmessage::RpcErrorCode::MethodCallTimeout, "Simulated test timeout")))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Err(RpcError::new(shvrpc::rpcmessage::RpcErrorCode::MethodCallTimeout, "Simulated test timeout")))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![],
@@ -353,12 +353,12 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncAll),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-08T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-08T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15.log3", DUMMY_LOGFILE)],
@@ -368,12 +368,12 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-08T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-08T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-08T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE), ("site1/2022-07-08T18-06-15.log3", DUMMY_LOGFILE)],
@@ -384,10 +384,10 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
                         make_list![ "2022-07-05T18-06-15.log3", "f", 0 ],
-                        make_list![ "2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32]
+                        make_list![ "2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()]
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-05T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(DUMMY_LOGFILE.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![("site1/2022-07-05T18-06-15.log3", ""), ("site1/2022-07-07T18-06-15.log3", DUMMY_LOGFILE)],
@@ -397,7 +397,7 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
             ],
             starting_files: vec![
@@ -411,7 +411,7 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
             ],
             starting_files: vec![
@@ -424,10 +424,10 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", DUMMY_LOGFILE.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
-                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len() as i32).into(), Ok(very_large_log_file.as_bytes().into()))),
+                Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => DUMMY_LOGFILE.len().cast_signed()).into(), Ok(very_large_log_file.as_bytes().into()))),
             ],
             starting_files: vec![],
             expected_file_paths: vec![],
@@ -437,7 +437,7 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.app/shvjournal", "lsfiles", Ok(make_list![
-                        make_list!["2022-07-07T18-06-15.log3", "f", very_large_log_file.len() as i32],
+                        make_list!["2022-07-07T18-06-15.log3", "f", very_large_log_file.len().cast_signed()],
                 ].into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "dir", "sha1".into(), Ok(true.into()))),
                 Box::new(ExpectCallParam("shv/site1/.app/shvjournal/2022-07-07T18-06-15.log3", "read", make_map!("offset" => 0, "size" => 1_000_000).into(), Ok(very_large_log_file.as_bytes()[..1_000_000].into()))),

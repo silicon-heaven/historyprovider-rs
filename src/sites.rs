@@ -623,7 +623,7 @@ async fn reload_sites(
         .collect::<Vec<_>>()
         .await;
 
-    let loaded_count = results.len() as u32;
+    let loaded_count = results.len();
 
     for (site_path, type_info, log) in results {
         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
