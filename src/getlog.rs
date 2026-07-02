@@ -388,8 +388,8 @@ mod tests {
         shvrpc::journalrw::GetLog2Since::DateTime(ts(ts_str))
     }
 
-    fn make_entry(timestamp: &str, path: &str, value: impl Into<RpcValue>) -> Result<JournalEntry, Box<dyn Error + Send + Sync>> {
-        Ok(JournalEntry {
+    fn make_entry(timestamp: &str, path: &str, value: impl Into<RpcValue>) -> JournalEntry {
+        JournalEntry {
             path: path.to_string(),
             epoch_msec: DateTime::from_iso_str(timestamp).unwrap().epoch_msec(),
             epoch_msec_orig: None,
@@ -401,11 +401,11 @@ mod tests {
             user_id: String::default(),
             repeat: false,
             provisional: false,
-        })
+        }
     }
 
-    fn create_reader(entries: Vec<Result<JournalEntry, Box<dyn Error + Send + Sync + 'static>>>) -> JournalEntryStream {
-        Box::pin(tokio_stream::iter(entries))
+    fn create_reader(entries: Vec<JournalEntry>) -> JournalEntryStream {
+        Box::pin(tokio_stream::iter(entries.into_iter().map(Result::<JournalEntry, Box<dyn Error + Send + Sync + 'static>>::Ok)))
     }
 
     async fn get_log_entries(site: &str, readers: Vec<JournalEntryStream>, params: GetLog2Params) -> GetLogResult {
@@ -423,10 +423,10 @@ mod tests {
                 make_entry("2022-07-07T18:06:10.000Z", "synced", 1),
             ])],
             vec![
-                make_entry("2022-07-07T18:06:09.000Z", "overlap", 2).unwrap(),
-                make_entry("2022-07-07T18:06:11.000Z", "dirty_monotonic", 3).unwrap(),
-                make_entry("2022-07-07T18:06:10.500Z", "dirty_non_monotonic", 4).unwrap(),
-                make_entry("2022-07-07T18:06:12.000Z", "dirty_later", 5).unwrap(),
+                make_entry("2022-07-07T18:06:09.000Z", "overlap", 2),
+                make_entry("2022-07-07T18:06:11.000Z", "dirty_monotonic", 3),
+                make_entry("2022-07-07T18:06:10.500Z", "dirty_non_monotonic", 4),
+                make_entry("2022-07-07T18:06:12.000Z", "dirty_later", 5),
             ],
             &GetLog2Params::default(),
         ).await;

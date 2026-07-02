@@ -92,7 +92,7 @@ pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i6
 
 type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>);
 
-fn record_to_values(record: &LogRecord) -> Result<LogRecordRow, String> {
+fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut path = None;
     let mut signal = None;
     let mut source = None;
@@ -130,14 +130,14 @@ fn record_to_values(record: &LogRecord) -> Result<LogRecordRow, String> {
         RecordType::TimeAmbig => {}
     }
 
-    Ok((record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump))
+    (record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump)
 }
 
 pub(crate) async fn insert_records(path: impl AsRef<Path>, records: &[LogRecord]) -> Result<(), String> {
     let mut conn = ensure_db(path).await?;
 
     for record in records {
-        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump) = record_to_values(record)?;
+        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump) = record_to_values(record);
         sqlx::query(
             "INSERT OR IGNORE INTO journal_entries (
                 id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump
