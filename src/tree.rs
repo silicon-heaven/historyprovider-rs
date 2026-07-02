@@ -295,7 +295,7 @@ async fn shvjournal_request_handler(
             Method::Other(m) if m.method() == METH_LS_FILES => m.resolve(METHODS, async || {
                 journaldir_lsfiles_handler(get_journaldir_entries(path).await?).await
             }),
-            _ => err_unresolved_request(),
+            Method::Other(_) => err_unresolved_request(),
         }
     } else if path_meta.is_file() {
         const METHODS: &[MetaMethod] = &[
@@ -724,7 +724,7 @@ pub(crate) async fn request_handler(
                 Method::Dir(dir) => dir.resolve(METHODS),
                 Method::Ls(ls) => ls.resolve(METHODS, ls_empty),
                 Method::Other(m) if m.method() == METH_GET || m.method() == METH_GET_CACHE => m.resolve(METHODS, async || Err::<(), _>(rpc_error_not_implemented())),
-                _ => err_unresolved_request(),
+                Method::Other(_) => err_unresolved_request(),
             }
         }
         NodeType::Root => {
