@@ -713,7 +713,7 @@ pub(crate) async fn sites_task(
         let shv_api_version = loop {
             match client_evt_rx.next().await {
                 Some(ClientEvent::Connected(shv_api_version)) => break shv_api_version,
-                Some(ClientEvent::ConnectionFailed(_)) | Some(ClientEvent::Disconnected) => {
+                Some(ClientEvent::ConnectionFailed(_) | ClientEvent::Disconnected) => {
                     if let Some(online_status_task) = state.online_status_task {
                         state.online_status_channels.clear();
                         if let Err(err) = online_status_task.await {
