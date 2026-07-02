@@ -94,7 +94,7 @@ pub(crate) async fn alarmlog_impl(
                 .flat_map(|entry| update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec)))
                 .collect::<Vec<_>>();
 
-            (site_path.to_string(), AlarmLog {
+            (site_path.clone(), AlarmLog {
                 events,
                 snapshot,
             })

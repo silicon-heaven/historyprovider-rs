@@ -383,7 +383,7 @@ async fn sync_log_request_handler(param: &RpcValue, app_state: Arc<State>) -> Re
             .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send SyncAll command through the channel"))?;
     } else {
         sites_to_sync.iter().try_for_each(|site| app_state.sync_cmd_tx
-            .send(crate::sync::SyncCommand::SyncSite(site.to_string()))
+            .send(crate::sync::SyncCommand::SyncSite(site.clone()))
             .map(|_|())
             .map_err(|_| RpcError::new(RpcErrorCode::InternalError, format!("Cannot send Sync({site}) command through the channel")))
         )?;
@@ -421,7 +421,7 @@ impl TryFrom<&RpcValue> for ReadParams {
                 None => Ok(None),
                 Some(val) => {
                     i64::try_from(val)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.clone())
                         .and_then(|v| u64::try_from(v)
                             .map_err(|e| e.to_string())
                         )

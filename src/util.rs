@@ -349,7 +349,7 @@ pub mod testing {
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for SendSignal {
         async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
-            let sub_id = self.0.to_string();
+            let sub_id = self.0.clone();
             let (_, sender)  = subscriptions.iter().find(|(id, _)| **id == sub_id).expect("Sub must exist");
             let shv_path = self.1.as_str();
             let method = self.2.as_str();

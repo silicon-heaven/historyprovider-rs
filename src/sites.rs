@@ -558,7 +558,7 @@ async fn reload_sites(
             continue
         };
         let (tx, rx) = futures::channel::mpsc::unbounded();
-        online_status_channels.insert(site.to_string(), tx);
+        online_status_channels.insert(site.clone(), tx);
         online_status_workers.push(online_status_worker(site.clone(), rx, ClientCommandSender::clone(client_cmd_tx), Arc::clone(app_state)));
     }
 
@@ -632,7 +632,7 @@ async fn reload_sites(
 
         let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
         let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
-            let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
+            let alarms_for_site = alarm_table.entry(site_path.clone()).or_default();
 
             for entry in chained_entries.clone() {
                 update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
