@@ -263,7 +263,9 @@ async fn set_online_status(
         .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY);
 
     let emit_alarmmod = if new_status == SiteOnlineStatus::Offline  {
-        site_alarms.iter_mut().for_each(|alarm_with_ts| alarm_with_ts.stale = true);
+        for alarm_with_ts in site_alarms.iter_mut() {
+            alarm_with_ts.stale = true;
+        }
         if offline_alarm_idx.is_none() {
             site_alarms.push(AlarmWithTimestamp {
                 alarm: Alarm {
