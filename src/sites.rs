@@ -690,7 +690,7 @@ pub(crate) async fn sites_task(
                         }
                         None => break,
                     },
-                    _ = async {
+                    () = async {
                         if let Some(i) = &mut interval {
                             i.tick().await;
                         }

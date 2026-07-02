@@ -942,7 +942,7 @@ pub(crate) async fn sync_task(
                 futures::future::join_all(sync_tasks).await;
                 log::info!("Sync logs done in {} s", sync_start.elapsed().as_secs());
                 match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
-                    Ok(_) => info!("Cleanup journal dir done"),
+                    Ok(()) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
             }
@@ -1018,7 +1018,7 @@ pub(crate) async fn sync_task(
                         }
                     }
                     match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
-                        Ok(_) => info!("Cleanup journal dir done"),
+                        Ok(()) => info!("Cleanup journal dir done"),
                         Err(err) => error!("Cleanup journal dir error: {err}"),
                     }
                 } else {
@@ -1028,7 +1028,7 @@ pub(crate) async fn sync_task(
             SyncCommand::Cleanup => {
                 info!("Cleanup journal dir start");
                 match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
-                    Ok(_) => info!("Cleanup journal dir done"),
+                    Ok(()) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
             }

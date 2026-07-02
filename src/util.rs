@@ -101,7 +101,7 @@ impl<T: Eq + Hash + Clone> DedupSender<T> {
         }
         self.sender
             .unbounded_send(msg.clone())
-            .map(|_| {
+            .map(|()| {
                 pending.insert(msg);
                 true
             })
@@ -456,7 +456,7 @@ pub mod testing {
 
         tokio::select! {
             task_end = sync_task => {
-                task_end.map(|_| ()).map_err(PrettyJoinError::from)?;
+                task_end.map(|()| ()).map_err(PrettyJoinError::from)?;
             },
             unexpected_client_command = client_command_receiver.next() => {
                 if let Some(unexpected_client_command) = unexpected_client_command {
