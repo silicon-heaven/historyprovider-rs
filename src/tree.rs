@@ -271,7 +271,7 @@ async fn shvjournal_request_handler(
                 METH_SANITIZE_LOG => return m.resolve(METHODS, async move || app_state.sync_cmd_tx
                         .send(crate::sync::SyncCommand::Cleanup)
                         .map(|_| true)
-                        .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel"))
+                        .map_err(|_err| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel"))
                 ),
                 _ => return err_unresolved_request(),
             }
@@ -381,12 +381,12 @@ async fn sync_log_request_handler(param: &RpcValue, app_state: Arc<State>) -> Re
     if shv_path.is_empty() {
         app_state.sync_cmd_tx.send(crate::sync::SyncCommand::SyncAll)
             .map(|_|())
-            .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send SyncAll command through the channel"))?;
+            .map_err(|_err| RpcError::new(RpcErrorCode::InternalError, "Cannot send SyncAll command through the channel"))?;
     } else {
         sites_to_sync.iter().try_for_each(|site| app_state.sync_cmd_tx
             .send(crate::sync::SyncCommand::SyncSite(site.clone()))
             .map(|_|())
-            .map_err(|_| RpcError::new(RpcErrorCode::InternalError, format!("Cannot send Sync({site}) command through the channel")))
+            .map_err(|_err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot send Sync({site}) command through the channel")))
         )?;
     }
 
