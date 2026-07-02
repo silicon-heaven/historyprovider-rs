@@ -378,7 +378,7 @@ pub mod testing {
     ) -> std::result::Result<(), PrettyJoinError> {
         debug!(target: "test-driver", "Running test '{test_name}'");
         let (client_command_sender, mut client_command_receiver) = unbounded();
-        let client_command_sender: ClientCommandSender = ClientCommandSender::from_raw(client_command_sender);
+        let client_command_sender = ClientCommandSender::from_raw(client_command_sender);
         let (client_events_sender, client_events_rx) = async_broadcast::broadcast(10);
         let (dedup_sender, dedup_receiver) = dedup_channel::<SyncCommand>();
         let client_events_receiver = ClientEventsReceiver::from_raw(client_events_rx.clone());
@@ -456,7 +456,7 @@ pub mod testing {
 
         tokio::select! {
             task_end = sync_task => {
-                task_end.map(|()| ()).map_err(PrettyJoinError::from)?;
+                task_end.map_err(PrettyJoinError::from)?;
             },
             unexpected_client_command = client_command_receiver.next() => {
                 if let Some(unexpected_client_command) = unexpected_client_command {

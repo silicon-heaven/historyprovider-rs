@@ -909,14 +909,11 @@ mod tests {
             .join("\n")
         );
         assert_eq!(
-            sites, [
-            ("site".to_string(), SiteInfo {
+            sites, std::iter::once(("site".to_string(), SiteInfo {
                 name: "test1".to_string(),
                 site_type: "DepotG3".to_string(),
                 sub_hp: String::default(),
-            })
-        ]
-        .into_iter()
+            }))
         .collect::<BTreeMap<_,_>>());
     }
 

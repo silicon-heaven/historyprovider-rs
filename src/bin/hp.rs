@@ -1,6 +1,7 @@
+#![expect(clippy::print_stdout, reason = "Fine for a binary")]
 use clap::Parser;
 use historyprovider::HpConfig;
-use log::*;
+use log::{info, LevelFilter};
 use shvrpc::{client::ClientConfig, util::parse_log_verbosity};
 use simple_logger::SimpleLogger;
 use url::Url;

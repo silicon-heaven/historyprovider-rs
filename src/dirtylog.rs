@@ -637,11 +637,11 @@ mod tests {
                 test_case.steps,
                 test_case.starting_files,
                 test_case.expected_file_paths,
-                |ccs, _ces, cer, _dirtylog_cmd_rx, _sync_cmd_rx, state| {
+                |ccs, _ces, cer, _dirtylog_cmd_rx, sync_cmd_rx, state| {
                     let (sender, receiver) = unbounded();
                     let task_state = DirtylogTaskTestState {
                         sender,
-                        _sync_cmd_rx,
+                        _sync_cmd_rx: sync_cmd_rx,
                     };
                     let dirtylog_task = tokio::spawn(dirtylog_task(ccs, cer, state, receiver));
                     (dirtylog_task, task_state)

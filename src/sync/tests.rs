@@ -72,9 +72,9 @@ impl TestStep<SyncTaskTestState> for ExpectRecordsDb {
         assert_eq!(site, "site1");
         let db_path = records::db_path(&state.state.config.journal_dir, "site1", self.record_name);
         assert_eq!(records::fetch_records(&db_path, 0, 10).await.unwrap(), self.expected);
-        let _ = tokio::fs::remove_file(&db_path).await;
-        let _ = tokio::fs::remove_file(format!("{}-wal", db_path.to_string_lossy())).await;
-        let _ = tokio::fs::remove_file(format!("{}-shm", db_path.to_string_lossy())).await;
+        tokio::fs::remove_file(&db_path).await.ok();
+        tokio::fs::remove_file(format!("{}-wal", db_path.to_string_lossy())).await.ok();
+        tokio::fs::remove_file(format!("{}-shm", db_path.to_string_lossy())).await.ok();
     }
 }
 
@@ -88,7 +88,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
 2022-07-07T18:06:17.869Z\t809781\tzone1/pme/TSH1-1/switchRightCounterPermanent\t0u\t\tchng\t2\t
 ";
 
-    let very_large_log_file: String = "2022-07-07T18:06:17.784Z\t809781\tzone1/system/sig/plcDisconnected\tfalse\t\tchng\t2\t\n".to_string().repeat(50000);
+    let very_large_log_file = "2022-07-07T18:06:17.784Z\t809781\tzone1/system/sig/plcDisconnected\tfalse\t\tchng\t2\t\n".to_string().repeat(50000);
     let records_timestamp = shvproto::DateTime::from_epoch_msec(1_700_000_000_000);
     let records_record = IMap::from([
         (0, 1.into()),
@@ -297,7 +297,7 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
     // The content is not important for a sync test
     static DUMMY_LOGFILE: &str = "entry1\nentry2\nentry3";
 
-    let very_large_log_file: String = "entrydata\n".to_string().repeat(400_000);
+    let very_large_log_file = "entrydata\n".to_string().repeat(400_000);
     let test_cases = [
         TestCase {
             name: "SyncSite: Remote and local - empty",

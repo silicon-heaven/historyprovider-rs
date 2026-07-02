@@ -20,13 +20,13 @@ pub async fn mock_run(hp_config: &HpConfig, conn_evt_rx: futures::channel::mpsc:
     Ok(())
 }
 
-async fn request(conn_evt_tx: &mut UnboundedSender<ConnectionEvent>, path: &str, method: &str, param: RpcValue) {
+fn request(conn_evt_tx: &UnboundedSender<ConnectionEvent>, path: &str, method: &str, param: RpcValue) {
     conn_evt_tx.unbounded_send(ConnectionEvent::RpcFrameReceived(RpcMessage::new_request(path, method).with_param(param).to_frame().expect("RpcFrame must work"))).expect("Channel must work");
 }
 
 struct PendingRequest(RpcMessage);
 impl PendingRequest {
-    async fn respond(mut self, conn_evt_tx: &mut UnboundedSender<ConnectionEvent>, result: &str) {
+    fn respond(mut self, conn_evt_tx: &UnboundedSender<ConnectionEvent>, result: &str) {
         let result = RpcValue::from_cpon(result).unwrap_or_else(|err| panic!("Invalid CPON '{result}': {err}"));
         debug!(target: "test-driver", "==> {result:?}");
         self.0.set_result(result);
@@ -81,17 +81,17 @@ impl TestApp {
 #[tokio::test]
 async fn test_start_and_end() -> shvrpc::Result<()> {
     init_logger();
-    let TestApp {app, mut conn_evt_tx, mut conn_cmd_rx} = TestApp::new();
+    let TestApp {app, conn_evt_tx, mut conn_cmd_rx} = TestApp::new();
     await_request(&mut conn_cmd_rx, ".broker", "ls", RpcValue::null()).await
-        .respond(&mut conn_evt_tx, r#"["client"]"#).await;
+        .respond(&conn_evt_tx, r#"["client"]"#);
     await_request(&mut conn_cmd_rx, "sites", "getSites", RpcValue::null()).await
-        .respond(&mut conn_evt_tx, r#"{
+        .respond(&conn_evt_tx, r#"{
             "_meta":{
                 "HP3":{"type":"HP3"},
             }
-        },"#).await;
+        },"#);
 
-    request(&mut conn_evt_tx, "", "syncLog", RpcValue::null()).await;
+    request(&conn_evt_tx, "", "syncLog", RpcValue::null());
     conn_evt_tx.unbounded_send(ConnectionEvent::Disconnected)?;
     drop(conn_evt_tx);
     app.await?
