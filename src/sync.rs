@@ -815,7 +815,7 @@ pub(crate) async fn sync_task(
                     if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
                         let err_msg = e.to_string();
                         let command = e.into_inner();
-                        log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+                        log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}");
                     }
                 },
                 Ok(ShouldTrim::No) => {
@@ -1038,7 +1038,7 @@ pub(crate) async fn sync_task(
     log::debug!("Waiting for sync logger task to finish");
     drop(logger_tx);
     if let Err(err) = logger_task.await {
-        log::error!("Failed to join logger_task: {err}")
+        log::error!("Failed to join logger_task: {err}");
     }
 }
 

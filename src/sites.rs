@@ -449,7 +449,7 @@ async fn reload_sites(
                         site_info.sub_hp = prefix.into();
                     } else {
                         log::error!("Cannot find sub HP for site {path}");
-                        site_info.sub_hp.clone_from(path)
+                        site_info.sub_hp.clone_from(path);
                     }
                 }
                 break 'sites_get_loop (Arc::new(sites_info), Arc::new(sub_hps));
@@ -721,7 +721,7 @@ pub(crate) async fn sites_task(
                     if let Some(online_status_task) = state.online_status_task {
                         state.online_status_channels.clear();
                         if let Err(err) = online_status_task.await {
-                            log::error!("Failed to join online_status_task: {err}")
+                            log::error!("Failed to join online_status_task: {err}");
                         }
                     }
 
@@ -839,13 +839,13 @@ pub(crate) async fn sites_task(
     drop(periodic_sync_tx);
     log::debug!("Waiting for periodic sync task to finish");
     if let Err(err) = periodic_sync_task.await {
-        log::error!("Failed to join periodic_sync_task: {err}")
+        log::error!("Failed to join periodic_sync_task: {err}");
     }
 
     if let Some(online_status_task) = state.online_status_task {
         state.online_status_channels.clear();
         if let Err(err) = online_status_task.await {
-            log::error!("Failed to join online_status_task: {err}")
+            log::error!("Failed to join online_status_task: {err}");
         }
     }
 

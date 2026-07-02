@@ -192,7 +192,7 @@ pub mod testing {
             for path_result in paths {
                 let full_path = path_result?.path();
                 if std::fs::metadata(&full_path)?.is_dir() {
-                    _list_files(vec, &full_path)?
+                    _list_files(vec, &full_path)?;
                 } else {
                     vec.push(full_path);
                 }
