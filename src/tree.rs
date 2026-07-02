@@ -543,6 +543,7 @@ fn records_site_for_path(sites_data: &SitesData, path: &str) -> Option<(String, 
     }
 }
 
+#[expect(clippy::zero_sized_map_values, reason = "children_on_path needs it")]
 fn records_site_paths(sites_data: &SitesData) -> BTreeMap<String, ()> {
     sites_data.sites_info.iter()
         .filter(|(_, site_info)| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| match sub_hp {
