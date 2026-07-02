@@ -267,7 +267,7 @@ async fn shvjournal_request_handler(
                         .map_err(rpc_error_filesystem)
                 ),
                 METH_SYNC_LOG => return m.resolve(METHODS, async move || sync_log_request_handler(&param, app_state).await),
-                METH_SYNC_INFO => return m.resolve(METHODS, async move || Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned())),
+                METH_SYNC_INFO => return m.resolve(METHODS, async move || Ok((*app_state.sync_info.sites_sync_info.read().await).clone())),
                 METH_SANITIZE_LOG => return m.resolve(METHODS, async move || app_state.sync_cmd_tx
                         .send(crate::sync::SyncCommand::Cleanup)
                         .map(|_| true)
