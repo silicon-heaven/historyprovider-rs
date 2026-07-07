@@ -22,7 +22,7 @@ pub fn init_logger() {
         SimpleLogger::new()
             .with_level(log::LevelFilter::Debug)
             .init()
-            .unwrap();
+            .expect("Logging must work");
         });
 }
 
@@ -101,7 +101,7 @@ impl<T: Eq + Hash + Clone> DedupSender<T> {
         }
         self.sender
             .unbounded_send(msg.clone())
-            .map(|_| {
+            .map(|()| {
                 pending.insert(msg);
                 true
             })
@@ -147,7 +147,7 @@ pub(crate) fn msec_to_log2_filename(msec: i64) -> String {
 
 #[cfg(test)]
 pub mod testing {
-    use crate::{State, dirtylog::DirtyLogCommand, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::SyncCommand, util::{DedupReceiver, dedup_channel}};
+    use crate::{State, dirtylog::DirtyLogCommand, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::{SyncCommand, SyncInfo}, util::{DedupReceiver, dedup_channel}};
     use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
     use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
@@ -186,13 +186,13 @@ pub mod testing {
         }
     }
 
-    fn _list_files(vec: &mut Vec<PathBuf>, path: &Path) -> std::io::Result<()> {
+    fn impl_list_files(vec: &mut Vec<PathBuf>, path: &Path) -> std::io::Result<()> {
         if std::fs::metadata(path)?.is_dir() {
             let paths = std::fs::read_dir(path)?;
             for path_result in paths {
                 let full_path = path_result?.path();
                 if std::fs::metadata(&full_path)?.is_dir() {
-                    _list_files(vec, &full_path)?
+                    impl_list_files(vec, &full_path)?;
                 } else {
                     vec.push(full_path);
                 }
@@ -203,7 +203,7 @@ pub mod testing {
 
     pub fn list_files(path: &Path) -> Vec<(String, String)> {
         let mut res = Vec::new();
-        _list_files(&mut res, path).expect("Failed to list journal files");
+        impl_list_files(&mut res, path).expect("Failed to list journal files");
         let mut res = res
             .into_iter()
             .map(|path| (path.to_string_lossy().to_string(), std::fs::read_to_string(path).expect("Reading file should work")))
@@ -349,7 +349,7 @@ pub mod testing {
     #[async_trait::async_trait]
     impl<TestState> TestStep<TestState> for SendSignal {
         async fn exec(&self, _client_command_receiver: &mut UnboundedReceiver<ClientCommand>, subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>,  _state: &mut TestState) {
-            let sub_id = self.0.to_string();
+            let sub_id = self.0.clone();
             let (_, sender)  = subscriptions.iter().find(|(id, _)| **id == sub_id).expect("Sub must exist");
             let shv_path = self.1.as_str();
             let method = self.2.as_str();
@@ -378,7 +378,7 @@ pub mod testing {
     ) -> std::result::Result<(), PrettyJoinError> {
         debug!(target: "test-driver", "Running test '{test_name}'");
         let (client_command_sender, mut client_command_receiver) = unbounded();
-        let client_command_sender: ClientCommandSender = ClientCommandSender::from_raw(client_command_sender);
+        let client_command_sender = ClientCommandSender::from_raw(client_command_sender);
         let (client_events_sender, client_events_rx) = async_broadcast::broadcast(10);
         let (dedup_sender, dedup_receiver) = dedup_channel::<SyncCommand>();
         let client_events_receiver = ClientEventsReceiver::from_raw(client_events_rx.clone());
@@ -425,15 +425,15 @@ pub mod testing {
                 sub_hps: Arc::new(BTreeMap::from([
                     ("site1".to_string(), SubHpInfo::Normal {
                         sync_path: ".app/shvjournal".to_string(),
-                        download_chunk_size: 1000000,
+                        download_chunk_size: 1_000_000,
                     })
                 ])),
-                typeinfos: Default::default(),
+                typeinfos: Arc::default(),
             }),
-            sync_info: Default::default(),
-            alarms: Default::default(),
-            state_alarms: Default::default(),
-            online_states: Default::default(),
+            sync_info: SyncInfo::default(),
+            alarms: RwLock::default(),
+            state_alarms: RwLock::default(),
+            online_states: RwLock::default(),
             app_closing: false.into(),
             last_sites_loaded: RwLock::new(None),
             sites_reload_in_progress: AtomicBool::new(false),
@@ -456,7 +456,7 @@ pub mod testing {
 
         tokio::select! {
             task_end = sync_task => {
-                task_end.map(|_| ()).map_err(PrettyJoinError::from)?;
+                task_end.map_err(PrettyJoinError::from)?;
             },
             unexpected_client_command = client_command_receiver.next() => {
                 if let Some(unexpected_client_command) = unexpected_client_command {

@@ -1,6 +1,7 @@
+#![expect(clippy::print_stdout, reason = "Fine for a binary")]
 use clap::Parser;
 use historyprovider::HpConfig;
-use log::*;
+use log::{info, LevelFilter};
 use shvrpc::{client::ClientConfig, util::parse_log_verbosity};
 use simple_logger::SimpleLogger;
 use url::Url;
@@ -67,7 +68,7 @@ fn init_logger(cli_opts: &Opts) {
             }
         }
     }
-    logger.init().unwrap();
+    logger.init().expect("Logger must work");
 }
 
 fn print_banner(text: impl AsRef<str>) {
@@ -86,7 +87,7 @@ fn load_client_config(cli_opts: Opts) -> shvrpc::Result<(ClientConfig, HpConfig)
             HpConfig::load(config_file)?,
         )
     } else {
-        (Default::default(), Default::default())
+        (ClientConfig::default(), HpConfig::default())
     };
     client_config.url = cli_opts.url.map_or_else(|| Ok(client_config.url), |url_str| Url::parse(&url_str))?;
     client_config.device_id = cli_opts.device_id.or(client_config.device_id);

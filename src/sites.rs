@@ -76,7 +76,7 @@ fn collect_sites(
                     SiteInfo {
                         name: get_or_default("name", "<undefined>"),
                         site_type: get_or_default("type", "<undefined>"),
-                        sub_hp: Default::default(),
+                        sub_hp: String::default(),
                     },
             )])
         } else {
@@ -164,14 +164,11 @@ fn collect_sub_hps(
                         } else {
                             SubHpInfo::Normal {
                                 sync_path: hp
-                                    .get("syncPath")
-                                    .map(RpcValue::as_str)
-                                    .unwrap_or_else(|| if is_device { DEFAULT_SYNC_PATH_DEVICE } else { DEFAULT_SYNC_PATH_HP })
+                                    .get("syncPath").map_or_else(|| if is_device { DEFAULT_SYNC_PATH_DEVICE } else { DEFAULT_SYNC_PATH_HP }, RpcValue::as_str)
                                     .to_string(),
                                 download_chunk_size: hp
                                     .get("readLogChunkLimit")
-                                    .map(|v| v.as_int().min(DOWNLOAD_CHUNK_SIZE_MAX))
-                                    .unwrap_or(DOWNLOAD_CHUNK_SIZE_MAX),
+                                    .map_or(DOWNLOAD_CHUNK_SIZE_MAX, |v| v.as_int().min(DOWNLOAD_CHUNK_SIZE_MAX)),
                             }
                         }
                     })
@@ -235,16 +232,16 @@ async fn set_online_status(
 {
     let site = site.as_ref();
     let mut online_states = app_state.online_states.write().await;
-    let Some(online_status) = online_states.get_mut(site) else {
+    let Some(online_state) = online_states.get_mut(site) else {
         error!(target: "OnlineStatus", "No onlineStatus for site {site}");
         return
     };
-    if *online_status == new_status {
+    if *online_state == new_status {
         return;
     }
 
     debug!(target: "OnlineStatus", "[{site}] Set online status: {new_status:?}");
-    *online_status = new_status;
+    *online_state = new_status;
 
     client_commands
         .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng").with_param(new_status as i32))
@@ -263,7 +260,9 @@ async fn set_online_status(
         .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY);
 
     let emit_alarmmod = if new_status == SiteOnlineStatus::Offline  {
-        site_alarms.iter_mut().for_each(|alarm_with_ts| alarm_with_ts.stale = true);
+        for alarm_with_ts in site_alarms.iter_mut() {
+            alarm_with_ts.stale = true;
+        }
         if offline_alarm_idx.is_none() {
             site_alarms.push(AlarmWithTimestamp {
                 alarm: Alarm {
@@ -427,6 +426,7 @@ async fn reload_sites(
 
         match sites {
             Ok(sites) => {
+                #[expect(clippy::print_stderr, reason = "Fine here")]
                 if sites
                     .get("_meta")
                         .map(RpcValue::as_map)
@@ -446,7 +446,7 @@ async fn reload_sites(
                         site_info.sub_hp = prefix.into();
                     } else {
                         log::error!("Cannot find sub HP for site {path}");
-                        site_info.sub_hp = path.clone();
+                        site_info.sub_hp.clone_from(path);
                     }
                 }
                 break 'sites_get_loop (Arc::new(sites_info), Arc::new(sub_hps));
@@ -546,7 +546,7 @@ async fn reload_sites(
         typeinfos: typeinfos.clone()
     };
 
-    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), SiteOnlineStatus::default())).collect();
     let mut online_status_channels = BTreeMap::new();
     let mut online_status_workers = Vec::new();
     for (site, info) in sites_info.iter() {
@@ -556,9 +556,9 @@ async fn reload_sites(
 
         if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
             continue
-        };
+        }
         let (tx, rx) = futures::channel::mpsc::unbounded();
-        online_status_channels.insert(site.to_string(), tx);
+        online_status_channels.insert(site.clone(), tx);
         online_status_workers.push(online_status_worker(site.clone(), rx, ClientCommandSender::clone(client_cmd_tx), Arc::clone(app_state)));
     }
 
@@ -570,7 +570,7 @@ async fn reload_sites(
         futures::future::join_all(online_status_workers).await;
         debug!(target: "OnlineStatus", "Online status task finish");
     }));
-    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), Default::default())).collect();
+    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), SiteOnlineStatus::default())).collect();
 
     let params = Arc::new(shvrpc::journalrw::GetLog2Params {
         since: shvrpc::journalrw::GetLog2Since::LastEntry,
@@ -623,7 +623,7 @@ async fn reload_sites(
         .collect::<Vec<_>>()
         .await;
 
-    let loaded_count = results.len() as u32;
+    let loaded_count = results.len();
 
     for (site_path, type_info, log) in results {
         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
@@ -632,7 +632,7 @@ async fn reload_sites(
 
         let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
         let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
-            let alarms_for_site = alarm_table.entry(site_path.to_string()).or_default();
+            let alarms_for_site = alarm_table.entry(site_path.clone()).or_default();
 
             for entry in chained_entries.clone() {
                 update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
@@ -687,7 +687,7 @@ pub(crate) async fn sites_task(
                         }
                         None => break,
                     },
-                    _ = async {
+                    () = async {
                         if let Some(i) = &mut interval {
                             i.tick().await;
                         }
@@ -696,8 +696,7 @@ pub(crate) async fn sites_task(
                         app_state
                             .sync_cmd_tx
                             .send(crate::sync::SyncCommand::SyncAll)
-                            .map(|_|())
-                            .unwrap_or_else(|e| log::error!("Cannot send SyncAll command: {e}"));
+                            .map_or_else(|e| log::error!("Cannot send SyncAll command: {e}"), |_|());
                     }
                 }
             }
@@ -714,12 +713,12 @@ pub(crate) async fn sites_task(
         let shv_api_version = loop {
             match client_evt_rx.next().await {
                 Some(ClientEvent::Connected(shv_api_version)) => break shv_api_version,
-                Some(ClientEvent::ConnectionFailed(_)) | Some(ClientEvent::Disconnected) => {
+                Some(ClientEvent::ConnectionFailed(_) | ClientEvent::Disconnected) => {
                     if let Some(online_status_task) = state.online_status_task {
                         state.online_status_channels.clear();
                         if let Err(err) = online_status_task.await {
-                            log::error!("Failed to join online_status_task: {err}")
-                        };
+                            log::error!("Failed to join online_status_task: {err}");
+                        }
                     }
 
                     state = SitesTaskState {
@@ -836,14 +835,14 @@ pub(crate) async fn sites_task(
     drop(periodic_sync_tx);
     log::debug!("Waiting for periodic sync task to finish");
     if let Err(err) = periodic_sync_task.await {
-        log::error!("Failed to join periodic_sync_task: {err}")
+        log::error!("Failed to join periodic_sync_task: {err}");
     }
 
     if let Some(online_status_task) = state.online_status_task {
         state.online_status_channels.clear();
         if let Err(err) = online_status_task.await {
-            log::error!("Failed to join online_status_task: {err}")
-        };
+            log::error!("Failed to join online_status_task: {err}");
+        }
     }
 
     log::debug!("Sites task finished");
@@ -863,7 +862,7 @@ mod tests {
 
     #[test]
     fn parse_notification() {
-        let dummy_siteinfo = || SiteInfo { name: Default::default(), site_type: Default::default(), sub_hp: Default::default() };
+        let dummy_siteinfo = || SiteInfo { name: String::default(), site_type: String::default(), sub_hp: String::default() };
         let sites_info = BTreeMap::from([
             ("foo/site1".to_string(), dummy_siteinfo()),
             ("foo/site2".to_string(), dummy_siteinfo()),
@@ -910,14 +909,11 @@ mod tests {
             .join("\n")
         );
         assert_eq!(
-            sites, [
-            ("site".to_string(), SiteInfo {
+            sites, std::iter::once(("site".to_string(), SiteInfo {
                 name: "test1".to_string(),
                 site_type: "DepotG3".to_string(),
-                sub_hp: Default::default(),
-            })
-        ]
-        .into_iter()
+                sub_hp: String::default(),
+            }))
         .collect::<BTreeMap<_,_>>());
     }
 

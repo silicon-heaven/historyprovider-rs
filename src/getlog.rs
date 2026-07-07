@@ -62,7 +62,7 @@ pub(crate) async fn getlog_handler(
     let mut log_files = get_files(&local_journal_path, is_log_file)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot read log files: {err}")))?;
-    log_files.sort_by_key(|entry| entry.file_name());
+    log_files.sort_by_key(DirEntry::file_name);
 
     let file_start_index: usize = {
         if log_files.is_empty() {
@@ -78,8 +78,7 @@ pub(crate) async fn getlog_handler(
                         .enumerate()
                         .rev()
                         .find(|(_,file)| file_name_to_file_msec(&file.to_string_lossy()).is_ok_and(|ms| ms < since_ms))
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(0)
+                        .map_or(0, |(idx, _)| idx)
                 }
                 GetLog2Since::LastEntry => log_files.len() - 1,
                 GetLog2Since::None => 0,
@@ -90,7 +89,7 @@ pub(crate) async fn getlog_handler(
     };
 
     // Skip files with no journal entries
-    let log_files = tokio_stream::iter(&log_files[file_start_index..])
+    let log_files = tokio_stream::iter(log_files.get(file_start_index..).expect("We found the index ourselves"))
         .filter(|file_entry| {
             let file_path = file_entry.path();
             async move {
@@ -149,6 +148,7 @@ pub(crate) async fn getlog_handler(
 
 pub(crate) type JournalEntryStream = Pin<Box<dyn Stream<Item = Result<JournalEntry, Box<dyn Error + Send + Sync>>> + Send + Sync>>;
 
+#[expect(clippy::cast_sign_loss, clippy::cast_possible_wrap, reason = "Lots of painful conversions here")]
 pub(crate) async fn getlog_impl(
     site: &str,
     journal_readers: impl IntoIterator<Item = JournalEntryStream>,
@@ -388,8 +388,8 @@ mod tests {
         shvrpc::journalrw::GetLog2Since::DateTime(ts(ts_str))
     }
 
-    fn make_entry(timestamp: &str, path: &str, value: impl Into<RpcValue>) -> Result<JournalEntry, Box<dyn Error + Send + Sync>> {
-        Ok(JournalEntry {
+    fn make_entry(timestamp: &str, path: &str, value: impl Into<RpcValue>) -> JournalEntry {
+        JournalEntry {
             path: path.to_string(),
             epoch_msec: DateTime::from_iso_str(timestamp).unwrap().epoch_msec(),
             epoch_msec_orig: None,
@@ -401,11 +401,11 @@ mod tests {
             user_id: String::default(),
             repeat: false,
             provisional: false,
-        })
+        }
     }
 
-    fn create_reader(entries: Vec<Result<JournalEntry, Box<dyn Error + Send + Sync + 'static>>>) -> JournalEntryStream {
-        Box::pin(tokio_stream::iter(entries))
+    fn create_reader(entries: Vec<JournalEntry>) -> JournalEntryStream {
+        Box::pin(tokio_stream::iter(entries.into_iter().map(Result::<JournalEntry, Box<dyn Error + Send + Sync + 'static>>::Ok)))
     }
 
     async fn get_log_entries(site: &str, readers: Vec<JournalEntryStream>, params: GetLog2Params) -> GetLogResult {
@@ -423,12 +423,12 @@ mod tests {
                 make_entry("2022-07-07T18:06:10.000Z", "synced", 1),
             ])],
             vec![
-                make_entry("2022-07-07T18:06:09.000Z", "overlap", 2).unwrap(),
-                make_entry("2022-07-07T18:06:11.000Z", "dirty_monotonic", 3).unwrap(),
-                make_entry("2022-07-07T18:06:10.500Z", "dirty_non_monotonic", 4).unwrap(),
-                make_entry("2022-07-07T18:06:12.000Z", "dirty_later", 5).unwrap(),
+                make_entry("2022-07-07T18:06:09.000Z", "overlap", 2),
+                make_entry("2022-07-07T18:06:11.000Z", "dirty_monotonic", 3),
+                make_entry("2022-07-07T18:06:10.500Z", "dirty_non_monotonic", 4),
+                make_entry("2022-07-07T18:06:12.000Z", "dirty_later", 5),
             ],
-            &Default::default(),
+            &GetLog2Params::default(),
         ).await;
 
         assert_eq!(result.snapshot_entries.len(), 1);
@@ -465,7 +465,7 @@ mod tests {
                 ]),
             ],
             [],
-            &Default::default(),
+            &GetLog2Params::default(),
         ).await;
 
         assert_eq!(result.snapshot_entries.len(), 1);
@@ -551,7 +551,7 @@ mod tests {
         let test_cases = [
             TestCase {
                 name: "default params (no snapshot)",
-                params: Default::default(),
+                params: GetLog2Params::default(),
                 expected: vec![
                     ("2022-07-07T18:06:15.557Z", "APP_START", true.into()),
                     ("2022-07-07T18:06:15.557Z", "zone1/pme/TSH1-1/switchRightCounterPermanent", 0u32.into()),
@@ -815,7 +815,7 @@ mod tests {
                 ..Default::default()
             },
         ].into_iter().map(|test_case| (data_2 as fn() -> _, test_case))).chain([
-            ("result since/until - default params", Default::default()),
+            ("result since/until - default params", GetLog2Params::default()),
             ("result since/until - since set", GetLog2Params { since: since("2022-07-07T18:06:15.557Z"), ..Default::default() }),
             ("result since/until - until set", GetLog2Params { until: Some(ts("2022-07-07T18:06:15.557Z")), ..Default::default() }),
             ("result since/until - both since/until set", GetLog2Params { since: since("2022-07-07T18:06:15.557Z"), until: Some(ts("2022-07-07T18:06:20.000Z")), ..Default::default() }),
@@ -830,7 +830,7 @@ mod tests {
         }))).chain([
             TestCase {
                 name: "since/until not set",
-                params: Default::default(),
+                params: GetLog2Params::default(),
                 expected: vec![
                     ("2022-07-07T18:06:14.000Z", "value1", 10.into()),
                     ("2022-07-07T18:06:15.557Z", "value2", 20.into()),

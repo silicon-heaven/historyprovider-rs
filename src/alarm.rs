@@ -57,22 +57,23 @@ impl Alarm {
         !self.path.is_empty()
     }
 
-    pub fn from_rpc_map(map: RpcMap) -> Self {
-        fn extract_key_or_default<T>(map: &RpcMap, key: impl AsRef<str>) -> T
+    pub fn from_rpc_map(mut map: RpcMap) -> Self {
+        fn extract_key_or_default<T>(map: &mut RpcMap, key: impl AsRef<str>) -> T
         where
-            T: for<'a> TryFrom<&'a RpcValue> + Default
+            T: TryFrom<RpcValue> + Default
         {
-            map.get(key.as_ref())
+            map.remove(key.as_ref())
                 .and_then(|v| T::try_from(v).ok())
                 .unwrap_or_default()
         }
+
         Self {
-            path: extract_key_or_default(&map, "path"),
-            is_active: extract_key_or_default(&map, "isActive"),
-            description: extract_key_or_default(&map, "description"),
-            label: extract_key_or_default(&map, "label"),
-            level: extract_key_or_default(&map, "alarmLevel"),
-            severity: extract_key_or_default::<i32>(&map, "severity").into(),
+            path: extract_key_or_default(&mut map, "path"),
+            is_active: extract_key_or_default(&mut map, "isActive"),
+            description: extract_key_or_default(&mut map, "description"),
+            label: extract_key_or_default(&mut map, "label"),
+            level: extract_key_or_default(&mut map, "alarmLevel"),
+            severity: extract_key_or_default::<i32>(&mut map, "severity").into(),
         }
     }
 
@@ -228,28 +229,25 @@ fn collect_alarms_for_type<Getter: AlarmGetter>(type_info: &TypeInfo, shv_path: 
                 .into_iter()
                 .find(|field| Getter::alarm_getter(field).is_some_and(|alarm| !alarm.is_empty())
                     && field.bit_range().is_some_and(|bit_range| bit_range.as_u64() == value.as_u64()));
-            match active_alarm_field {
-                Some(field) => vec![
-                    Alarm {
-                        path: shv_path.into(),
-                        is_active: true,
-                        description: field.description().unwrap_or_default().into(),
-                        label: field.label().unwrap_or_default().into(),
-                        level: field.alarm_level().unwrap_or_default(),
-                        severity: Getter::alarm_getter(&field).unwrap_or_default().into(),
-                    }
-                ],
-                None => vec![
-                    Alarm {
-                        path: shv_path.into(),
-                        is_active: false,
-                        description: String::new(),
-                        label: String::new(),
-                        level: 0,
-                        severity: Severity::Invalid,
-                    }
-                ],
+            active_alarm_field.map_or_else(|| vec![
+                Alarm {
+                    path: shv_path.into(),
+                    is_active: false,
+                    description: String::new(),
+                    label: String::new(),
+                    level: 0,
+                    severity: Severity::Invalid,
             }
+            ], |field| vec![
+                Alarm {
+                    path: shv_path.into(),
+                    is_active: true,
+                    description: field.description().unwrap_or_default().into(),
+                    label: field.label().unwrap_or_default().into(),
+                    level: field.alarm_level().unwrap_or_default(),
+                    severity: Getter::alarm_getter(&field).unwrap_or_default().into(),
+                }
+            ])
         }
         _ => vec![],
     }
@@ -337,48 +335,48 @@ mod tests {
         let alarms = collect_alarms(&type_info, "foo/bar/status1", &RpcValue::from(1_u64 << 24));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 3);
-        let alarm1 = &alarms[0];
-        assert!(!alarm1.is_active);
-        assert_eq!(alarm1.path, "foo/bar/status1/field1".to_owned());
-        assert_eq!(alarm1.severity, Severity::Warning);
-        assert_eq!(alarm1.level, 0);
-        assert_eq!(alarm1.label, "Alarm 1 label".to_owned());
-        assert_eq!(alarm1.description, "Alarm 1".to_owned());
+        let alarm = &alarms[0];
+        assert!(!alarm.is_active);
+        assert_eq!(alarm.path, "foo/bar/status1/field1".to_owned());
+        assert_eq!(alarm.severity, Severity::Warning);
+        assert_eq!(alarm.level, 0);
+        assert_eq!(alarm.label, "Alarm 1 label".to_owned());
+        assert_eq!(alarm.description, "Alarm 1".to_owned());
 
-        let alarm2 = &alarms[1];
-        assert!(alarm2.is_active);
-        assert_eq!(alarm2.path, "foo/bar/status1/field2".to_owned());
-        assert_eq!(alarm2.severity, Severity::Error);
-        assert_eq!(alarm2.level, 0);
-        assert_eq!(alarm2.label, "Alarm 2 label".to_owned());
-        assert_eq!(alarm2.description, "Alarm 2".to_owned());
+        let alarm = &alarms[1];
+        assert!(alarm.is_active);
+        assert_eq!(alarm.path, "foo/bar/status1/field2".to_owned());
+        assert_eq!(alarm.severity, Severity::Error);
+        assert_eq!(alarm.level, 0);
+        assert_eq!(alarm.label, "Alarm 2 label".to_owned());
+        assert_eq!(alarm.description, "Alarm 2".to_owned());
 
         let alarms = collect_alarms(&type_info, "foo/bar/status1", &RpcValue::from((3 << 25) | (1 << 1)));
         println!("{alarms:?}");
         assert_eq!(alarms.len(), 3);
-        let alarm1 = &alarms[0];
-        assert!(alarm1.is_active);
-        assert_eq!(alarm1.path, "foo/bar/status1/field1".to_owned());
-        assert_eq!(alarm1.severity, Severity::Warning);
-        assert_eq!(alarm1.level, 0);
-        assert_eq!(alarm1.label, "Alarm 1 label".to_owned());
-        assert_eq!(alarm1.description, "Alarm 1".to_owned());
+        let alarm = &alarms[0];
+        assert!(alarm.is_active);
+        assert_eq!(alarm.path, "foo/bar/status1/field1".to_owned());
+        assert_eq!(alarm.severity, Severity::Warning);
+        assert_eq!(alarm.level, 0);
+        assert_eq!(alarm.label, "Alarm 1 label".to_owned());
+        assert_eq!(alarm.description, "Alarm 1".to_owned());
 
-        let alarm2 = &alarms[1];
-        assert!(!alarm2.is_active);
-        assert_eq!(alarm2.path, "foo/bar/status1/field2".to_owned());
-        assert_eq!(alarm2.severity, Severity::Error);
-        assert_eq!(alarm2.level, 0);
-        assert_eq!(alarm2.label, "Alarm 2 label".to_owned());
-        assert_eq!(alarm2.description, "Alarm 2".to_owned());
+        let alarm = &alarms[1];
+        assert!(!alarm.is_active);
+        assert_eq!(alarm.path, "foo/bar/status1/field2".to_owned());
+        assert_eq!(alarm.severity, Severity::Error);
+        assert_eq!(alarm.level, 0);
+        assert_eq!(alarm.label, "Alarm 2 label".to_owned());
+        assert_eq!(alarm.description, "Alarm 2".to_owned());
 
-        let alarm3 = &alarms[2];
-        assert!(alarm3.is_active);
-        assert_eq!(alarm3.path, "foo/bar/status1/field3".to_owned());
-        assert_eq!(alarm3.severity, Severity::Error);
-        assert_eq!(alarm3.level, 100);
-        assert_eq!(alarm3.label, "Error label".to_owned());
-        assert_eq!(alarm3.description, "Error description".to_owned());
+        let alarm = &alarms[2];
+        assert!(alarm.is_active);
+        assert_eq!(alarm.path, "foo/bar/status1/field3".to_owned());
+        assert_eq!(alarm.severity, Severity::Error);
+        assert_eq!(alarm.level, 100);
+        assert_eq!(alarm.label, "Error label".to_owned());
+        assert_eq!(alarm.description, "Error description".to_owned());
 
         let alarms = collect_alarms(&type_info, "foo/bar/status3", &RpcValue::from(0));
         println!("{alarms:?}");

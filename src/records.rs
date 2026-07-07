@@ -92,7 +92,7 @@ pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i6
 
 type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>);
 
-fn record_to_values(record: &LogRecord) -> Result<LogRecordRow, String> {
+fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut path = None;
     let mut signal = None;
     let mut source = None;
@@ -119,7 +119,7 @@ fn record_to_values(record: &LogRecord) -> Result<LogRecordRow, String> {
             if entry.access_level != AccessLevel::Read as i64 {
                 access_level = Some(entry.access_level);
             }
-            user_id = entry.user_id.clone();
+            user_id.clone_from(&entry.user_id);
             if entry.repeat {
                 repeat = Some(1);
             }
@@ -130,14 +130,14 @@ fn record_to_values(record: &LogRecord) -> Result<LogRecordRow, String> {
         RecordType::TimeAmbig => {}
     }
 
-    Ok((record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump))
+    (record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump)
 }
 
 pub(crate) async fn insert_records(path: impl AsRef<Path>, records: &[LogRecord]) -> Result<(), String> {
     let mut conn = ensure_db(path).await?;
 
     for record in records {
-        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump) = record_to_values(record)?;
+        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump) = record_to_values(record);
         sqlx::query(
             "INSERT OR IGNORE INTO journal_entries (
                 id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump
@@ -344,14 +344,13 @@ pub(crate) async fn getlog_records(
         if limit == 0 {
             records.clear();
         } else {
-            let boundary_ts = records[limit - 1].0;
+            let boundary_ts = records.get(limit - 1).expect("Record must be in range").0;
             let keep_count = records
                 .iter()
                 .enumerate()
                 .skip(limit)
                 .find(|(_, (ts, _))| *ts != boundary_ts)
-                .map(|(idx, _)| idx)
-                .unwrap_or(records.len());
+                .map_or(records.len(), |(idx, _)| idx);
             records.truncate(keep_count);
         }
     }

@@ -111,6 +111,7 @@ impl NodeType {
     }
 }
 
+#[expect(clippy::needless_pass_by_value, reason = "It's alright")]
 fn rpc_error_filesystem(err: std::io::Error) -> RpcError {
     RpcError::new(
         RpcErrorCode::MethodCallException,
@@ -161,7 +162,7 @@ async fn shvjournal_request_handler(
                             .ok()?;
                         let name = entry.file_name().to_str().map(String::from)?;
                         let ftype = if meta.is_dir() { FileType::Directory } else if meta.is_file() { FileType::File } else { return None };
-                        let size = meta.len() as i64;
+                        let size = meta.len().cast_signed();
                         Some(LsFilesEntry { name, ftype, size })
                     }.await;
                     Ok(res)
@@ -193,7 +194,7 @@ async fn shvjournal_request_handler(
                 }
                 Ok(hex::encode(hasher.finalize()).into())
             }
-            METH_SIZE => Ok((file_size as i64).into()),
+            METH_SIZE => Ok((file_size.cast_signed()).into()),
             METH_READ => {
                 let read_params: ReadParams = param
                     .try_into()
@@ -204,8 +205,8 @@ async fn shvjournal_request_handler(
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
                 result_meta
-                    .insert("offset", (offset as i64).into())
-                    .insert("size", (res.len() as i64).into());
+                    .insert("offset", (offset.cast_signed()).into())
+                    .insert("size", (res.len().cast_signed()).into());
                 Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
             METH_READ_COMPRESSED => {
@@ -218,8 +219,8 @@ async fn shvjournal_request_handler(
                     .map_err(rpc_error_filesystem)?;
                 let mut result_meta = shvproto::MetaMap::new();
                 result_meta
-                    .insert("offset", (offset as i64).into())
-                    .insert("size", (bytes_read as i64).into());
+                    .insert("offset", (offset.cast_signed()).into())
+                    .insert("size", (bytes_read.cast_signed()).into());
                 Ok(RpcValue::new(res.into(), Some(result_meta)))
             }
             _ => Err(rpc_error_method_not_found()),
@@ -259,17 +260,18 @@ async fn shvjournal_request_handler(
                     .map(RpcValue::from)
                     .map_err(rpc_error_filesystem)
                 ),
+                #[expect(clippy::cast_precision_loss, reason = "It's fine")]
                 METH_LOG_USAGE => return m.resolve(METHODS, async move || total_log_size(&app_state.config)
                         .await
                         .map(|size| 100. * (size as f64) / (app_state.config.max_journal_dir_size.bytes() as f64))
                         .map_err(rpc_error_filesystem)
                 ),
                 METH_SYNC_LOG => return m.resolve(METHODS, async move || sync_log_request_handler(&param, app_state).await),
-                METH_SYNC_INFO => return m.resolve(METHODS, async move || Ok((*app_state.sync_info.sites_sync_info.read().await).to_owned())),
+                METH_SYNC_INFO => return m.resolve(METHODS, async move || Ok((*app_state.sync_info.sites_sync_info.read().await).clone())),
                 METH_SANITIZE_LOG => return m.resolve(METHODS, async move || app_state.sync_cmd_tx
                         .send(crate::sync::SyncCommand::Cleanup)
                         .map(|_| true)
-                        .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel"))
+                        .map_err(|_err| RpcError::new(RpcErrorCode::InternalError, "Cannot send the command through the channel"))
                 ),
                 _ => return err_unresolved_request(),
             }
@@ -293,7 +295,7 @@ async fn shvjournal_request_handler(
             Method::Other(m) if m.method() == METH_LS_FILES => m.resolve(METHODS, async || {
                 journaldir_lsfiles_handler(get_journaldir_entries(path).await?).await
             }),
-            _ => err_unresolved_request(),
+            Method::Other(_) => err_unresolved_request(),
         }
     } else if path_meta.is_file() {
         const METHODS: &[MetaMethod] = &[
@@ -354,7 +356,7 @@ impl From<LsFilesEntry> for RpcValue {
 async fn total_log_size(config: &HpConfig) -> tokio::io::Result<i64> {
     collect_log_files(&config.journal_dir)
         .await
-        .map(|files| files.into_iter().map(|f| f.size as i64).sum::<i64>())
+        .map(|files| files.into_iter().map(|f| f.size.cast_signed()).sum::<i64>())
 }
 
 async fn sync_log_request_handler(param: &RpcValue, app_state: Arc<State>) -> Result<Vec<String>, RpcError> {
@@ -379,12 +381,12 @@ async fn sync_log_request_handler(param: &RpcValue, app_state: Arc<State>) -> Re
     if shv_path.is_empty() {
         app_state.sync_cmd_tx.send(crate::sync::SyncCommand::SyncAll)
             .map(|_|())
-            .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "Cannot send SyncAll command through the channel"))?;
+            .map_err(|_err| RpcError::new(RpcErrorCode::InternalError, "Cannot send SyncAll command through the channel"))?;
     } else {
         sites_to_sync.iter().try_for_each(|site| app_state.sync_cmd_tx
-            .send(crate::sync::SyncCommand::SyncSite(site.to_string()))
+            .send(crate::sync::SyncCommand::SyncSite(site.clone()))
             .map(|_|())
-            .map_err(|_| RpcError::new(RpcErrorCode::InternalError, format!("Cannot send Sync({site}) command through the channel")))
+            .map_err(|_err| RpcError::new(RpcErrorCode::InternalError, format!("Cannot send Sync({site}) command through the channel")))
         )?;
     }
 
@@ -416,18 +418,12 @@ impl TryFrom<&RpcValue> for ReadParams {
         let map: shvproto::rpcvalue::Map = value.try_into()?;
 
         let parse_param = |param_name: &str| -> Result<Option<u64>, String> {
-            match map.get(param_name) {
-                None => Ok(None),
-                Some(val) => {
-                    i64::try_from(val)
-                        .map_err(|e| e.to_string())
-                        .and_then(|v| u64::try_from(v)
-                            .map_err(|e| e.to_string())
-                        )
-                        .map_err(|e| format!("Error parsing `{param_name}` parameter: {e}"))
-                        .map(Some)
-                }
-            }
+            map.get(param_name).map_or(Ok(None), |val| i64::try_from(val)
+                .and_then(|v| u64::try_from(v)
+                    .map_err(|e| e.to_string())
+                )
+                .map_err(|e| format!("Error parsing `{param_name}` parameter: {e}"))
+                .map(Some))
         };
 
         let offset = parse_param("offset")?;
@@ -542,6 +538,7 @@ fn records_site_for_path(sites_data: &SitesData, path: &str) -> Option<(String, 
     }
 }
 
+#[expect(clippy::zero_sized_map_values, reason = "children_on_path needs it")]
 fn records_site_paths(sites_data: &SitesData) -> BTreeMap<String, ()> {
     sites_data.sites_info.iter()
         .filter(|(_, site_info)| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| match sub_hp {
@@ -626,10 +623,9 @@ async fn alarmtable_handler<Getter: AlarmGetter>(
         return Err(RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmTable path: {site_path}")));
     }
 
-    match Getter::alarm_getter(&app_state).await.get(site_path) {
-        Some(alarms_for_site) => Ok(alarms_for_site.clone().into()),
-        None => Ok(Vec::<RpcValue>::new().into()),
-    }
+    Getter::alarm_getter(&app_state).await
+        .get(site_path)
+        .map_or_else(|| Ok(Vec::<RpcValue>::new().into()), |alarms_for_site| Ok(alarms_for_site.clone().into()))
 }
 
 async fn alarmlog_handler(
@@ -722,7 +718,7 @@ pub(crate) async fn request_handler(
                 Method::Dir(dir) => dir.resolve(METHODS),
                 Method::Ls(ls) => ls.resolve(METHODS, ls_empty),
                 Method::Other(m) if m.method() == METH_GET || m.method() == METH_GET_CACHE => m.resolve(METHODS, async || Err::<(), _>(rpc_error_not_implemented())),
-                _ => err_unresolved_request(),
+                Method::Other(_) => err_unresolved_request(),
             }
         }
         NodeType::Root => {
@@ -987,7 +983,7 @@ mod tests {
                     records: vec![],
                 }),
             ])),
-            typeinfos: Default::default(),
+            typeinfos: Arc::default(),
         };
 
         assert!(!super::has_records_leaf(&sites_data));
@@ -1005,7 +1001,7 @@ mod tests {
                     records: vec!["maintenance".to_string()],
                 }),
             ])),
-            typeinfos: Default::default(),
+            typeinfos: Arc::default(),
         };
 
         assert!(super::has_records_leaf(&sites_data));

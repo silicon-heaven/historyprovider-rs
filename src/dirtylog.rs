@@ -101,7 +101,7 @@ pub(crate) async fn dirtylog_task(
                         }
                     };
                 if let Ok(metadata) = dirty_log_file.metadata().await {
-                    let size = metadata.len();
+                    let dirtylog_size = metadata.len();
 
                     static DIRTY_LOG_SIZE_MAX: OnceLock<u64> = OnceLock::new();
                     let max_size = *DIRTY_LOG_SIZE_MAX.get_or_init(|| {
@@ -111,9 +111,9 @@ pub(crate) async fn dirtylog_task(
                             .unwrap_or(100 * 1024 * 1024)
                     });
 
-                    if size > max_size {
+                    if dirtylog_size > max_size {
                         log::trace!(
-                            "Dirty log {path} max size exceeded ({size} > {max_size}), dropping journal entry {journal_entry:?}",
+                            "Dirty log {path} max size exceeded ({dirtylog_size} > {max_size}), dropping journal entry {journal_entry:?}",
                             path = dirty_log_path.display()
                         );
                         return;
@@ -181,12 +181,11 @@ pub(crate) async fn dirtylog_task(
                         .next()
                         .await;
 
-                    match latest_entry {
-                        Some(entry) => entry,
-                        None => {
-                            info!("Trim dirty log done, no journal entries in synced files");
-                            return;
-                        }
+                    if let Some(entry) = latest_entry {
+                        entry
+                    } else {
+                        info!("Trim dirty log done, no journal entries in synced files");
+                        return;
                     }
                 };
 
@@ -245,14 +244,14 @@ pub(crate) async fn dirtylog_task(
     impl RequestScheduler {
         fn new(journal_dir: PathBuf) -> Self {
             Self {
-                per_site: Default::default(),
-                running: Default::default(),
-                inflight: Default::default(),
+                per_site: HashMap::default(),
+                running: HashSet::default(),
+                inflight: FuturesUnordered::default(),
                 journal_dir,
             }
         }
 
-        fn _schedule_next(&mut self, site: String) {
+        fn impl_schedule_next(&mut self, site: String) {
             if self.running.contains(&site) {
                 return;
             }
@@ -269,12 +268,12 @@ pub(crate) async fn dirtylog_task(
 
         fn schedule_new(&mut self, site: String, request: Request) {
             self.per_site.entry(site.clone()).or_default().push_back(request);
-            self._schedule_next(site);
+            self.impl_schedule_next(site);
         }
 
         fn on_finished(&mut self, site: String) {
             self.running.remove(&site);
-            self._schedule_next(site);
+            self.impl_schedule_next(site);
         }
     }
 
@@ -476,7 +475,7 @@ mod tests {
                     Box::new(TestGetDirtyLog{
                         site: "site1".to_string(),
                         expected: vec![JournalEntry {
-                            epoch_msec: 1657152000000,
+                            epoch_msec: 1_657_152_000_000,
                             epoch_msec_orig: None,
                             path: "some_value_node".into(),
                             signal: "chng".into(),
@@ -501,7 +500,7 @@ mod tests {
                     Box::new(TestGetDirtyLog{
                         site: "site1".to_string(),
                         expected: vec![JournalEntry {
-                            epoch_msec: 1657152000000,
+                            epoch_msec: 1_657_152_000_000,
                             epoch_msec_orig: None,
                             path: "some_value_node".into(),
                             signal: "chng".into(),
@@ -638,11 +637,11 @@ mod tests {
                 test_case.steps,
                 test_case.starting_files,
                 test_case.expected_file_paths,
-                |ccs, _ces, cer, _dirtylog_cmd_rx, _sync_cmd_rx, state| {
+                |ccs, _ces, cer, _dirtylog_cmd_rx, sync_cmd_rx, state| {
                     let (sender, receiver) = unbounded();
                     let task_state = DirtylogTaskTestState {
                         sender,
-                        _sync_cmd_rx,
+                        _sync_cmd_rx: sync_cmd_rx,
                     };
                     let dirtylog_task = tokio::spawn(dirtylog_task(ccs, cer, state, receiver));
                     (dirtylog_task, task_state)

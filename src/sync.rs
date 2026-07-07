@@ -74,14 +74,14 @@ impl TryFrom<&RpcValue> for LsFilesEntry {
         };
         let mut list_iter = list.iter().fuse();
         let name = list_iter.next()
-            .ok_or("Missing `file_name` field".to_string())
+            .ok_or_else(|| "Missing `file_name` field".to_string())
             .and_then(|v| if let shvproto::Value::String(file_name) = &v.value {
                 Ok((**file_name).clone())
             } else {
                 Err("Invalid type of `file_name` field".to_string())
             })?;
         let ftype = list_iter.next()
-            .ok_or("Missing `file_type` field".to_string())
+            .ok_or_else(|| "Missing `file_type` field".to_string())
             .and_then(|v|
                 if let shvproto::Value::String(file_type) = &v.value {
                     Ok((**file_type).clone())
@@ -91,7 +91,7 @@ impl TryFrom<&RpcValue> for LsFilesEntry {
             )
             .and_then(FileType::try_from)?;
         let size = list_iter.next()
-            .ok_or("Missing `size` field".to_string())
+            .ok_or_else(|| "Missing `size` field".to_string())
             .and_then(|v| if let shvproto::Value::Int(size) = v.value {
                 Ok(size)
             } else {
@@ -105,6 +105,7 @@ impl TryFrom<&RpcValue> for LsFilesEntry {
     }
 }
 
+#[expect(clippy::needless_pass_by_value, reason = "It's alright")]
 fn to_string(v: impl ToString) -> String {
     v.to_string()
 }
@@ -204,7 +205,7 @@ async fn get_files_to_sync(
         .flatten()
         .collect::<Vec<_>>();
 
-    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| *size as u64).sum();
+    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| size.cast_unsigned()).sum();
     info!("overall sync files size: {overall_size}, limit: {size_limit}");
 
     let mut sites_journal_files = sites_journal_files
@@ -240,7 +241,7 @@ async fn get_files_to_sync(
         if let Some(site_files) = sites_journal_files.get_mut(site) {
             site_files.remove(&file);
             debug!("excluding file from sync: site: {site}, file: {file_name}", file_name = file.name);
-            excluded_size += file.size as u64;
+            excluded_size += file.size.cast_unsigned();
             excluded_files_count += 1;
         }
     }
@@ -287,7 +288,7 @@ async fn sync_site_by_download(
     // This prevents fetching old files that would be deleted by cleanup just after the sync.
     let oldest_local_file = get_files(&local_journal_path, is_log_file)
         .await
-        .map(|mut log_files| {log_files.sort_by_key(|entry| entry.file_name()); log_files})
+        .map(|mut log_files| {log_files.sort_by_key(tokio::fs::DirEntry::file_name); log_files})
         .unwrap_or_default()
         .first()
         .map(|first_file| first_file.file_name().to_string_lossy().to_string());
@@ -319,7 +320,7 @@ async fn sync_site_by_download(
             let local_file_path = local_journal_path.join(&remote_file.name);
             match tokio::fs::metadata(&local_file_path).await {
                 Ok(local_file) if local_file.is_file() => {
-                    let local_size = local_file.len() as i64;
+                    let local_size = local_file.len().cast_signed();
                     let sync_offset = match local_size.cmp(&remote_file.size) {
                         Ordering::Less => {
                             sync_logger.log(
@@ -408,7 +409,7 @@ async fn sync_site_by_download(
 #[derive(Copy,Clone)]
 enum ReadApi { List, Map }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "We're fine")]
 async fn sync_file(
     client_cmd_tx: ClientCommandSender,
     file_path_remote: impl AsRef<str>,
@@ -458,6 +459,7 @@ async fn sync_file(
             .await
             .map_err(to_string)?;
 
+        #[expect(clippy::cast_possible_wrap, reason = "Chunks are small")]
         let chunk_len = chunk.len() as i64;
         if chunk_len > sync_size {
             return Err(format!("{file_path_remote}: Got chunk of size: {chunk_len}, which is larger than requested: {sync_size}"));
@@ -477,6 +479,7 @@ async fn sync_file(
         sync_offset += chunk_len;
         remaining_bytes -= chunk_len;
 
+        #[expect(clippy::cast_precision_loss, reason = "It's just logging")]
         sync_logger.log(log::Level::Info,
             format!("{}: got chunk of size: {}, remaining: {} ({:.2}%)",
                 file_path_remote,
@@ -526,7 +529,7 @@ async fn sync_site_legacy(
 
     // Get the newest file if any
     let mut log_files = get_files(&local_journal_path, is_log2_file).await?;
-    log_files.sort_by_key(|entry| entry.file_name());
+    log_files.sort_by_key(tokio::fs::DirEntry::file_name);
 
     let newest_log = loop {
         match log_files.last() {
@@ -563,50 +566,18 @@ async fn sync_site_legacy(
         }
     };
 
-    const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100000;
+    const LOG_FILE_RECORD_COUNT_LIMIT: usize = 100_000;
     const GETLOG_SINCE_DAYS_DEFAULT: i64 = 365;
     const RECORD_COUNT_LIMIT: i64 = 10000;
 
-    let (mut getlog_params, mut log_file_path, mut log_file_entries) = match newest_log {
-        Some((newest_log_file, newest_log_entries)) => {
-            let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
-            let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
-            if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
-                // Start with a new file if it already contains too many records
-                sync_logger.log(
-                    log::Level::Info,
-                    format!("sync will create a new file since {}", since.to_iso_string())
-                );
-                let params = GetLog2Params {
-                    since: GetLog2Since::DateTime(since),
-                    until: None,
-                    path_pattern: None,
-                    with_paths_dict: true,
-                    with_snapshot: true,
-                    record_count_limit: RECORD_COUNT_LIMIT,
-                };
-                (params, None, Vec::new())
-            } else {
-                sync_logger.log(
-                    log::Level::Info,
-                    format!("sync will append to {}", newest_log_file.to_string_lossy())
-                );
-                let params = GetLog2Params {
-                    since: GetLog2Since::DateTime(since),
-                    until: None,
-                    path_pattern: None,
-                    with_paths_dict: true,
-                    with_snapshot: false,
-                    record_count_limit: RECORD_COUNT_LIMIT,
-                };
-                (params, Some(newest_log_file), newest_log_entries)
-            }
-        },
-        None => {
-            let since = shvproto::DateTime::now().add_days(-GETLOG_SINCE_DAYS_DEFAULT);
+    let (mut getlog_params, mut log_file_path, mut log_file_entries) = if let Some((newest_log_file, newest_log_entries)) = newest_log {
+        let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
+        let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
+        if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
+            // Start with a new file if it already contains too many records
             sync_logger.log(
                 log::Level::Info,
-                format!("sync to a new journal directory since {}", since.to_iso_string())
+                format!("sync will create a new file since {}", since.to_iso_string())
             );
             let params = GetLog2Params {
                 since: GetLog2Since::DateTime(since),
@@ -617,7 +588,36 @@ async fn sync_site_legacy(
                 record_count_limit: RECORD_COUNT_LIMIT,
             };
             (params, None, Vec::new())
+        } else {
+            sync_logger.log(
+                log::Level::Info,
+                format!("sync will append to {}", newest_log_file.to_string_lossy())
+            );
+            let params = GetLog2Params {
+                since: GetLog2Since::DateTime(since),
+                until: None,
+                path_pattern: None,
+                with_paths_dict: true,
+                with_snapshot: false,
+                record_count_limit: RECORD_COUNT_LIMIT,
+            };
+            (params, Some(newest_log_file), newest_log_entries)
         }
+    } else {
+        let since = shvproto::DateTime::now().add_days(-GETLOG_SINCE_DAYS_DEFAULT);
+        sync_logger.log(
+            log::Level::Info,
+            format!("sync to a new journal directory since {}", since.to_iso_string())
+        );
+        let params = GetLog2Params {
+            since: GetLog2Since::DateTime(since),
+            until: None,
+            path_pattern: None,
+            with_paths_dict: true,
+            with_snapshot: true,
+            record_count_limit: RECORD_COUNT_LIMIT,
+        };
+        (params, None, Vec::new())
     };
 
     enum JournalPath {
@@ -665,7 +665,7 @@ async fn sync_site_legacy(
         );
         let log: RpcValue = RpcCall::new(getlog_path, "getLog")
             .param(getlog_params.clone())
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_mins(1))
             .exec(&client_cmd_tx)
             .await
             .map_err(to_string)?;
@@ -756,7 +756,7 @@ async fn sync_site_records(
             );
             let fetched: RpcValue = RpcCall::new(&remote_records_path, "fetch")
                 .param(shvproto::make_list!(offset, count))
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_mins(1))
                 .exec(&client_cmd_tx)
                 .await
                 .map_err(to_string)?;
@@ -807,13 +807,13 @@ pub(crate) async fn sync_task(
     let days_to_keep = app_state.config.days_to_keep;
 
     while let Some(cmd) = sync_cmd_rx.next().await {
-        fn on_sync_result(sync_result: Result<ShouldTrim, String>, site_path: String, dirtylog_cmd_tx: UnboundedSender<DirtyLogCommand>, sync_logger: &SyncSiteLogger) {
+        fn on_sync_result(sync_result: Result<ShouldTrim, String>, site_path: String, dirtylog_cmd_tx: &UnboundedSender<DirtyLogCommand>, sync_logger: &SyncSiteLogger) {
             match sync_result {
                 Ok(ShouldTrim::Yes) => {
                     if let Err(e) = dirtylog_cmd_tx.unbounded_send(DirtyLogCommand::Trim { site: site_path }) {
                         let err_msg = e.to_string();
                         let command = e.into_inner();
-                        log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}")
+                        log::error!("Cannot send dirtylog Trim command {command:?}: {err_msg}");
                     }
                 },
                 Ok(ShouldTrim::No) => {
@@ -883,7 +883,7 @@ pub(crate) async fn sync_task(
                                         Some(&file_list),
                                     ).await;
                                     sync_logger.log(log::Level::Info, "Syncing done");
-                                    on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                    on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -902,7 +902,7 @@ pub(crate) async fn sync_task(
                                     sync_logger.clone()
                                 ).await;
                                 sync_logger.log(log::Level::Info, "Syncing done");
-                                on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                                 drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -927,7 +927,7 @@ pub(crate) async fn sync_task(
                                         sync_logger.clone(),
                                     ).await;
                                     sync_logger.log(log::Level::Info, "syncing done");
-                                    on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                                    on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -940,7 +940,7 @@ pub(crate) async fn sync_task(
                 futures::future::join_all(sync_tasks).await;
                 log::info!("Sync logs done in {} s", sync_start.elapsed().as_secs());
                 match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
-                    Ok(_) => info!("Cleanup journal dir done"),
+                    Ok(()) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
             }
@@ -973,7 +973,7 @@ pub(crate) async fn sync_task(
                                 sync_logger.clone(),
                                 None,
                             ).await;
-                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Legacy { getlog_path } => {
@@ -988,7 +988,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone()
                             ).await;
-                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Records { records } => {
@@ -1008,7 +1008,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone(),
                             ).await;
-                            on_sync_result(sync_result, site_path, app_state.dirtylog_cmd_tx.clone(), &sync_logger);
+                            on_sync_result(sync_result, site_path, &app_state.dirtylog_cmd_tx, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::PushLog => {
@@ -1016,7 +1016,7 @@ pub(crate) async fn sync_task(
                         }
                     }
                     match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
-                        Ok(_) => info!("Cleanup journal dir done"),
+                        Ok(()) => info!("Cleanup journal dir done"),
                         Err(err) => error!("Cleanup journal dir error: {err}"),
                     }
                 } else {
@@ -1026,7 +1026,7 @@ pub(crate) async fn sync_task(
             SyncCommand::Cleanup => {
                 info!("Cleanup journal dir start");
                 match cleanup_log_files(&app_state.config.journal_dir, max_journal_dir_size, days_to_keep).await {
-                    Ok(_) => info!("Cleanup journal dir done"),
+                    Ok(()) => info!("Cleanup journal dir done"),
                     Err(err) => error!("Cleanup journal dir error: {err}"),
                 }
             }
@@ -1036,7 +1036,7 @@ pub(crate) async fn sync_task(
     log::debug!("Waiting for sync logger task to finish");
     drop(logger_tx);
     if let Err(err) = logger_task.await {
-        log::error!("Failed to join logger_task: {err}")
+        log::error!("Failed to join logger_task: {err}");
     }
 }
 
