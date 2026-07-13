@@ -954,7 +954,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "3.1.1"
+version = "3.1.2"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1852,9 +1852,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shvclient"
-version = "8.0.1"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed81391fff3549dfe6a5a88d1d2f6499617be69ab747c1bdf66d2f74fdde0f93"
+checksum = "0fd10ea4ab8ff585b2da6686d47dd68267d9e4c9215fdc7839e2b4695497491a"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1877,9 +1877,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.2.3"
+version = "6.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4952bd85956c4f176e32f8a2d55d11dd7d8993af07f10368b6ef36b6f782d3b"
+checksum = "4814b6a1ae91a8032103ba9e7f5c80319e55fccb2ff3105c8a54958d28b3315b"
 dependencies = [
  "chrono",
  "clap",
@@ -1890,9 +1890,9 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "18.0.0"
+version = "19.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eaaa68dcb8bca671bebc5451f5d291e49caeb7ff48d577a60a09d51357cac49"
+checksum = "a5ccd17c3369abec8c4916d6f3679f31532066c2ce3540be1bb12af445dd4278"
 dependencies = [
  "anyhow",
  "async-trait",
