@@ -34,19 +34,20 @@ pub(crate) async fn ensure_db(path: impl AsRef<Path>) -> Result<SqliteConnection
     }
     let mut conn = open_db(path).await?;
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS journal_entries (
-            id INTEGER PRIMARY KEY,
-            type INTEGER NOT NULL,
-            epoch_msec INTEGER NOT NULL,
-            path TEXT,
-            signal TEXT,
-            source TEXT,
-            value TEXT,
-            access_level INTEGER,
-            user_id TEXT,
-            repeat INTEGER,
-            time_jump INTEGER
-        )",
+            "CREATE TABLE IF NOT EXISTS journal_entries (
+                id INTEGER PRIMARY KEY,
+                type INTEGER NOT NULL,
+                epoch_msec INTEGER NOT NULL,
+                path TEXT,
+                signal TEXT,
+                source TEXT,
+                value TEXT,
+                access_level INTEGER,
+                user_id TEXT,
+                repeat INTEGER,
+                time_jump INTEGER,
+                provisional INTEGER NOT NULL DEFAULT 0
+            )",
     )
     .execute(&mut conn)
     .await
@@ -90,7 +91,7 @@ pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i6
     Ok((smallest, biggest, 1))
 }
 
-type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>);
+type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
 
 fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut path = None;
@@ -101,6 +102,7 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut user_id = None;
     let mut repeat = None;
     let mut time_jump = None;
+    let mut provisional = None;
 
     match &record.record_type {
         RecordType::Normal(entry) | RecordType::Keep(entry) => {
@@ -123,6 +125,7 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
             if entry.repeat {
                 repeat = Some(1);
             }
+            provisional = Some(i64::from(entry.provisional));
         }
         RecordType::TimeJump(offset) => {
             time_jump = Some(*offset);
@@ -130,18 +133,18 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
         RecordType::TimeAmbig => {}
     }
 
-    (record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump)
+    (record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump, provisional)
 }
 
 pub(crate) async fn insert_records(path: impl AsRef<Path>, records: &[LogRecord]) -> Result<(), String> {
     let mut conn = ensure_db(path).await?;
 
     for record in records {
-        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump) = record_to_values(record);
+        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional) = record_to_values(record);
         sqlx::query(
             "INSERT OR IGNORE INTO journal_entries (
-                id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(record.id)
         .bind(type_id)
@@ -154,6 +157,7 @@ pub(crate) async fn insert_records(path: impl AsRef<Path>, records: &[LogRecord]
         .bind(&user_id)
         .bind(repeat)
         .bind(time_jump)
+        .bind(provisional)
         .execute(&mut conn)
         .await
         .map_err(|e| e.to_string())?;
@@ -181,10 +185,11 @@ fn row_to_record(row: &SqliteRow) -> Result<LogRecord, String> {
     let user_id = row.try_get::<Option<String>, _>(8).map_err(|e| e.to_string())?;
     let repeat = row.try_get::<Option<i64>, _>(9).map_err(|e| e.to_string())?.is_some_and(|repeat| repeat != 0);
     let time_jump = row.try_get::<Option<i64>, _>(10).map_err(|e| e.to_string())?;
+    let provisional = row.try_get::<Option<i64>, _>(11).map_err(|e| e.to_string())?.unwrap_or_default() != 0;
 
     let record_type = match type_id {
-        1 => RecordType::Normal(LogEntry { path, signal, source, value, access_level, user_id, repeat }),
-        2 => RecordType::Keep(LogEntry { path, signal, source, value, access_level, user_id, repeat }),
+        1 => RecordType::Normal(LogEntry { path, signal, source, value, access_level, user_id, repeat, adjusted_timestamp: None, provisional }),
+        2 => RecordType::Keep(LogEntry { path, signal, source, value, access_level, user_id, repeat, adjusted_timestamp: None, provisional }),
         3 => RecordType::TimeJump(time_jump.ok_or_else(|| format!("Missing time jump offset for record id {id}"))?),
         4 => RecordType::TimeAmbig,
         _ => return Err(format!("Wrong stored record type {type_id} for id {id}")),
@@ -204,7 +209,7 @@ pub(crate) async fn fetch_records(path: impl AsRef<Path>, offset: i64, count: i6
 
     let mut conn = open_db(path).await?;
     let rows = sqlx::query(
-        "SELECT id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump
+        "SELECT id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
         FROM journal_entries
         WHERE id >= ? AND id < ?
         ORDER BY id
@@ -246,7 +251,7 @@ async fn query_log_records(
         format!("{path_prefix}/%")
     };
     let query = format!(
-        "SELECT id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump
+        "SELECT id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
         FROM journal_entries
         WHERE epoch_msec {from_op} ? AND epoch_msec {to_op} ? AND (? = '' OR path = ? OR path LIKE ?)
         ORDER BY epoch_msec {order}, id {order}"
@@ -275,6 +280,55 @@ fn relative_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
         return Some("");
     }
     path.strip_prefix(prefix)?.strip_prefix('/')
+}
+
+fn adjust_entry_timestamp(record: &mut LogRecord, adjust: impl Fn(i64) -> i64) {
+    if let RecordType::Normal(entry) | RecordType::Keep(entry) = &mut record.record_type
+        && !entry.provisional
+    {
+        entry.adjusted_timestamp = Some(adjust(record.timestamp.epoch_msec()));
+    }
+}
+
+#[expect(clippy::indexing_slicing, reason = "All accesses guarded by prior emptiness checks and windows(2)")]
+pub(crate) fn adjust_timestamps(records: &mut [LogRecord]) {
+    let tj_indices: Vec<usize> = records.iter()
+        .enumerate()
+        .filter(|(_, r)| matches!(r.record_type, RecordType::TimeJump(_)))
+        .map(|(i, _)| i)
+        .collect();
+
+    if tj_indices.is_empty() {
+        return;
+    }
+
+    let first_tj_idx = tj_indices[0];
+    let first_offset = match &records[first_tj_idx].record_type {
+        RecordType::TimeJump(offset) => *offset,
+        _ => unreachable!(),
+    };
+
+    for record in records.iter_mut().take(first_tj_idx) {
+        adjust_entry_timestamp(record, |ti| ti + first_offset);
+    }
+
+    for pair in tj_indices.windows(2) {
+        let i_a = pair[0];
+        let i_b = pair[1];
+        let ts_a = records[i_a].timestamp.epoch_msec();
+        let ts_b = records[i_b].timestamp.epoch_msec();
+        let offset_b = match &records[i_b].record_type {
+            RecordType::TimeJump(o) => *o,
+            _ => unreachable!(),
+        };
+        let denom = ts_b - offset_b - ts_a;
+        if denom <= 0 {
+            continue;
+        }
+        for record in records.iter_mut().take(i_b).skip(i_a + 1) {
+            adjust_entry_timestamp(record, |ti| ti + offset_b * (ti - ts_a) / denom);
+        }
+    }
 }
 
 fn getlog_record_to_imap(record: LogRecord, path_prefix: &str, path_pattern: Option<&ShvRI>) -> Option<(i64, IMap)> {
@@ -307,7 +361,8 @@ fn getlog_record_to_imap(record: LogRecord, path_prefix: &str, path_pattern: Opt
     if entry.repeat {
         map.insert(8, true.into());
     }
-    Some((timestamp.epoch_msec(), map))
+    let result_ts = entry.adjusted_timestamp.unwrap_or_else(|| timestamp.epoch_msec());
+    Some((result_ts, map))
 }
 
 #[expect(clippy::too_many_arguments, reason = "This is AI slop")]
@@ -325,9 +380,10 @@ pub(crate) async fn getlog_records(
     let mut records = Vec::new();
     for record_name in record_names {
         let db_path = db_path(journal_dir.as_ref(), site_path, record_name);
+        let mut log_records = query_log_records(db_path, since, until, path_prefix).await?;
+        adjust_timestamps(&mut log_records);
         records.extend(
-            query_log_records(db_path, since, until, path_prefix)
-                .await?
+            log_records
                 .into_iter()
                 .filter_map(|record| getlog_record_to_imap(record, path_prefix, path_pattern))
         );
@@ -418,6 +474,8 @@ mod tests {
                 access_level: AccessLevel::Read as i64,
                 user_id: None,
                 repeat: false,
+                adjusted_timestamp: None,
+                provisional: false,
             }),
         }
     }
