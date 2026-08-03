@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Configure cross environment
-        uses: zijiren233/cargo-cross@v1
+        uses: zijiren233/cargo-cross@v1.5.1
         with:
           command: setup
           cross-args: --target ${{matrix.target}}
