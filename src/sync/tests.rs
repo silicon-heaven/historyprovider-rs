@@ -72,6 +72,7 @@ impl TestStep<SyncTaskTestState> for ExpectRecordsDb {
         assert_eq!(site, "site1");
         let db_path = records::db_path(&state.state.config.journal_dir, "site1", self.record_name);
         assert_eq!(records::fetch_records(&db_path, 0, 10).await.unwrap(), self.expected);
+        assert!(matches!(records::get_time_drift(&db_path).await.unwrap(), Some((offset, epoch_msec)) if offset > 0 && epoch_msec > 0));
         tokio::fs::remove_file(&db_path).await.ok();
         tokio::fs::remove_file(format!("{}-wal", db_path.to_string_lossy())).await.ok();
         tokio::fs::remove_file(format!("{}-shm", db_path.to_string_lossy())).await.ok();
@@ -114,6 +115,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
                 Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
+                Box::new(ExpectCall("shv/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
                 Box::new(ExpectRecordsDb {
                     record_name: "maintenance",
                     expected: vec![records_record.clone()],

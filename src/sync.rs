@@ -723,6 +723,7 @@ async fn sync_site_legacy(
 
 async fn sync_site_records(
     site_path: impl AsRef<str>,
+    sub_hp: impl AsRef<str>,
     remote_history_path: impl AsRef<str>,
     record_names: &[String],
     client_cmd_tx: ClientCommandSender,
@@ -730,7 +731,7 @@ async fn sync_site_records(
     sync_logger: impl SyncLogger,
 ) -> Result<ShouldTrim, String>
 {
-    let (site_path, remote_history_path) = (site_path.as_ref(), remote_history_path.as_ref());
+    let (site_path, sub_hp, remote_history_path) = (site_path.as_ref(), sub_hp.as_ref(), remote_history_path.as_ref());
     sync_logger.log(
         log::Level::Info,
         format!("Start syncing records from {} to {}", remote_history_path, Path::new(journal_dir.as_ref()).join(site_path).to_string_lossy())
@@ -764,6 +765,19 @@ async fn sync_site_records(
             let Some(last_record_id) = log_records.last().map(|record| record.id) else {
                 break;
             };
+            let remote_app_path = join_path!("shv", sub_hp, ".app");
+            let remote_datetime: shvproto::DateTime = RpcCall::new(&remote_app_path, "date")
+                .timeout(std::time::Duration::from_secs(5))
+                .exec(&client_cmd_tx)
+                .await
+                .map_err(to_string)?;
+            let local_now = shvproto::DateTime::now();
+            let time_jump = local_now.epoch_msec() - remote_datetime.epoch_msec();
+            sync_logger.log(
+                log::Level::Info,
+                format!("Remote datetime: {remote_datetime}, time drift: {time_jump} ms")
+            );
+            records::set_time_drift(&db_path, time_jump, local_now.epoch_msec()).await?;
             records::insert_records(&db_path, &log_records).await?;
             should_trim = ShouldTrim::Yes;
             let next_offset = last_record_id + 1;
@@ -916,10 +930,12 @@ pub(crate) async fn sync_task(
                                 join_path!("shv", &site_info.sub_hp, ".history", site_suffix)
                             };
                             let records = records.clone();
+                            let sub_hp = site_info.sub_hp.clone();
                             let sync_task = tokio::spawn(async move {
                                     let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                                     let sync_result = sync_site_records(
                                         site_path.clone(),
+                                        sub_hp,
                                         remote_history_path,
                                         &records,
                                         client_cmd_tx,
@@ -1002,6 +1018,7 @@ pub(crate) async fn sync_task(
                             let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                             let sync_result = sync_site_records(
                                 site_path.clone(),
+                                &site_info.sub_hp,
                                 remote_history_path,
                                 records,
                                 client_cmd_tx,
