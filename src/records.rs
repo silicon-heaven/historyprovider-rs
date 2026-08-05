@@ -530,6 +530,123 @@ mod tests {
         }
     }
 
+    fn keep(id: i64, timestamp: i64, path: &str, value: impl Into<RpcValue>) -> LogRecord {
+        LogRecord {
+            id,
+            timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
+            record_type: RecordType::Keep(LogEntry {
+                path: path.to_string(),
+                signal: "chng".to_string(),
+                source: "get".to_string(),
+                value: Some(value.into()),
+                access_level: AccessLevel::Read as i64,
+                user_id: None,
+                repeat: false,
+                adjusted_timestamp: None,
+                provisional: false,
+            }),
+        }
+    }
+
+    fn time_jump(id: i64, timestamp: i64, offset: i64) -> LogRecord {
+        LogRecord {
+            id,
+            timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
+            record_type: RecordType::TimeJump(offset),
+        }
+    }
+
+    fn adjusted(record: &LogRecord) -> Option<i64> {
+        match &record.record_type {
+            RecordType::Normal(entry) | RecordType::Keep(entry) => entry.adjusted_timestamp,
+            RecordType::TimeJump(_) | RecordType::TimeAmbig => None,
+        }
+    }
+
+    #[test]
+    fn adjust_timestamps_without_time_jump_does_nothing() {
+        let mut records = vec![
+            record(0, 1_000, "some/a", 1),
+            record(1, 2_000, "some/b", 2),
+            record(2, 3_000, "some/c", 3),
+        ];
+        adjust_timestamps(&mut records);
+        assert_eq!(adjusted(&records[0]), None);
+        assert_eq!(adjusted(&records[1]), None);
+        assert_eq!(adjusted(&records[2]), None);
+    }
+
+    #[test]
+    fn adjust_timestamps_shifts_records_before_first_time_jump() {
+        let mut records = vec![
+            record(0, 1_000, "some/a", 1),
+            keep(1, 2_000, "some/b", 2),
+            time_jump(2, 100_000, 5_000),
+            record(3, 105_000, "some/c", 3),
+        ];
+        adjust_timestamps(&mut records);
+        assert_eq!(adjusted(&records[0]), Some(6_000));
+        assert_eq!(adjusted(&records[1]), Some(7_000));
+        assert_eq!(adjusted(&records[2]), None);
+        assert_eq!(adjusted(&records[3]), None);
+    }
+
+    #[test]
+    fn adjust_timestamps_interpolates_between_time_jumps() {
+        // Drift grows from 2_000 ms before the first jump to 1_000 ms before the second one.
+        // Between the jumps (denom = 300_000 - 1_000 - 100_000 = 199_000) records are
+        // adjusted proportionally: 1_000 * (ti - 100_000) / 199_000.
+        let mut records = vec![
+            record(0, 50_000, "some/a", 1),
+            record(1, 95_000, "some/b", 2),
+            time_jump(2, 100_000, 2_000),
+            record(3, 119_900, "some/c", 3),
+            record(4, 199_500, "some/d", 4),
+            record(5, 299_000, "some/e", 5),
+            time_jump(6, 300_000, 1_000),
+            record(7, 350_000, "some/f", 6),
+        ];
+        adjust_timestamps(&mut records);
+        assert_eq!(adjusted(&records[0]), Some(52_000));
+        assert_eq!(adjusted(&records[1]), Some(97_000));
+        assert_eq!(adjusted(&records[2]), None);
+        assert_eq!(adjusted(&records[3]), Some(120_000));
+        assert_eq!(adjusted(&records[4]), Some(200_000));
+        assert_eq!(adjusted(&records[5]), Some(300_000));
+        assert_eq!(adjusted(&records[6]), None);
+        assert_eq!(adjusted(&records[7]), None);
+    }
+
+    #[test]
+    fn adjust_timestamps_skips_provisional_records() {
+        let mut provisional = record(1, 50_000, "some/a", 1);
+        if let RecordType::Normal(entry) = &mut provisional.record_type {
+            entry.provisional = true;
+        }
+        let mut records = vec![
+            record(0, 10_000, "some/b", 2),
+            provisional,
+            time_jump(2, 100_000, 1_000),
+            record(3, 150_000, "some/c", 3),
+        ];
+        adjust_timestamps(&mut records);
+        assert_eq!(adjusted(&records[0]), Some(11_000));
+        assert_eq!(adjusted(&records[1]), None);
+        assert_eq!(adjusted(&records[3]), None);
+    }
+
+    #[test]
+    fn adjust_timestamps_with_negative_drift() {
+        let mut records = vec![
+            record(0, 50_000, "some/a", 1),
+            time_jump(1, 100_000, -1_000),
+            record(2, 150_000, "some/b", 2),
+        ];
+        adjust_timestamps(&mut records);
+        assert_eq!(adjusted(&records[0]), Some(49_000));
+        assert_eq!(adjusted(&records[2]), None);
+    }
+
     #[tokio::test]
     async fn getlog_records_aggregate() {
         let journal_dir = tempfile::TempDir::with_prefix("test-hprs-records-getlog.").unwrap();
