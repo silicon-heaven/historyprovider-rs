@@ -29,6 +29,8 @@ pub struct LogEntry {
     pub access_level: i64,  // default: Read
     pub user_id: Option<String>,
     pub repeat: bool,       // default: false
+    pub adjusted_timestamp: Option<i64>,
+    pub provisional: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +182,8 @@ pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc
                         repeat: get_field_checked(src, LogField::Repeat)
                             .map_err(|e| record_err(&format!("wrong `repeat` type: {e}")))?
                             .unwrap_or_default(),
+                        adjusted_timestamp: None,
+                        provisional: false,
                     };
                     if type_id == 1 {
                         RecordType::Normal(entry)
