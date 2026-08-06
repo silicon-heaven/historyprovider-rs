@@ -35,21 +35,30 @@ struct TestCase<'a> {
     expected_file_paths: Vec<(&'static str, &'a str)>,
 }
 
-struct UseRecordsSite;
+struct UseRecordsSite {
+    site_path: &'static str,
+    sub_hp: &'static str,
+}
+
+impl Default for UseRecordsSite {
+    fn default() -> Self {
+        Self { site_path: "site1", sub_hp: "site1" }
+    }
+}
 
 #[async_trait::async_trait]
 impl TestStep<SyncTaskTestState> for UseRecordsSite {
     async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
         *state.state.sites_data.write().await = SitesData {
             sites_info: Arc::new(BTreeMap::from([
-                ("site1".to_string(), SiteInfo{
+                (self.site_path.to_string(), SiteInfo{
                     name: "lol".into(),
                     site_type: "Type".to_string(),
-                    sub_hp: "site1".to_owned(),
+                    sub_hp: self.sub_hp.to_owned(),
                 })
             ])),
             sub_hps: Arc::new(BTreeMap::from([
-                ("site1".to_string(), SubHpInfo::Records {
+                (self.sub_hp.to_string(), SubHpInfo::Records {
                     records: vec!["maintenance".to_string()],
                 })
             ])),
@@ -59,6 +68,7 @@ impl TestStep<SyncTaskTestState> for UseRecordsSite {
 }
 
 struct ExpectRecordsDb {
+    site: &'static str,
     record_name: &'static str,
     expected: Vec<IMap>,
 }
@@ -69,13 +79,17 @@ impl TestStep<SyncTaskTestState> for ExpectRecordsDb {
         let Some(DirtyLogCommand::Trim { site }) = state._dirtylog_cmd_rx.next().await else {
             panic!("Expected dirtylog Trim command");
         };
-        assert_eq!(site, "site1");
-        let db_path = records::db_path(&state.state.config.journal_dir, "site1", self.record_name);
+        assert_eq!(site, self.site);
+        let db_path = records::db_path(&state.state.config.journal_dir, self.site, self.record_name);
         assert_eq!(records::fetch_records(&db_path, 0, 10).await.unwrap(), self.expected);
-        assert!(matches!(records::get_time_drift(&db_path).await.unwrap(), Some((offset, epoch_msec)) if offset > 0 && epoch_msec > 0));
+        let site_db_path = records::site_db_path(&state.state.config.journal_dir, self.site);
+        assert!(matches!(records::get_time_drift(&site_db_path).await.unwrap(), Some((offset, epoch_msec)) if offset > 0 && epoch_msec > 0));
         tokio::fs::remove_file(&db_path).await.ok();
         tokio::fs::remove_file(format!("{}-wal", db_path.to_string_lossy())).await.ok();
         tokio::fs::remove_file(format!("{}-shm", db_path.to_string_lossy())).await.ok();
+        tokio::fs::remove_file(&site_db_path).await.ok();
+        tokio::fs::remove_file(format!("{}-wal", site_db_path.to_string_lossy())).await.ok();
+        tokio::fs::remove_file(format!("{}-shm", site_db_path.to_string_lossy())).await.ok();
     }
 }
 
@@ -111,12 +125,48 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
         TestCase {
             name: "SyncSite: records fetch",
             steps: &[
-                Box::new(UseRecordsSite),
+                Box::new(UseRecordsSite::default()),
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
                 Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
                 Box::new(ExpectCall("shv/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
                 Box::new(ExpectRecordsDb {
+                    site: "site1",
+                    record_name: "maintenance",
+                    expected: vec![records_record.clone()],
+                }),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![],
+        },
+        TestCase {
+            name: "SyncSite: records fetch from sub HP reads its time drift",
+            steps: &[
+                Box::new(UseRecordsSite { site_path: "subhp1/site1", sub_hp: "subhp1" }),
+                Box::new(SyncCommand::SyncSite("subhp1/site1".to_string())),
+                Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCallParam("shv/subhp1/.history/site1/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
+                Box::new(ExpectCall("shv/subhp1/.history/site1", "timeDrift", Ok(make_map!("dt" => 1_700_000_000_000_i64, "offset" => 3_600_000_i64).into()))),
+                Box::new(ExpectRecordsDb {
+                    site: "subhp1/site1",
+                    record_name: "maintenance",
+                    expected: vec![records_record.clone()],
+                }),
+            ],
+            starting_files: vec![],
+            expected_file_paths: vec![],
+        },
+        TestCase {
+            name: "SyncSite: records fetch from sub HP falls back to device date when no time drift",
+            steps: &[
+                Box::new(UseRecordsSite { site_path: "subhp1/site1", sub_hp: "subhp1" }),
+                Box::new(SyncCommand::SyncSite("subhp1/site1".to_string())),
+                Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCallParam("shv/subhp1/.history/site1/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
+                Box::new(ExpectCall("shv/subhp1/.history/site1", "timeDrift", Ok(RpcValue::null()))),
+                Box::new(ExpectCall("shv/subhp1/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
+                Box::new(ExpectRecordsDb {
+                    site: "subhp1/site1",
                     record_name: "maintenance",
                     expected: vec![records_record.clone()],
                 }),

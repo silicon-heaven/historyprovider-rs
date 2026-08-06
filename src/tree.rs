@@ -52,6 +52,8 @@ const METH_FETCH: &str = "fetch";
 const META_METHOD_FETCH: MetaMethod = MetaMethod::new_static(METH_FETCH, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Service, "[i:offset,i(0,):count]", "!historyRecords", &[], "");
 const METH_SPAN: &str = "span";
 const META_METHOD_SPAN: MetaMethod = MetaMethod::new_static(METH_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "", "[i:smallest,i:biggest,i(1,):span]", &[], "");
+const METH_TIME_DRIFT: &str = "timeDrift";
+const META_METHOD_TIME_DRIFT: MetaMethod = MetaMethod::new_static(METH_TIME_DRIFT, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Read, "Null", "Map|Null", &[], "");
 
 // Root node methods
 const METH_VERSION: &str = "version";
@@ -529,6 +531,19 @@ async fn getlog3_handler_rq(
     Ok(records.into())
 }
 
+async fn time_drift_handler(
+    site_path: &str,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let db_path = records::site_db_path(&app_state.config.journal_dir, site_path);
+    let drift = records::get_time_drift(db_path)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get time drift: {err}")))?;
+    Ok(drift.map_or_else(RpcValue::null, |(offset, epoch_msec)|
+        shvproto::make_map!("dt" => epoch_msec, "offset" => offset).into()
+    ))
+}
+
 fn records_site_for_path(sites_data: &SitesData, path: &str) -> Option<(String, String, Vec<String>)> {
     let (site_path, path_prefix) = find_longest_path_prefix(sites_data.sites_info.as_ref(), path)?;
     let site_info = sites_data.sites_info.get(site_path)?;
@@ -839,7 +854,7 @@ pub(crate) async fn request_handler(
                     return err_unresolved_request();
                 }
                 let methods = if records_site.is_some() {
-                    const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG];
+                    const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_TIME_DRIFT];
                     METHODS
                 } else {
                     const METHODS: &[MetaMethod] = &[];
@@ -873,6 +888,7 @@ pub(crate) async fn request_handler(
                 }
                 Method::Other(m) => match m.method() {
                     METH_GET_LOG if records_site.is_some() => m.resolve(methods, async move || { getlog3_handler_rq(&path, &param, app_state).await }),
+                    METH_TIME_DRIFT if records_site.is_some() => m.resolve(methods, async move || { time_drift_handler(&path, app_state).await }),
                     _ => err_unresolved_request(),
                 },
             }

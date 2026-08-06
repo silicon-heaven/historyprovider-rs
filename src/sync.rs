@@ -721,6 +721,68 @@ async fn sync_site_legacy(
     Ok(should_trim)
 }
 
+fn parse_time_drift(value: RpcValue) -> Option<(i64, i64)> {
+    let map = shvproto::rpcvalue::Map::try_from(value).ok()?;
+    let offset = i64::try_from(map.get("offset")?).ok()?;
+    let dt = i64::try_from(map.get("dt")?).ok()?;
+    Some((offset, dt))
+}
+
+async fn sync_time_drift_from_device(
+    site_path: &str,
+    site_db: &Path,
+    client_cmd_tx: &ClientCommandSender,
+    sync_logger: &impl SyncLogger,
+) -> Result<(), String>
+{
+    let remote_app_path = join_path!("shv", site_path, ".app");
+    let remote_datetime: shvproto::DateTime = RpcCall::new(&remote_app_path, "date")
+        .timeout(std::time::Duration::from_secs(5))
+        .exec(client_cmd_tx)
+        .await
+        .map_err(to_string)?;
+    let local_now = shvproto::DateTime::now();
+    let time_jump = local_now.epoch_msec() - remote_datetime.epoch_msec();
+    sync_logger.log(
+        log::Level::Info,
+        format!("Remote datetime: {remote_datetime}, time drift: {time_jump} ms")
+    );
+    records::set_time_drift(site_db, time_jump, local_now.epoch_msec()).await
+}
+
+async fn sync_time_drift(
+    site_path: &str,
+    sub_hp: &str,
+    remote_history_path: &str,
+    site_db: &Path,
+    client_cmd_tx: &ClientCommandSender,
+    sync_logger: &impl SyncLogger,
+) -> Result<(), String>
+{
+    if site_path == sub_hp {
+        // The target is a device, compute the drift from its clock.
+        sync_time_drift_from_device(site_path, site_db, client_cmd_tx, sync_logger).await
+    } else {
+        // The target is a child history provider, read its stored drift.
+        let time_drift: Option<(i64, i64)> = RpcCall::new(remote_history_path, "timeDrift")
+            .timeout(std::time::Duration::from_secs(5))
+            .exec(client_cmd_tx)
+            .await
+            .ok()
+            .and_then(parse_time_drift);
+        if let Some((offset, dt)) = time_drift {
+            sync_logger.log(
+                log::Level::Info,
+                format!("Got time drift from {remote_history_path}: offset: {offset}, dt: {dt}")
+            );
+            records::set_time_drift(site_db, offset, dt).await
+        } else {
+            // The child HP has no drift stored yet, compute it from the device clock.
+            sync_time_drift_from_device(site_path, site_db, client_cmd_tx, sync_logger).await
+        }
+    }
+}
+
 async fn sync_site_records(
     site_path: impl AsRef<str>,
     sub_hp: impl AsRef<str>,
@@ -737,6 +799,7 @@ async fn sync_site_records(
         format!("Start syncing records from {} to {}", remote_history_path, Path::new(journal_dir.as_ref()).join(site_path).to_string_lossy())
     );
 
+    let site_db = records::site_db_path(journal_dir.as_ref(), site_path);
     let mut should_trim = ShouldTrim::No;
 
     for record_name in record_names {
@@ -765,19 +828,14 @@ async fn sync_site_records(
             let Some(last_record_id) = log_records.last().map(|record| record.id) else {
                 break;
             };
-            let remote_app_path = join_path!("shv", sub_hp, ".app");
-            let remote_datetime: shvproto::DateTime = RpcCall::new(&remote_app_path, "date")
-                .timeout(std::time::Duration::from_secs(5))
-                .exec(&client_cmd_tx)
-                .await
-                .map_err(to_string)?;
-            let local_now = shvproto::DateTime::now();
-            let time_jump = local_now.epoch_msec() - remote_datetime.epoch_msec();
-            sync_logger.log(
-                log::Level::Info,
-                format!("Remote datetime: {remote_datetime}, time drift: {time_jump} ms")
-            );
-            records::set_time_drift(&db_path, time_jump, local_now.epoch_msec()).await?;
+            sync_time_drift(
+                site_path,
+                sub_hp,
+                remote_history_path,
+                &site_db,
+                &client_cmd_tx,
+                &sync_logger,
+            ).await?;
             records::insert_records(&db_path, &log_records).await?;
             should_trim = ShouldTrim::Yes;
             let next_offset = last_record_id + 1;

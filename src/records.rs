@@ -17,6 +17,12 @@ pub(crate) fn db_path(journal_dir: impl AsRef<str>, site_path: impl AsRef<str>, 
         .join(format!("{}.db", record_name.as_ref()))
 }
 
+pub(crate) fn site_db_path(journal_dir: impl AsRef<str>, site_path: impl AsRef<str>) -> PathBuf {
+    Path::new(journal_dir.as_ref())
+        .join(site_path.as_ref())
+        .join("time_drift.db")
+}
+
 async fn open_db(path: impl AsRef<Path>) -> Result<SqliteConnection, String> {
     let options = SqliteConnectOptions::new()
         .filename(path.as_ref())
@@ -26,13 +32,17 @@ async fn open_db(path: impl AsRef<Path>) -> Result<SqliteConnection, String> {
         .map_err(|e| e.to_string())
 }
 
-pub(crate) async fn ensure_db(path: impl AsRef<Path>) -> Result<SqliteConnection, String> {
+async fn open_db_with_dirs(path: impl AsRef<Path>) -> Result<SqliteConnection, String> {
     if let Some(parent) = path.as_ref().parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|err| format!("Cannot create records DB directory {}: {err}", parent.to_string_lossy()))?;
     }
-    let mut conn = open_db(path).await?;
+    open_db(path).await
+}
+
+pub(crate) async fn ensure_db(path: impl AsRef<Path>) -> Result<SqliteConnection, String> {
+    let mut conn = open_db_with_dirs(path).await?;
     sqlx::query(
             "CREATE TABLE IF NOT EXISTS journal_entries (
                 id INTEGER PRIMARY KEY,
@@ -58,6 +68,11 @@ pub(crate) async fn ensure_db(path: impl AsRef<Path>) -> Result<SqliteConnection
     .execute(&mut conn)
     .await
     .map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
+pub(crate) async fn ensure_site_db(path: impl AsRef<Path>) -> Result<SqliteConnection, String> {
+    let mut conn = open_db_with_dirs(path).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS time_drift (
             offset INTEGER NOT NULL,
@@ -176,7 +191,7 @@ pub(crate) async fn insert_records(path: impl AsRef<Path>, records: &[LogRecord]
 }
 
 pub(crate) async fn set_time_drift(path: impl AsRef<Path>, offset: i64, epoch_msec: i64) -> Result<(), String> {
-    let mut conn = ensure_db(path).await?;
+    let mut conn = ensure_site_db(path).await?;
     let mut tx = conn.begin().await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM time_drift")
         .execute(&mut *tx)
@@ -420,11 +435,12 @@ pub(crate) async fn getlog_records(
     path_pattern: Option<&ShvRI>,
 ) -> Result<Vec<IMap>, String> {
     let reverse = until.epoch_msec() < since.epoch_msec();
+    let time_drift = get_time_drift(site_db_path(journal_dir.as_ref(), site_path)).await?;
     let mut records = Vec::new();
     for record_name in record_names {
         let db_path = db_path(journal_dir.as_ref(), site_path, record_name);
         let mut log_records = query_log_records(&db_path, since, until, path_prefix).await?;
-        if let Some((time_jump, epoch_msec)) = get_time_drift(&db_path).await? {
+        if let Some((time_jump, epoch_msec)) = time_drift {
             log_records.push(LogRecord {
                 id: 0,
                 timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
@@ -702,12 +718,12 @@ mod tests {
     async fn time_drift_roundtrip() {
         let journal_dir = tempfile::TempDir::with_prefix("test-hprs-records-getlog.").unwrap();
         let journal_dir = journal_dir.path().to_str().unwrap();
-        let db_path = db_path(journal_dir, "site1", "maintenance");
-        assert_eq!(get_time_drift(&db_path).await.unwrap(), None);
-        set_time_drift(&db_path, 3_600_000, 1_700_000_000_000).await.unwrap();
-        assert_eq!(get_time_drift(&db_path).await.unwrap(), Some((3_600_000, 1_700_000_000_000)));
-        set_time_drift(&db_path, -1_000, 1_700_000_360_000).await.unwrap();
-        assert_eq!(get_time_drift(&db_path).await.unwrap(), Some((-1_000, 1_700_000_360_000)));
+        let time_drift_db = site_db_path(journal_dir, "site1");
+        assert_eq!(get_time_drift(&time_drift_db).await.unwrap(), None);
+        set_time_drift(&time_drift_db, 3_600_000, 1_700_000_000_000).await.unwrap();
+        assert_eq!(get_time_drift(&time_drift_db).await.unwrap(), Some((3_600_000, 1_700_000_000_000)));
+        set_time_drift(&time_drift_db, -1_000, 1_700_000_360_000).await.unwrap();
+        assert_eq!(get_time_drift(&time_drift_db).await.unwrap(), Some((-1_000, 1_700_000_360_000)));
     }
 
     #[tokio::test]
@@ -719,7 +735,7 @@ mod tests {
             record(0, 1000, "some/a", 1),
             record(1, 2000, "some/b", 2),
         ]).await.unwrap();
-        set_time_drift(&db_path, 3_600_000, 1_700_000_000_000).await.unwrap();
+        set_time_drift(&site_db_path(journal_dir, "site1"), 3_600_000, 1_700_000_000_000).await.unwrap();
 
         let mut log_records = query_log_records(
             &db_path,
@@ -727,7 +743,7 @@ mod tests {
             shvproto::DateTime::from_epoch_msec(3000),
             "",
         ).await.unwrap();
-        let (time_jump, epoch_msec) = get_time_drift(&db_path).await.unwrap().unwrap();
+        let (time_jump, epoch_msec) = get_time_drift(&site_db_path(journal_dir, "site1")).await.unwrap().unwrap();
         log_records.push(LogRecord {
             id: 0,
             timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
