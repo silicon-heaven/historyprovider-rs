@@ -273,7 +273,7 @@ async fn set_online_status(
                     level: 0,
                     severity: crate::alarm::Severity::Error,
                 },
-                timestamp: DateTime::now(),
+                timestamp: DateTime::now().expect("Datetime must fit"),
                 stale: false,
             });
         }
@@ -635,7 +635,7 @@ async fn reload_sites(
             let alarms_for_site = alarm_table.entry(site_path.clone()).or_default();
 
             for entry in chained_entries.clone() {
-                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
+                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec).expect("Datetime must fit"));
             }
         };
 
@@ -816,7 +816,7 @@ pub(crate) async fn sites_task(
                         let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector, signal_name| {
                             let alarms_for_site = alarm_table.entry(parsed_notification.site_path.clone()).or_default();
 
-                            let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
+                            let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now().expect("Datetime must fit"));
                             if !updated.is_empty() {
                                 client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name))
                                     .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));

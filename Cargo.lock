@@ -281,9 +281,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -291,9 +291,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
 dependencies = [
  "anstream",
  "anstyle",
@@ -954,7 +954,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "historyprovider"
-version = "3.1.8"
+version = "3.1.9"
 dependencies = [
  "async-broadcast",
  "async-compression",
@@ -1852,9 +1852,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shvclient"
-version = "9.0.0"
+version = "9.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fd10ea4ab8ff585b2da6686d47dd68267d9e4c9215fdc7839e2b4695497491a"
+checksum = "c38d8c42d2790e8319beb493a55681bca3bab84459b9727c773e53d9132f3c1d"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1877,9 +1877,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.3.0"
+version = "6.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e316ecbbe901706dc88a21813d382b2896f1223d5d3a1cd9e233b4e6e1d35f7"
+checksum = "e01280e1ef6031aeb3ae2c82d225c3c5205f3f50a3b127831bbdb0809c7acb22"
 dependencies = [
  "chrono",
  "clap",
@@ -1890,9 +1890,9 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "19.0.0"
+version = "19.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5ccd17c3369abec8c4916d6f3679f31532066c2ce3540be1bb12af445dd4278"
+checksum = "fd2d5e11f140a759b347cf8e98c8a072bf66797244e8ba54250ad24ed28a068e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2266,9 +2266,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.54"
+version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e1d5e639ff6bab73cb6885cc7e7b1de96c3f32c68ec55f3952614bec1092244"
+checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
  "libc",

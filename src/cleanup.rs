@@ -62,8 +62,8 @@ pub(crate) async fn cleanup_log_files(dir: impl AsRef<Path>, size_limit: u64, da
     let mut deletable_files = Vec::new();
 
     // This file doesn't have to exist, I'm only constructing the filename for log retention.
-    let oldest_log2_file_to_keep = PathBuf::from(msec_to_log2_filename(shvproto::DateTime::now().add_days(-days_to_keep).epoch_msec()));
-    let oldest_log3_file_to_keep = PathBuf::from(datetime_to_log3_filename(shvproto::DateTime::now().add_days(-days_to_keep)));
+    let oldest_log2_file_to_keep = PathBuf::from(msec_to_log2_filename(shvproto::DateTime::now().expect("Datetime must fit").add_days(-days_to_keep).expect("Datetime must fit").epoch_msec()));
+    let oldest_log3_file_to_keep = PathBuf::from(datetime_to_log3_filename(shvproto::DateTime::now().expect("Datetime must fit").add_days(-days_to_keep).expect("Datetime must fit")));
     info!("keeping files younger than {filename_log2} or {filename_log3}",
         filename_log2 = oldest_log2_file_to_keep.to_string_lossy(),
         filename_log3 = oldest_log3_file_to_keep.to_string_lossy(),

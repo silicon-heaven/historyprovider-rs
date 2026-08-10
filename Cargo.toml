@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "3.1.8"
+version = "3.1.9"
 edition = "2024"
 
 [profile.release]
@@ -17,7 +17,7 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "6.2.2"
+shvproto = "6.3.3"
 shvrpc = { version = "19.0", features = ["journal"] }
 shvclient = { version = "9.0", features = ["tokio"] }
 futures = "0.3.32"
@@ -70,7 +70,7 @@ let_underscore_must_use = "warn"
 linkedlist = "warn"
 map_err_ignore = "warn"
 needless_pass_by_ref_mut = "warn"
-option-if-let-else = "warn"
+option_if_let_else = "warn"
 option_option = "warn"
 or_fun_call = "warn"
 owned_cow = "warn"
@@ -104,7 +104,7 @@ case_sensitive_file_extension_comparisons = "allow"
 doc_markdown = "allow"
 expect_used = "allow"
 explicit_iter_loop = "allow"
-float-cmp = "allow"
+float_cmp = "allow"
 format_push_string = "allow"
 if_not_else = "allow"
 items_after_statements = "allow"
