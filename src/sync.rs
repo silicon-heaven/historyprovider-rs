@@ -501,7 +501,7 @@ fn format_getlog_since_duration(since: &GetLog2Since) -> String {
         return String::new();
     };
 
-    let Ok(duration) = (shvproto::DateTime::now().to_chrono_naivedatetime() - dt.to_chrono_naivedatetime()).to_std() else{
+    let Ok(duration) = (shvproto::DateTime::now().expect("Datetime must fit").to_chrono_naivedatetime() - dt.to_chrono_naivedatetime()).to_std() else{
         return String::new();
 
     };
@@ -572,7 +572,7 @@ async fn sync_site_legacy(
 
     let (mut getlog_params, mut log_file_path, mut log_file_entries) = if let Some((newest_log_file, newest_log_entries)) = newest_log {
         let last_log_entry_msec = newest_log_entries.last().expect("The newest log is not empty").epoch_msec;
-        let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1);
+        let since = shvproto::DateTime::from_epoch_msec(last_log_entry_msec + 1).expect("Datetime must fit");
         if newest_log_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
             // Start with a new file if it already contains too many records
             sync_logger.log(
@@ -604,7 +604,7 @@ async fn sync_site_legacy(
             (params, Some(newest_log_file), newest_log_entries)
         }
     } else {
-        let since = shvproto::DateTime::now().add_days(-GETLOG_SINCE_DAYS_DEFAULT);
+        let since = shvproto::DateTime::now().expect("Datetime must fit").add_days(-GETLOG_SINCE_DAYS_DEFAULT).expect("Datetime must fit");
         sync_logger.log(
             log::Level::Info,
             format!("sync to a new journal directory since {}", since.to_iso_string())
@@ -701,7 +701,7 @@ async fn sync_site_legacy(
 
         log_file_entries.append(&mut log_entries);
 
-        getlog_params.since = GetLog2Since::DateTime(shvproto::DateTime::from_epoch_msec(last_entry_ms));
+        getlog_params.since = GetLog2Since::DateTime(shvproto::DateTime::from_epoch_msec(last_entry_ms).expect("Datetime must fit"));
 
         if log_file_entries.len() > LOG_FILE_RECORD_COUNT_LIMIT {
             write_journal(log_file_path
@@ -741,7 +741,7 @@ async fn sync_time_drift_from_device(
         .exec(client_cmd_tx)
         .await
         .map_err(to_string)?;
-    let local_now = shvproto::DateTime::now();
+    let local_now = shvproto::DateTime::now().expect("Datetime must fit");
     let time_jump = local_now.epoch_msec() - remote_datetime.epoch_msec();
     sync_logger.log(
         log::Level::Info,

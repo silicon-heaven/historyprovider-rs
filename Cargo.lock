@@ -1877,9 +1877,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.3.2"
+version = "6.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b044c0d40df0f4ae5ede8b1c6d8044ebc758fc5fd96ba1c5e3de69dfd1c4d478"
+checksum = "e01280e1ef6031aeb3ae2c82d225c3c5205f3f50a3b127831bbdb0809c7acb22"
 dependencies = [
  "chrono",
  "clap",

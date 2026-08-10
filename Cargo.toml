@@ -17,7 +17,7 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "6.2.2"
+shvproto = "6.3.3"
 shvrpc = { version = "19.0", features = ["journal"] }
 shvclient = { version = "9.0", features = ["tokio"] }
 futures = "0.3.32"

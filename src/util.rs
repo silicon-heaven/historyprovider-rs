@@ -138,7 +138,7 @@ pub(crate) fn dedup_channel<T: Eq + Hash + Clone>() -> (DedupSender<T>, DedupRec
 }
 
 pub(crate) fn msec_to_log2_filename(msec: i64) -> String {
-    shvproto::DateTime::from_epoch_msec(msec)
+    shvproto::DateTime::from_epoch_msec(msec).expect("Datetime must fit")
         .to_chrono_datetime()
         .format("%Y-%m-%dT%H-%M-%S-%3f.log2")
         .to_string()
