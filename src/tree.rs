@@ -52,6 +52,8 @@ const METH_FETCH: &str = "fetch";
 const META_METHOD_FETCH: MetaMethod = MetaMethod::new_static(METH_FETCH, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Service, "[i:offset,i(0,):count]", "!historyRecords", &[], "");
 const METH_SPAN: &str = "span";
 const META_METHOD_SPAN: MetaMethod = MetaMethod::new_static(METH_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "", "[i:smallest,i:biggest,i(1,):span]", &[], "");
+const METH_DATE_SPAN: &str = "dateSpan";
+const META_METHOD_DATE_SPAN: MetaMethod = MetaMethod::new_static(METH_DATE_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "!historyDateSpanP", "!historyDateSpanR", &[], "");
 const METH_TIME_DRIFT: &str = "timeDrift";
 const META_METHOD_TIME_DRIFT: MetaMethod = MetaMethod::new_static(METH_TIME_DRIFT, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Read, "Null", "Map|Null", &[], "");
 
@@ -659,6 +661,39 @@ struct FetchParam {
     count: i64,
 }
 
+#[derive(Default)]
+struct DateSpanParam {
+    since: Option<shvproto::DateTime>,
+    until: Option<shvproto::DateTime>,
+    now: Option<shvproto::DateTime>,
+}
+
+impl TryFrom<&RpcValue> for DateSpanParam {
+    type Error = String;
+
+    fn try_from(value: &RpcValue) -> Result<Self, Self::Error> {
+        let map = BTreeMap::<i32, RpcValue>::try_from(value)?;
+        let parse_datetime = |key: i32| {
+            map.get(&key).map_or(Ok(None), |value| {
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    shvproto::DateTime::try_from(value).map(Some).map_err(|err| err.to_string())
+                }
+            })
+        };
+        let param = Self {
+            since: parse_datetime(1)?,
+            until: parse_datetime(2)?,
+            now: parse_datetime(3)?,
+        };
+        if param.since.zip(param.until).is_some_and(|(since, until)| since.epoch_msec() >= until.epoch_msec()) {
+            return Err("Date span Since must precede Until".to_string());
+        }
+        Ok(param)
+    }
+}
+
 async fn fetch_handler(
     path: &str,
     record_name: &str,
@@ -686,6 +721,27 @@ async fn span_handler(
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get records span: {err}")))?;
     Ok(shvproto::make_list!(smallest, biggest, span).into())
+}
+
+async fn date_span_handler(
+    path: &str,
+    record_name: &str,
+    param: DateSpanParam,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let local_now = shvproto::DateTime::now().expect("Datetime must fit");
+    let now = param.now.unwrap_or(local_now);
+    let stored_offset = records::get_time_drift(records::site_db_path(&app_state.config.journal_dir, path))
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get time drift: {err}")))?
+        .map_or(0, |(offset, _)| offset);
+    let current_offset = stored_offset + now.epoch_msec() - local_now.epoch_msec();
+    let db_path = records::db_path(&app_state.config.journal_dir, path, record_name);
+    let result = records::date_span_records(db_path, param.since, param.until, current_offset)
+        .await
+        .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get records date span: {err}")))?
+        .ok_or_else(|| RpcError::new(RpcErrorCode::InvalidParam, "No records match the requested date span"))?;
+    Ok(shvproto::make_list!(result.0, result.1, result.2).into())
 }
 
 fn rpc_error_not_implemented() -> RpcError {
@@ -941,7 +997,7 @@ pub(crate) async fn request_handler(
                 if !record_exists {
                     return err_unresolved_request();
                 }
-                const METHODS: &[MetaMethod] = &[META_METHOD_FETCH, META_METHOD_SPAN];
+                const METHODS: &[MetaMethod] = &[META_METHOD_FETCH, META_METHOD_SPAN, META_METHOD_DATE_SPAN];
                 METHODS
             };
             match method {
@@ -960,6 +1016,11 @@ pub(crate) async fn request_handler(
                     }),
                     METH_SPAN => m.resolve(methods, async move || {
                         span_handler(&path, &record_name, app_state).await
+                    }),
+                    METH_DATE_SPAN => m.resolve(methods, async move || {
+                        let param = DateSpanParam::try_from(&param)
+                            .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong dateSpan parameters: {err}")))?;
+                        date_span_handler(&path, &record_name, param, app_state).await
                     }),
                     _ => err_unresolved_request(),
                 },
@@ -1022,5 +1083,16 @@ mod tests {
 
         assert!(super::has_records_leaf(&sites_data));
         assert_eq!(super::records_site_paths(&sites_data).keys().cloned().collect::<Vec<_>>(), vec!["records".to_string()]);
+    }
+
+    #[test]
+    fn date_span_params_require_since_before_until() {
+        for (since, until) in [(2_000, 1_000), (1_000, 1_000)] {
+            let param = shvproto::RpcValue::from(BTreeMap::<i32, shvproto::RpcValue>::from([
+                (1, shvproto::DateTime::from_epoch_msec(since).expect("Datetime must fit").into()),
+                (2, shvproto::DateTime::from_epoch_msec(until).expect("Datetime must fit").into()),
+            ]));
+            assert!(super::DateSpanParam::try_from(&param).is_err());
+        }
     }
 }

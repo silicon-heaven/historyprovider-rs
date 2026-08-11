@@ -115,6 +115,82 @@ pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i6
     Ok((smallest, biggest, 1))
 }
 
+pub(crate) async fn date_span_records(
+    path: impl AsRef<Path>,
+    since: Option<shvproto::DateTime>,
+    until: Option<shvproto::DateTime>,
+    current_offset: i64,
+) -> Result<Option<(i64, i64, shvproto::DateTime)>, String> {
+    if tokio::fs::metadata(path.as_ref()).await.is_err() {
+        return Ok(None);
+    }
+
+    let mut conn = open_db(path).await?;
+    let rows = sqlx::query(
+        "SELECT id, type, epoch_msec, time_jump
+        FROM journal_entries
+        ORDER BY id"
+    )
+    .fetch_all(&mut conn)
+    .await
+    .map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut records = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id = row.try_get::<i64, _>(0).map_err(|e| e.to_string())?;
+        let type_id = row.try_get::<i64, _>(1).map_err(|e| e.to_string())?;
+        let timestamp = row.try_get::<i64, _>(2).map_err(|e| e.to_string())?;
+        let time_jump = row.try_get::<Option<i64>, _>(3).map_err(|e| e.to_string())?;
+        if !(1..=4).contains(&type_id) {
+            return Err(format!("Wrong stored record type {type_id} for id {id}"));
+        }
+        if type_id == RecordType::TimeJump(0).type_id() && time_jump.is_none() {
+            return Err(format!("Missing time jump offset for record id {id}"));
+        }
+        records.push((id, type_id, timestamp, time_jump));
+    }
+
+    let mut offset = current_offset;
+    let mut interpreted = Vec::with_capacity(records.len());
+    for &(id, type_id, timestamp, time_jump) in records.iter().rev() {
+        let interpreted_timestamp = if type_id == RecordType::TimeJump(0).type_id() || type_id == RecordType::TimeAmbig.type_id() {
+            timestamp
+        } else {
+            timestamp + offset
+        };
+        interpreted.push((id, interpreted_timestamp));
+        if type_id == RecordType::TimeJump(0).type_id() {
+            offset += time_jump.expect("Time jump presence must be checked");
+        } else if type_id == RecordType::TimeAmbig.type_id() {
+            offset = 0;
+        }
+    }
+    interpreted.reverse();
+
+    let since_record = if let Some(since) = since {
+        interpreted.iter().find(|(_, timestamp)| *timestamp >= since.epoch_msec())
+    } else {
+        interpreted.first()
+    };
+    let until_record = if let Some(until) = until {
+        interpreted.iter().rev().find(|(_, timestamp)| *timestamp <= until.epoch_msec())
+    } else {
+        interpreted.last()
+    };
+    let (Some(&(since_id, _)), Some(&(until_id, until_timestamp))) = (since_record, until_record) else {
+        return Ok(None);
+    };
+    if since_id > until_id {
+        return Ok(None);
+    }
+    let until_date = shvproto::DateTime::from_epoch_msec(until_timestamp)
+        .ok_or_else(|| format!("Interpreted datetime {until_timestamp} does not fit"))?;
+    Ok(Some((since_id, until_id, until_date)))
+}
+
 type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
 
 fn record_to_values(record: &LogRecord) -> LogRecordRow {
@@ -126,7 +202,7 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut user_id = None;
     let mut repeat = None;
     let mut time_jump = None;
-    let mut provisional = None;
+    let mut provisional = Some(0);
 
     match &record.record_type {
         RecordType::Normal(entry) | RecordType::Keep(entry) => {
@@ -572,6 +648,14 @@ mod tests {
         }
     }
 
+    fn time_ambig(id: i64, timestamp: i64) -> LogRecord {
+        LogRecord {
+            id,
+            timestamp: shvproto::DateTime::from_epoch_msec(timestamp).expect("Datetime must fit"),
+            record_type: RecordType::TimeAmbig,
+        }
+    }
+
     fn adjusted(record: &LogRecord) -> Option<i64> {
         match &record.record_type {
             RecordType::Normal(entry) | RecordType::Keep(entry) => entry.adjusted_timestamp,
@@ -755,5 +839,68 @@ mod tests {
                 assert_eq!(entry.adjusted_timestamp, Some(record.timestamp.epoch_msec() + 3_600_000));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn date_span_records_selects_inclusive_boundaries() {
+        let journal_dir = tempfile::TempDir::with_prefix("test-hprs-records-date-span.").unwrap();
+        let db_path = journal_dir.path().join("records.db");
+        insert_records(&db_path, &[
+            record(2, 1_000, "some/a", 1),
+            record(4, 2_000, "some/b", 2),
+            record(7, 3_000, "some/c", 3),
+        ]).await.unwrap();
+
+        let result = date_span_records(
+            &db_path,
+            Some(shvproto::DateTime::from_epoch_msec(1_500).expect("Datetime must fit")),
+            Some(shvproto::DateTime::from_epoch_msec(3_000).expect("Datetime must fit")),
+            0,
+        ).await.unwrap().unwrap();
+
+        assert_eq!(result.0, 4);
+        assert_eq!(result.1, 7);
+        assert_eq!(result.2.epoch_msec(), 3_000);
+    }
+
+    #[tokio::test]
+    async fn date_span_records_applies_time_jumps_and_current_offset() {
+        let journal_dir = tempfile::TempDir::with_prefix("test-hprs-records-date-span.").unwrap();
+        let db_path = journal_dir.path().join("records.db");
+        insert_records(&db_path, &[
+            record(0, 1_000, "some/a", 1),
+            time_jump(1, 5_000, 1_000),
+            record(2, 6_000, "some/b", 2),
+        ]).await.unwrap();
+
+        let result = date_span_records(
+            &db_path,
+            Some(shvproto::DateTime::from_epoch_msec(2_100).expect("Datetime must fit")),
+            None,
+            200,
+        ).await.unwrap().unwrap();
+
+        assert_eq!(result.0, 0);
+        assert_eq!(result.1, 2);
+        assert_eq!(result.2.epoch_msec(), 6_200);
+    }
+
+    #[tokio::test]
+    async fn date_span_records_stops_time_jumps_at_ambiguity() {
+        let journal_dir = tempfile::TempDir::with_prefix("test-hprs-records-date-span.").unwrap();
+        let db_path = journal_dir.path().join("records.db");
+        insert_records(&db_path, &[
+            record(0, 0, "some/a", 1),
+            time_jump(1, 50, -10),
+            record(2, 60, "some/b", 2),
+            time_ambig(3, 100),
+            record(4, 200, "some/c", 3),
+        ]).await.unwrap();
+
+        let result = date_span_records(&db_path, None, None, 500).await.unwrap().unwrap();
+
+        assert_eq!(result.0, 0);
+        assert_eq!(result.1, 4);
+        assert_eq!(result.2.epoch_msec(), 700);
     }
 }
