@@ -51,7 +51,7 @@ const META_METHOD_PUSH_LOG: MetaMethod = MetaMethod::new_static(METH_PUSH_LOG, s
 const METH_FETCH: &str = "fetch";
 const META_METHOD_FETCH: MetaMethod = MetaMethod::new_static(METH_FETCH, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Service, "[i:offset,i(0,):count]", "!historyRecords", &[], "");
 const METH_SPAN: &str = "span";
-const META_METHOD_SPAN: MetaMethod = MetaMethod::new_static(METH_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "", "[i:smallest,i:biggest,i(1,):span]", &[], "");
+const META_METHOD_SPAN: MetaMethod = MetaMethod::new_static(METH_SPAN, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Service, "", "[i:smallest,i:biggest,i(1,):span,i:lastTimeJump]", &[], "");
 const METH_TIME_DRIFT: &str = "timeDrift";
 const META_METHOD_TIME_DRIFT: MetaMethod = MetaMethod::new_static(METH_TIME_DRIFT, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Read, "Null", "Map|Null", &[], "");
 
@@ -682,10 +682,10 @@ async fn span_handler(
     app_state: Arc<State>,
 ) -> Result<RpcValue, RpcError> {
     let db_path = records::db_path(&app_state.config.journal_dir, path, record_name);
-    let (smallest, biggest, span) = records::span_records(db_path)
+    let (smallest, biggest, span, last_time_jump) = records::span_records(db_path)
         .await
         .map_err(|err| RpcError::new(RpcErrorCode::MethodCallException, format!("Cannot get records span: {err}")))?;
-    Ok(shvproto::make_list!(smallest, biggest, span).into())
+    Ok(shvproto::make_list!(smallest, biggest, span, last_time_jump).into())
 }
 
 fn rpc_error_not_implemented() -> RpcError {

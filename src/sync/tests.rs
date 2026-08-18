@@ -127,7 +127,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(UseRecordsSite::default()),
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
-                Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1, RpcValue::null()].into()))),
                 Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
                 Box::new(ExpectCall("shv/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
                 Box::new(ExpectRecordsDb {
@@ -144,7 +144,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(UseRecordsSite { site_path: "subhp1/site1", sub_hp: "subhp1" }),
                 Box::new(SyncCommand::SyncSite("subhp1/site1".to_string())),
-                Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1, RpcValue::null()].into()))),
                 Box::new(ExpectCallParam("shv/subhp1/.history/site1/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
                 Box::new(ExpectCall("shv/subhp1/.history/site1", "timeDrift", Ok(make_map!("dt" => 1_700_000_000_000_i64, "offset" => 3_600_000_i64).into()))),
                 Box::new(ExpectRecordsDb {
@@ -161,7 +161,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             steps: &[
                 Box::new(UseRecordsSite { site_path: "subhp1/site1", sub_hp: "subhp1" }),
                 Box::new(SyncCommand::SyncSite("subhp1/site1".to_string())),
-                Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
+                Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1, RpcValue::null()].into()))),
                 Box::new(ExpectCallParam("shv/subhp1/.history/site1/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
                 Box::new(ExpectCall("shv/subhp1/.history/site1", "timeDrift", Ok(RpcValue::null()))),
                 Box::new(ExpectCall("shv/subhp1/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
