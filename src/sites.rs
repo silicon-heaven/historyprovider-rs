@@ -516,7 +516,16 @@ async fn reload_sites(
                     let files_path = join_path!(SITES_PATH, &path, "_files");
                     let files = RpcCallLsList::new(&files_path).exec(&client_cmd_tx)
                         .await
-                        .unwrap_or_else(|err| panic!("Couldn't discover typeInfo support for {files_path}: {err}"));
+                        .unwrap_or_else(|err| {
+                            if let CallRpcMethodErrorKind::RpcError(rpc_error) = err.error()
+                                && let shvrpc::rpcmessage::RpcErrorCodeKind::RpcError(rpc_error_code) = rpc_error.code
+                                && rpc_error_code == RpcErrorCode::MethodNotFound
+                            {
+                                // Handle this specific error for when the _files dir doesn't exist.
+                                return vec![];
+                            }
+                            panic!("Couldn't discover typeInfo support for {files_path}: {err}")
+                        });
                     let Some(type_info_filename) = files
                         .into_iter()
                         .find(|file| file == "typeInfo.cpon" || file == "nodesTree.cpon") else {
