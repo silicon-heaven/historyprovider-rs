@@ -970,7 +970,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha1",
  "shvclient",
- "shvproto 8.0.0",
+ "shvproto",
  "shvrpc",
  "simple_logger",
  "size",
@@ -1852,9 +1852,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shvclient"
-version = "10.0.0"
+version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "771c28c5f06127dc57559474f98fa2136416251616521aae70ecdbdde5e4c889"
+checksum = "99666cb144d7c55b63a4e96d2e75650aec6f15789492fe4c45dcaac54789c951"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1868,23 +1868,11 @@ dependencies = [
  "macro_magic",
  "rustls-pemfile",
  "rustls-platform-verifier",
- "shvproto 7.0.1",
+ "shvproto",
  "shvrpc",
  "tokio",
  "tokio-util",
  "url",
-]
-
-[[package]]
-name = "shvproto"
-version = "7.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29aa73004f008a26abefbbec0667bafdbc63a1206e105e2baaf34d85fbd47c00"
-dependencies = [
- "chrono",
- "hex",
- "libshvproto-macros",
- "log",
 ]
 
 [[package]]
@@ -1901,9 +1889,9 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "20.0.0"
+version = "21.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6395283abe88389b5cb6d421d9beb9dcbd9e3d1c2a18d9454d13fc167ccc349"
+checksum = "f1c2d9fa15784fab725d64340e1b5f2c677769935ec9c43710df615462a4aa3d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1918,7 +1906,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sha1",
- "shvproto 7.0.1",
+ "shvproto",
  "url",
 ]
 
