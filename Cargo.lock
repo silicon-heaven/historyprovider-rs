@@ -970,7 +970,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha1",
  "shvclient",
- "shvproto",
+ "shvproto 8.0.0",
  "shvrpc",
  "simple_logger",
  "size",
@@ -1287,9 +1287,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "macro_magic"
@@ -1852,9 +1852,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shvclient"
-version = "9.1.0"
+version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c38d8c42d2790e8319beb493a55681bca3bab84459b9727c773e53d9132f3c1d"
+checksum = "771c28c5f06127dc57559474f98fa2136416251616521aae70ecdbdde5e4c889"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1868,7 +1868,7 @@ dependencies = [
  "macro_magic",
  "rustls-pemfile",
  "rustls-platform-verifier",
- "shvproto",
+ "shvproto 7.0.1",
  "shvrpc",
  "tokio",
  "tokio-util",
@@ -1877,12 +1877,23 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "6.3.3"
+version = "7.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01280e1ef6031aeb3ae2c82d225c3c5205f3f50a3b127831bbdb0809c7acb22"
+checksum = "29aa73004f008a26abefbbec0667bafdbc63a1206e105e2baaf34d85fbd47c00"
 dependencies = [
  "chrono",
- "clap",
+ "hex",
+ "libshvproto-macros",
+ "log",
+]
+
+[[package]]
+name = "shvproto"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98ae2b7df702cfb762a690fedb67aeefb26a93f443f23cad3b244e4f3e943c0b"
+dependencies = [
+ "chrono",
  "hex",
  "libshvproto-macros",
  "log",
@@ -1890,9 +1901,9 @@ dependencies = [
 
 [[package]]
 name = "shvrpc"
-version = "19.1.0"
+version = "20.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd2d5e11f140a759b347cf8e98c8a072bf66797244e8ba54250ad24ed28a068e"
+checksum = "a6395283abe88389b5cb6d421d9beb9dcbd9e3d1c2a18d9454d13fc167ccc349"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1907,7 +1918,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sha1",
- "shvproto",
+ "shvproto 7.0.1",
  "url",
 ]
 
