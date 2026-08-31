@@ -84,14 +84,14 @@ pub(crate) async fn alarmlog_impl(
         .map(|(site_path, log, type_info)| {
             let mut tmp_alarms = Vec::<AlarmWithTimestamp>::new();
             for entry in log.snapshot_entries {
-                update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec).expect("Datetime must fit"));
+                update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
             }
 
             let snapshot = tmp_alarms.clone();
 
             let events = log.event_entries
                 .into_iter()
-                .flat_map(|entry| update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec).expect("Datetime must fit")))
+                .flat_map(|entry| update_alarms(collect_alarms, &mut tmp_alarms, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec)))
                 .collect::<Vec<_>>();
 
             (site_path.clone(), AlarmLog {

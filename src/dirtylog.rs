@@ -303,7 +303,7 @@ pub(crate) async fn dirtylog_task(
                 DirtyLogCommand::ProcessNotification(ParsedNotification { site_path, property_path, signal, source, param, user_id }) => {
                     let data_change = DataChange::from(param);
                     let journal_entry = JournalEntry {
-                        epoch_msec: data_change.date_time.unwrap_or_else(|| ShvDateTime::now().expect("Datetime must fit")).epoch_msec(),
+                        epoch_msec: data_change.date_time.unwrap_or_else(ShvDateTime::now).epoch_msec(),
                         epoch_msec_orig: None,
                         path: property_path,
                         signal,

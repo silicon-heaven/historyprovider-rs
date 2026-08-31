@@ -129,7 +129,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(SyncCommand::SyncSite("site1".to_string())),
                 Box::new(ExpectCall("shv/site1/.history/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
                 Box::new(ExpectCallParam("shv/site1/.history/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
-                Box::new(ExpectCall("shv/site1/.app", "date", Ok(shvproto::DateTime::now().expect("Datetime must fit").add_hours(-1).into()))),
+                Box::new(ExpectCall("shv/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
                 Box::new(ExpectRecordsDb {
                     site: "site1",
                     record_name: "maintenance",
@@ -164,7 +164,7 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
                 Box::new(ExpectCall("shv/subhp1/.history/site1/.records/maintenance", "span", Ok(make_list![0, 1, 1].into()))),
                 Box::new(ExpectCallParam("shv/subhp1/.history/site1/.records/maintenance", "fetch", make_list![0, 1].into(), Ok(vec![records_record.clone()].into()))),
                 Box::new(ExpectCall("shv/subhp1/.history/site1", "timeDrift", Ok(RpcValue::null()))),
-                Box::new(ExpectCall("shv/subhp1/site1/.app", "date", Ok(shvproto::DateTime::now().expect("Datetime must fit").add_hours(-1).into()))),
+                Box::new(ExpectCall("shv/subhp1/site1/.app", "date", Ok(shvproto::DateTime::now().add_hours(-1).into()))),
                 Box::new(ExpectRecordsDb {
                     site: "subhp1/site1",
                     record_name: "maintenance",

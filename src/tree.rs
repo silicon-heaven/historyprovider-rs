@@ -512,7 +512,7 @@ async fn getlog3_handler_rq(
         records_site_for_path(&sites_data, site_path)
             .ok_or_else(|| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")))?
     };
-    let now = shvproto::DateTime::now().expect("Datetime must fit");
+    let now = shvproto::DateTime::now();
     let since = params.since.unwrap_or(now);
     let until = params.until.unwrap_or(now);
     let records = records::getlog_records(
