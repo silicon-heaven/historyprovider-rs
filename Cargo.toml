@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "3.1.12"
+version = "3.1.13"
 edition = "2024"
 
 [profile.release]
@@ -17,9 +17,9 @@ name = "hp"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"], default-features = false }
-shvproto = "6.3.3"
-shvrpc = { version = "19.0", features = ["journal"] }
-shvclient = { version = "9.0", features = ["tokio"] }
+shvproto = "8.0.0"
+shvrpc = { version = "21.0", features = ["journal"] }
+shvclient = { version = "11.0", features = ["tokio"] }
 futures = "0.3.32"
 log = "0.4.33"
 clap = { version = "4.6.1", features = ["derive"] }
@@ -49,7 +49,7 @@ sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 [dev-dependencies]
 async-broadcast = "0.7.2"
 async-trait = "0.1.92"
-shvclient = { version = "9.0", features = ["mocking", "tokio"] }
+shvclient = { version = "11.0", features = ["mocking", "tokio"] }
 tempfile = "3.27.0"
 
 [lints.clippy]

@@ -323,7 +323,7 @@ pub(crate) async fn getlog_impl(
             .collect::<Vec<_>>()
     };
 
-    let current_datetime = shvproto::DateTime::now().expect("Datetime must work");
+    let current_datetime = shvproto::DateTime::now();
     let until_ms = match context.first_unmatched_entry_msec {
         Some(msec) => msec, // set `until` to the first entry that is not included in the log
         None =>
@@ -363,8 +363,8 @@ pub(crate) async fn getlog_impl(
         record_count_limit: context.record_count_limit as _,
         record_count_limit_hit: context.record_count_limit_hit,
         date_time: current_datetime,
-        since: shvproto::DateTime::from_epoch_msec(since_ms).expect("Datetime must fit"),
-        until: shvproto::DateTime::from_epoch_msec(until_ms).expect("Datetime must fit"),
+        since: shvproto::DateTime::from_epoch_msec(since_ms),
+        until: shvproto::DateTime::from_epoch_msec(until_ms),
         with_paths_dict: params.with_paths_dict,
         with_snapshot,
     }
@@ -932,7 +932,7 @@ mod tests {
             let result = get_log_entries("test", data(), case.params).await;
             let chained_entries = result.snapshot_entries.into_iter().chain(result.event_entries.into_iter()).collect::<Vec<_>>();
             let expected = case.expected.into_iter().map(|(ts, path, val)| (ts.to_string(), path.to_string(), val)).collect::<Vec<_>>();
-            assert_eq!(chained_entries.into_iter().map(|entry_val| (DateTime::from_epoch_msec(entry_val.epoch_msec).expect("Datetime must fit").to_iso_string(), entry_val.path.clone(), entry_val.value.clone())).collect::<Vec<_>>(), expected, "Test case failed: {}", case.name);
+            assert_eq!(chained_entries.into_iter().map(|entry_val| (DateTime::from_epoch_msec(entry_val.epoch_msec).to_iso_string(), entry_val.path.clone(), entry_val.value.clone())).collect::<Vec<_>>(), expected, "Test case failed: {}", case.name);
             if let Some(expected_record_count_limit_hit) = case.expected_record_count_limit_hit {
                 assert_eq!(result.record_count_limit_hit, expected_record_count_limit_hit, "Test case failed: {}", case.name);
             }

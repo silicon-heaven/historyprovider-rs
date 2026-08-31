@@ -255,7 +255,7 @@ fn row_to_record(row: &SqliteRow) -> Result<LogRecord, String> {
 
     Ok(LogRecord {
         id,
-        timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec).expect("Datetime must fit"),
+        timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
         record_type,
     })
 }
@@ -443,7 +443,7 @@ pub(crate) async fn getlog_records(
         if let Some((time_jump, epoch_msec)) = time_drift {
             log_records.push(LogRecord {
                 id: 0,
-                timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec).expect("Datetime must fit"),
+                timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
                 record_type: RecordType::TimeJump(time_jump),
             });
         }
@@ -531,7 +531,7 @@ mod tests {
     fn record(id: i64, timestamp: i64, path: &str, value: impl Into<RpcValue>) -> LogRecord {
         LogRecord {
             id,
-            timestamp: shvproto::DateTime::from_epoch_msec(timestamp).expect("Datetime must fit"),
+            timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
             record_type: RecordType::Normal(LogEntry {
                 path: path.to_string(),
                 signal: "chng".to_string(),
@@ -549,7 +549,7 @@ mod tests {
     fn keep(id: i64, timestamp: i64, path: &str, value: impl Into<RpcValue>) -> LogRecord {
         LogRecord {
             id,
-            timestamp: shvproto::DateTime::from_epoch_msec(timestamp).expect("Datetime must fit"),
+            timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
             record_type: RecordType::Keep(LogEntry {
                 path: path.to_string(),
                 signal: "chng".to_string(),
@@ -567,7 +567,7 @@ mod tests {
     fn time_jump(id: i64, timestamp: i64, offset: i64) -> LogRecord {
         LogRecord {
             id,
-            timestamp: shvproto::DateTime::from_epoch_msec(timestamp).expect("Datetime must fit"),
+            timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
             record_type: RecordType::TimeJump(offset),
         }
     }
@@ -675,8 +675,8 @@ mod tests {
             "site1",
             &["maintenance".to_string(), "passage".to_string()],
             "",
-            shvproto::DateTime::from_epoch_msec(0).expect("Datetime must fit"),
-            shvproto::DateTime::from_epoch_msec(3000).expect("Datetime must fit"),
+            shvproto::DateTime::from_epoch_msec(0),
+            shvproto::DateTime::from_epoch_msec(3000),
             None,
             None,
         ).await.unwrap();
@@ -703,8 +703,8 @@ mod tests {
             "site1",
             &["maintenance".to_string()],
             "some",
-            shvproto::DateTime::from_epoch_msec(0).expect("Datetime must fit"),
-            shvproto::DateTime::from_epoch_msec(3000).expect("Datetime must fit"),
+            shvproto::DateTime::from_epoch_msec(0),
+            shvproto::DateTime::from_epoch_msec(3000),
             Some(1),
             None,
         ).await.unwrap();
@@ -739,14 +739,14 @@ mod tests {
 
         let mut log_records = query_log_records(
             &db_path,
-            shvproto::DateTime::from_epoch_msec(0).expect("Datetime must fit"),
-            shvproto::DateTime::from_epoch_msec(3000).expect("Datetime must fit"),
+            shvproto::DateTime::from_epoch_msec(0),
+            shvproto::DateTime::from_epoch_msec(3000),
             "",
         ).await.unwrap();
         let (time_jump, epoch_msec) = get_time_drift(&site_db_path(journal_dir, "site1")).await.unwrap().unwrap();
         log_records.push(LogRecord {
             id: 0,
-            timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec).expect("Datetime must fit"),
+            timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
             record_type: RecordType::TimeJump(time_jump),
         });
         adjust_timestamps(&mut log_records);
