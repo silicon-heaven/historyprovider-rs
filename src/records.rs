@@ -261,6 +261,7 @@ fn row_to_record(row: &SqliteRow) -> Result<LogRecord, String> {
     Ok(LogRecord {
         id,
         timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
+        idref: None,
         record_type,
     })
 }
@@ -449,6 +450,7 @@ pub(crate) async fn getlog_records(
             log_records.push(LogRecord {
                 id: 0,
                 timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
+                idref: None,
                 record_type: RecordType::TimeJump(time_jump),
             });
         }
@@ -537,6 +539,7 @@ mod tests {
         LogRecord {
             id,
             timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
+            idref: None,
             record_type: RecordType::Normal(LogEntry {
                 path: path.to_string(),
                 signal: "chng".to_string(),
@@ -555,6 +558,7 @@ mod tests {
         LogRecord {
             id,
             timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
+            idref: None,
             record_type: RecordType::Keep(LogEntry {
                 path: path.to_string(),
                 signal: "chng".to_string(),
@@ -573,6 +577,7 @@ mod tests {
         LogRecord {
             id,
             timestamp: shvproto::DateTime::from_epoch_msec(timestamp),
+            idref: None,
             record_type: RecordType::TimeJump(offset),
         }
     }
@@ -752,6 +757,7 @@ mod tests {
         log_records.push(LogRecord {
             id: 0,
             timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
+            idref: None,
             record_type: RecordType::TimeJump(time_jump),
         });
         adjust_timestamps(&mut log_records);

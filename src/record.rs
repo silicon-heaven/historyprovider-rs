@@ -17,6 +17,7 @@ pub enum LogField {
     Repeat = 8,
     Id = 9,
     Ref = 10,
+    IdRef = 11,
     TimeJump = 60,
 }
 
@@ -45,6 +46,7 @@ pub enum RecordType {
 pub struct LogRecord {
     pub timestamp: shvproto::DateTime,
     pub id: i64,
+    pub idref: Option<i64>,
     pub record_type: RecordType,
 }
 
@@ -115,6 +117,12 @@ impl LogRecord {
             RecordType::TimeAmbig => { /* no extra fields */ }
         }
 
+        if matches!(&self.record_type, RecordType::TimeJump(_) | RecordType::TimeAmbig)
+            && let Some(idref) = self.idref
+        {
+            map.insert(LogField::IdRef as i32, idref.into());
+        }
+
         map
     }
 }
@@ -133,7 +141,21 @@ pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc
             .map_err(|e| record_err(&format!("wrong timestamp type: {e}")))?
             .ok_or_else(|| record_err("missing timestamp"))?;
 
-        let log_record = if let Some(ref_offset) = get_field::<i64>(src, LogField::Ref) {
+        let idref = get_field_checked(src, LogField::IdRef)
+            .map_err(|e| record_err(&format!("wrong `idref` type: {e}")))?;
+        let ref_record = if let Some(idref_offset) = idref {
+            let type_id = get_field::<i64>(src, LogField::Type);
+            if idref_offset == 0 || type_id.is_some_and(|type_id| type_id > 2) {
+                None
+            } else {
+                let ref_id = id
+                    .checked_sub(idref_offset)
+                    .ok_or_else(|| record_err(&format!("idref offset {idref_offset} out of range")))?;
+                Some(result.iter().find(|record| record.id == ref_id).ok_or_else(|| {
+                    record_err(&format!("idref target id {ref_id} not found"))
+                })?)
+            }
+        } else if let Some(ref_offset) = get_field::<i64>(src, LogField::Ref) {
             // Copy fields from the referenced record
             let ref_offset: usize = ref_offset
                 .try_into()
@@ -141,10 +163,16 @@ pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc
             let ref_index = i
                 .checked_sub(ref_offset + 1)
                 .ok_or_else(|| record_err(&format!("ref offset {ref_offset} out of range")))?;
-            let ref_record = result.get(ref_index).expect("Ref index must be in range");
+            Some(result.get(ref_index).expect("Ref index must be in range"))
+        } else {
+            None
+        };
+
+        let log_record = if let Some(ref_record) = ref_record {
             let mut log_record = LogRecord {
                 timestamp,
                 id,
+                idref: None,
                 ..ref_record.clone()
             };
             match &mut log_record.record_type {
@@ -203,6 +231,11 @@ pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc
             LogRecord {
                 id,
                 timestamp,
+                idref: if matches!(&record_type, RecordType::TimeJump(_) | RecordType::TimeAmbig) {
+                    idref
+                } else {
+                    None
+                },
                 record_type,
             }
         };
@@ -211,4 +244,92 @@ pub(crate) fn log_records_from_fetch(start_offset: i64, srcs: &[IMap]) -> shvrpc
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_record(type_id: i64, timestamp: i64) -> IMap {
+        IMap::from([
+            (LogField::Type as i32, type_id.into()),
+            (LogField::Timestamp as i32, shvproto::DateTime::from_epoch_msec(timestamp).into()),
+        ])
+    }
+
+    #[test]
+    fn parses_idref_only_for_time_records() {
+        let mut normal = base_record(1, 1_000);
+        normal.insert(LogField::IdRef as i32, 0.into());
+        normal.insert(LogField::Value as i32, 1.into());
+
+        let mut time_jump = base_record(3, 2_000);
+        time_jump.insert(LogField::TimeJump as i32, 60.into());
+        time_jump.insert(LogField::IdRef as i32, 20.into());
+
+        let mut time_ambig = base_record(4, 3_000);
+        time_ambig.insert(LogField::IdRef as i32, 30.into());
+
+        let records = log_records_from_fetch(0, &[normal, time_jump, time_ambig]).unwrap();
+
+        assert_eq!(records[0].idref, None);
+        assert_eq!(records[1].idref, Some(20));
+        assert_eq!(records[2].idref, Some(30));
+    }
+
+    #[test]
+    fn resolves_using_idref_before_ref() {
+        let mut first = base_record(1, 1_000);
+        first.insert(LogField::Id as i32, 100.into());
+        first.insert(LogField::Path as i32, "first".into());
+        first.insert(LogField::Value as i32, 1.into());
+
+        let mut second = base_record(1, 2_000);
+        second.insert(LogField::Id as i32, 101.into());
+        second.insert(LogField::Path as i32, "second".into());
+        second.insert(LogField::Value as i32, 2.into());
+
+        let mut resolved = base_record(1, 3_000);
+        resolved.insert(LogField::Id as i32, 102.into());
+        resolved.insert(LogField::IdRef as i32, 2.into());
+        resolved.insert(LogField::Ref as i32, 0.into());
+        resolved.insert(LogField::Value as i32, 3.into());
+
+        let records = log_records_from_fetch(100, &[first, second, resolved]).unwrap();
+        let RecordType::Normal(entry) = &records[2].record_type else {
+            panic!("expected normal record");
+        };
+        assert_eq!(entry.path, "first");
+        assert_eq!(entry.value, Some(RpcValue::from(3)));
+    }
+
+    #[test]
+    fn resolves_using_ref_when_idref_is_absent() {
+        let mut first = base_record(1, 1_000);
+        first.insert(LogField::Path as i32, "first".into());
+        first.insert(LogField::Value as i32, 1.into());
+
+        let mut second = base_record(1, 2_000);
+        second.insert(LogField::Ref as i32, 0.into());
+        second.insert(LogField::Value as i32, 2.into());
+
+        let records = log_records_from_fetch(0, &[first, second]).unwrap();
+        let RecordType::Normal(entry) = &records[1].record_type else {
+            panic!("expected normal record");
+        };
+        assert_eq!(entry.path, "first");
+        assert_eq!(entry.value, Some(RpcValue::from(2)));
+    }
+
+    #[test]
+    fn serializes_idref_for_time_records() {
+        let record = LogRecord {
+            timestamp: shvproto::DateTime::from_epoch_msec(1_000),
+            id: 1,
+            idref: Some(10),
+            record_type: RecordType::TimeAmbig,
+        };
+
+        assert_eq!(record.to_imap().get(&(LogField::IdRef as i32)), Some(&RpcValue::from(10)));
+    }
 }
