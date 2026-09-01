@@ -97,9 +97,9 @@ pub(crate) async fn next_offset(path: impl AsRef<Path>) -> Result<i64, String> {
     row.try_get::<i64, _>(0).map_err(|e| e.to_string())
 }
 
-pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i64), String> {
+pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i64, Option<i64>), String> {
     if tokio::fs::metadata(path.as_ref()).await.is_err() {
-        return Ok((0, 0, 1));
+        return Ok((0, 0, 1, None));
     }
 
     let mut conn = open_db(path).await?;
@@ -108,11 +108,16 @@ pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i6
         .await
         .map_err(|e| e.to_string())?;
     let Some(row) = row else {
-        return Ok((0, 0, 1));
+        return Ok((0, 0, 1, None));
     };
     let smallest = row.try_get::<Option<i64>, _>(0).map_err(|e| e.to_string())?.unwrap_or(0);
     let biggest = row.try_get::<i64, _>(1).map_err(|e| e.to_string())?;
-    Ok((smallest, biggest, 1))
+    let row = sqlx::query("SELECT MAX(id) FROM journal_entries WHERE type IN (3, 4)")
+        .fetch_optional(&mut conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    let last_time_jump = row.and_then(|row| row.try_get::<Option<i64>, _>(0).ok()).flatten();
+    Ok((smallest, biggest, 1, last_time_jump))
 }
 
 type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>, Option<i64>);

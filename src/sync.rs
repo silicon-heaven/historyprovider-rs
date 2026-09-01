@@ -809,7 +809,9 @@ async fn sync_site_records(
             .exec(&client_cmd_tx)
             .await
             .map_err(to_string)?;
-        let (smallest, biggest, _span): (i64, i64, i64) = span_value.try_into().map_err(|err| format!("Wrong span result for {remote_records_path}: {err}"))?;
+        let span_list = span_value.as_list();
+        let smallest = span_list.first().map_or(0, shvproto::RpcValue::as_i64);
+        let biggest = span_list.get(1).map_or(smallest, shvproto::RpcValue::as_i64);
         let mut offset = records::next_offset(&db_path).await?.max(smallest);
 
         while offset < biggest {
