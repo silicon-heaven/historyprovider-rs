@@ -46,6 +46,7 @@ pub(crate) async fn ensure_db(path: impl AsRef<Path>) -> Result<SqliteConnection
     sqlx::query(
             "CREATE TABLE IF NOT EXISTS journal_entries (
                 id INTEGER PRIMARY KEY,
+                idref INTEGER,
                 type INTEGER NOT NULL,
                 epoch_msec INTEGER NOT NULL,
                 path TEXT,
@@ -120,7 +121,7 @@ pub(crate) async fn span_records(path: impl AsRef<Path>) -> Result<(i64, i64, i6
     Ok((smallest, biggest, 1, last_time_jump))
 }
 
-type LogRecordRow = (i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
+type LogRecordRow = (i64, Option<i64>, i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, i64, Option<i64>, i64);
 
 fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut path = None;
@@ -129,9 +130,9 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
     let mut value = None;
     let mut access_level = None;
     let mut user_id = None;
-    let mut repeat = None;
+    let mut repeat = 0;
     let mut time_jump = None;
-    let mut provisional = None;
+    let mut provisional = 0;
 
     match &record.record_type {
         RecordType::Normal(entry) | RecordType::Keep(entry) => {
@@ -151,10 +152,8 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
                 access_level = Some(entry.access_level);
             }
             user_id.clone_from(&entry.user_id);
-            if entry.repeat {
-                repeat = Some(1);
-            }
-            provisional = Some(i64::from(entry.provisional));
+            repeat = i64::from(entry.repeat);
+            provisional = i64::from(entry.provisional);
         }
         RecordType::TimeJump(offset) => {
             time_jump = Some(*offset);
@@ -162,20 +161,21 @@ fn record_to_values(record: &LogRecord) -> LogRecordRow {
         RecordType::TimeAmbig => {}
     }
 
-    (record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump, provisional)
+    (record.id, record.idref, record.record_type.type_id(), record.timestamp.epoch_msec(), path, signal, source, value, access_level, user_id, repeat, time_jump, provisional)
 }
 
 pub(crate) async fn insert_records(path: impl AsRef<Path>, records: &[LogRecord]) -> Result<(), String> {
     let mut conn = ensure_db(path).await?;
 
     for record in records {
-        let (type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional) = record_to_values(record);
+        let (id, idref, type_id, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional) = record_to_values(record);
         sqlx::query(
             "INSERT OR IGNORE INTO journal_entries (
-                id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                id, idref, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        .bind(record.id)
+        .bind(id)
+        .bind(idref)
         .bind(type_id)
         .bind(epoch_msec)
         .bind(&path)
@@ -238,17 +238,18 @@ fn parse_value(value: Option<String>, id: i64) -> Result<Option<RpcValue>, Strin
 
 fn row_to_record(row: &SqliteRow) -> Result<LogRecord, String> {
     let id = row.try_get::<i64, _>(0).map_err(|e| e.to_string())?;
-    let type_id = row.try_get::<i64, _>(1).map_err(|e| e.to_string())?;
-    let epoch_msec = row.try_get::<i64, _>(2).map_err(|e| e.to_string())?;
-    let path = row.try_get::<Option<String>, _>(3).map_err(|e| e.to_string())?.unwrap_or_default();
-    let signal = row.try_get::<Option<String>, _>(4).map_err(|e| e.to_string())?.unwrap_or_else(|| "chng".to_string());
-    let source = row.try_get::<Option<String>, _>(5).map_err(|e| e.to_string())?.unwrap_or_else(|| "get".to_string());
-    let value = parse_value(row.try_get::<Option<String>, _>(6).map_err(|e| e.to_string())?, id)?;
-    let access_level = row.try_get::<Option<i64>, _>(7).map_err(|e| e.to_string())?.unwrap_or(AccessLevel::Read as i64);
-    let user_id = row.try_get::<Option<String>, _>(8).map_err(|e| e.to_string())?;
-    let repeat = row.try_get::<Option<i64>, _>(9).map_err(|e| e.to_string())?.is_some_and(|repeat| repeat != 0);
-    let time_jump = row.try_get::<Option<i64>, _>(10).map_err(|e| e.to_string())?;
-    let provisional = row.try_get::<Option<i64>, _>(11).map_err(|e| e.to_string())?.unwrap_or_default() != 0;
+    let idref = row.try_get::<Option<i64>, _>(1).map_err(|e| e.to_string())?;
+    let type_id = row.try_get::<i64, _>(2).map_err(|e| e.to_string())?;
+    let epoch_msec = row.try_get::<i64, _>(3).map_err(|e| e.to_string())?;
+    let path = row.try_get::<Option<String>, _>(4).map_err(|e| e.to_string())?.unwrap_or_default();
+    let signal = row.try_get::<Option<String>, _>(5).map_err(|e| e.to_string())?.unwrap_or_else(|| "chng".to_string());
+    let source = row.try_get::<Option<String>, _>(6).map_err(|e| e.to_string())?.unwrap_or_else(|| "get".to_string());
+    let value = parse_value(row.try_get::<Option<String>, _>(7).map_err(|e| e.to_string())?, id)?;
+    let access_level = row.try_get::<Option<i64>, _>(8).map_err(|e| e.to_string())?.unwrap_or(AccessLevel::Read as i64);
+    let user_id = row.try_get::<Option<String>, _>(9).map_err(|e| e.to_string())?;
+    let repeat = row.try_get::<i64, _>(10).map_err(|e| e.to_string())? != 0;
+    let time_jump = row.try_get::<Option<i64>, _>(11).map_err(|e| e.to_string())?;
+    let provisional = row.try_get::<i64, _>(12).map_err(|e| e.to_string())? != 0;
 
     let record_type = match type_id {
         1 => RecordType::Normal(LogEntry { path, signal, source, value, access_level, user_id, repeat, adjusted_timestamp: None, provisional }),
@@ -261,7 +262,7 @@ fn row_to_record(row: &SqliteRow) -> Result<LogRecord, String> {
     Ok(LogRecord {
         id,
         timestamp: shvproto::DateTime::from_epoch_msec(epoch_msec),
-        idref: None,
+        idref,
         record_type,
     })
 }
@@ -273,7 +274,7 @@ pub(crate) async fn fetch_records(path: impl AsRef<Path>, offset: i64, count: i6
 
     let mut conn = open_db(path).await?;
     let rows = sqlx::query(
-        "SELECT id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
+        "SELECT id, idref, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
         FROM journal_entries
         WHERE id >= ? AND id < ?
         ORDER BY id
@@ -315,7 +316,7 @@ async fn query_log_records(
         format!("{path_prefix}/%")
     };
     let query = format!(
-        "SELECT id, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
+        "SELECT id, idref, type, epoch_msec, path, signal, source, value, access_level, user_id, repeat, time_jump, provisional
         FROM journal_entries
         WHERE epoch_msec {from_op} ? AND epoch_msec {to_op} ? AND (? = '' OR path = ? OR path LIKE ?)
         ORDER BY epoch_msec {order}, id {order}"
@@ -734,6 +735,19 @@ mod tests {
         assert_eq!(get_time_drift(&time_drift_db).await.unwrap(), Some((3_600_000, 1_700_000_000_000)));
         set_time_drift(&time_drift_db, -1_000, 1_700_000_360_000).await.unwrap();
         assert_eq!(get_time_drift(&time_drift_db).await.unwrap(), Some((-1_000, 1_700_000_360_000)));
+    }
+
+    #[tokio::test]
+    async fn fetch_records_preserves_idref() {
+        let journal_dir = tempfile::TempDir::with_prefix("test-hprs-records-fetch.").unwrap();
+        let journal_dir = journal_dir.path().to_str().unwrap();
+        let mut record = time_jump(0, 1_000, 500);
+        record.idref = Some(42);
+
+        insert_records(db_path(journal_dir, "site1", "maintenance"), &[record]).await.unwrap();
+
+        let fetched = fetch_records(db_path(journal_dir, "site1", "maintenance"), 0, 1).await.unwrap();
+        assert_eq!(fetched[0].get(&(crate::record::LogField::IdRef as i32)), Some(&RpcValue::from(42)));
     }
 
     #[tokio::test]
