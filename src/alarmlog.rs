@@ -27,7 +27,7 @@ pub(crate) struct AlarmLog {
 }
 
 pub(crate) async fn alarmlog_impl(
-    site_path_prefix: &str,
+    site_path_prefix: Option<&str>,
     params: &AlarmLogParams,
     app_state: Arc<State>,
 ) -> BTreeMap<String, AlarmLog>
@@ -47,9 +47,14 @@ pub(crate) async fn alarmlog_impl(
         ..Default::default()
     });
 
-    let site_path_matches_prefix = |site_path: &str|
+    let site_path_matches_prefix = |site_path: &str| {
+        let Some(site_path_prefix) = site_path_prefix else {
+            return true;
+        };
+
         site_path.starts_with(site_path_prefix) && (site_path.len() == site_path_prefix.len()
-            || *site_path.as_bytes().get(site_path_prefix.len()).expect("There must be another char") == b'/');
+            || *site_path.as_bytes().get(site_path_prefix.len()).expect("There must be another char") == b'/')
+    };
 
     const MAX_SYNC_TASKS_DEFAULT: usize = 8;
     let semaphore = Arc::new(Semaphore::new(MAX_SYNC_TASKS_DEFAULT));
