@@ -644,14 +644,14 @@ async fn alarmtable_handler<Getter: AlarmGetter>(
 }
 
 async fn alarmlog_handler(
-    path: &str,
+    site_path_prefix: Option<&str>,
     param: &RpcValue,
     app_state: Arc<State>,
 ) -> Result<RpcValue, RpcError> {
     let params = AlarmLogParams::try_from(param)
         .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmLog parameters: {err}")))?;
 
-    Ok(alarmlog_impl(path, &params, app_state).await.into())
+    Ok(alarmlog_impl(site_path_prefix, &params, app_state).await.into())
 }
 
 struct FetchParam {
@@ -779,7 +779,7 @@ pub(crate) async fn request_handler(
                     METH_ALARM_LOG => m.resolve(METHODS, async move || {
                         let params = AlarmLogParams::try_from(param)
                             .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong alarmLog parameters: {err}")))?;
-                        Ok(alarmlog_impl(&path, &params, app_state).await)
+                        Ok(alarmlog_impl(None, &params, app_state).await)
                     }),
                     METH_RELOAD_SITES => m.resolve(METHODS, async move || {
                         if app_state.sites_reload_in_progress.load(Ordering::SeqCst) {
@@ -836,7 +836,7 @@ pub(crate) async fn request_handler(
                     METH_ONLINE_STATUS => m.resolve(methods, async move || { online_status_handler(&path, app_state).await }),
                     METH_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<CommonAlarm>(&path, app_state).await }),
                     METH_STATE_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<StateAlarm>(&path, app_state).await }),
-                    METH_ALARM_LOG => m.resolve(methods, async move || { alarmlog_handler(&path, &param, app_state).await }),
+                    METH_ALARM_LOG => m.resolve(methods, async move || { alarmlog_handler(Some(&path), &param, app_state).await }),
                     METH_PUSH_LOG => m.resolve(methods, async move || { pushlog_handler(&path, param, app_state).await }),
                     _ => err_unresolved_request(),
                 },
