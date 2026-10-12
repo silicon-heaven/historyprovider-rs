@@ -288,8 +288,7 @@ async fn sync_site_by_download(
     // This prevents fetching old files that would be deleted by cleanup just after the sync.
     let oldest_local_file = get_files(&local_journal_path, is_log_file)
         .await
-        .map(|mut log_files| {log_files.sort_by_key(tokio::fs::DirEntry::file_name); log_files})
-        .unwrap_or_default()
+        .map_or_default(|mut log_files| {log_files.sort_by_key(tokio::fs::DirEntry::file_name); log_files})
         .first()
         .map(|first_file| first_file.file_name().to_string_lossy().to_string());
 

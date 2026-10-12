@@ -151,8 +151,7 @@ fn collect_sub_hps(
                             SubHpInfo::Records {
                                 records: hp
                                     .get("records")
-                                    .map(record_names_from_rpc)
-                                    .unwrap_or_default()
+                                    .map_or_default(record_names_from_rpc)
                                     .into_iter()
                                     .filter(|record| record_name_is_valid(record))
                                     .collect(),
