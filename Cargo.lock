@@ -1754,9 +1754,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shvclient"
-version = "12.0.2"
+version = "12.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a7c2ab9bd86e3b1f1b6383752da50c3821fd7a841d82fe8feea19807ea41e94"
+checksum = "33bef985cb8c45a1b5aa7055473eb3f24ab1d90a2ead81ca35fed66ad25533ab"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -1778,9 +1778,9 @@ dependencies = [
 
 [[package]]
 name = "shvproto"
-version = "8.0.2"
+version = "8.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b8d7f5fb83fd018770c7faa84ff57f25e1c5695309dc08f5088d00a98155951"
+checksum = "e684198582ff9ece90433ed69e903358e2721360494026187a162cb12a1453a9"
 dependencies = [
  "chrono",
  "hex",
@@ -2214,9 +2214,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",
