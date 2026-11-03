@@ -813,7 +813,7 @@ pub(crate) async fn request_handler(
                         const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_ONLINE_STATUS, META_METHOD_ALARM_TABLE, META_METHOD_STATE_ALARM_TABLE, META_METHOD_ALARM_LOG];
                         METHODS
                     } else {
-                        const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_ALARM_LOG];
+                        const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_ALARM_LOG, META_METHOD_ONLINE_STATUS];
                         METHODS
                     }
                 } else {
