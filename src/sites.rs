@@ -202,14 +202,12 @@ pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &m
     for new_alarm in new_alarms {
         if new_alarm.alarm.is_active {
             if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.alarm.path) {
-                if existing.alarm != new_alarm.alarm {
-                    *existing = new_alarm.clone();
-                    updated_alarms.push(new_alarm);
-                }
+                *existing = new_alarm.clone();
             } else {
                 alarms_for_site.push(new_alarm.clone());
-                updated_alarms.push(new_alarm);
             }
+
+            updated_alarms.push(new_alarm);
         } else {
             let old_len = alarms_for_site.len();
             alarms_for_site.retain(|a| a.alarm.path != new_alarm.alarm.path);
