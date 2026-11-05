@@ -258,52 +258,67 @@ async fn set_online_status(
     const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
 
     drop(online_states);
-    let emit_statealarmmod = if new_status == SiteOnlineStatus::Offline {
-        let mut state_alarms = app_state.state_alarms.write().await;
-        state_alarms.get_mut(site).is_some_and(|site_alarms| {
-            mark_alarms_stale(site_alarms)
-        })
-    } else {
-        false
+    let (emit_statealarmmod, emit_alarmmod) = match new_status {
+        SiteOnlineStatus::Offline => {
+            let emit_statealarmmod = {
+                let mut state_alarms = app_state.state_alarms.write().await;
+                state_alarms.get_mut(site).is_some_and(|site_alarms| {
+                    mark_alarms_stale(site_alarms)
+                })
+            };
+
+            let emit_alarmmod = {
+                let mut alarms = app_state.alarms.write().await;
+                alarms.get_mut(site).is_some_and(|site_alarms| {
+                    let mut alarms_changed = mark_alarms_stale(site_alarms);
+                    if site_alarms
+                        .iter()
+                        .all(|alarm_with_ts| alarm_with_ts.alarm.path != SITE_OFFLINE_ALARM_KEY)
+                    {
+                        site_alarms.push(AlarmWithTimestamp {
+                            alarm: Alarm {
+                                path: SITE_OFFLINE_ALARM_KEY.into(),
+                                is_active: true,
+                                description: "Site is offline".into(),
+                                label: "Offline".into(),
+                                level: 0,
+                                severity: crate::alarm::Severity::Error,
+                            },
+                            timestamp: DateTime::now(),
+                            stale: false,
+                        });
+                        alarms_changed = true;
+                    }
+                    alarms_changed
+                })
+            };
+
+            (emit_statealarmmod, emit_alarmmod)
+        }
+        SiteOnlineStatus::Online => {
+            let mut alarms = app_state.alarms.write().await;
+            let emit_alarmmod = alarms.get_mut(site).is_some_and(|site_alarms| {
+                if let Some(idx) = site_alarms
+                    .iter()
+                    .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY)
+                {
+                    site_alarms.remove(idx);
+                    true
+                } else {
+                    false
+                }
+            });
+
+            (false, emit_alarmmod)
+        }
+        SiteOnlineStatus::Unknown => (false, false),
     };
+
     if emit_statealarmmod {
         client_commands
             .send_message(shvrpc::RpcMessage::new_signal(site, "statealarmmod"))
             .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'statealarmmod' signal: {err}"));
     }
-
-    let mut alarms = app_state.alarms.write().await;
-    let Some(site_alarms) = alarms.get_mut(site) else {
-        return;
-    };
-
-    let offline_alarm_idx = site_alarms
-        .iter()
-        .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY);
-
-    let emit_alarmmod = if new_status == SiteOnlineStatus::Offline  {
-        mark_alarms_stale(site_alarms);
-        if offline_alarm_idx.is_none() {
-            site_alarms.push(AlarmWithTimestamp {
-                alarm: Alarm {
-                    path: SITE_OFFLINE_ALARM_KEY.into(),
-                    is_active: true,
-                    description: "Site is offline".into(),
-                    label: "Offline".into(),
-                    level: 0,
-                    severity: crate::alarm::Severity::Error,
-                },
-                timestamp: DateTime::now(),
-                stale: false,
-            });
-        }
-        true
-    } else if new_status == SiteOnlineStatus::Online && let Some(idx) = offline_alarm_idx {
-        site_alarms.remove(idx);
-        true
-    } else {
-        false
-    };
 
     if emit_alarmmod {
         client_commands
