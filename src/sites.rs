@@ -220,6 +220,17 @@ pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &m
     updated_alarms
 }
 
+fn mark_alarms_stale(alarms: &mut [AlarmWithTimestamp]) -> bool {
+    let mut stale_updated = false;
+    for alarm_with_ts in alarms {
+        if !alarm_with_ts.stale {
+            alarm_with_ts.stale = true;
+            stale_updated = true;
+        }
+    }
+    stale_updated
+}
+
 async fn set_online_status(
     site: impl AsRef<str>,
     new_status: SiteOnlineStatus,
@@ -247,6 +258,20 @@ async fn set_online_status(
     const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
 
     drop(online_states);
+    let emit_statealarmmod = if new_status == SiteOnlineStatus::Offline {
+        let mut state_alarms = app_state.state_alarms.write().await;
+        state_alarms.get_mut(site).is_some_and(|site_alarms| {
+            mark_alarms_stale(site_alarms)
+        })
+    } else {
+        false
+    };
+    if emit_statealarmmod {
+        client_commands
+            .send_message(shvrpc::RpcMessage::new_signal(site, "statealarmmod"))
+            .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'statealarmmod' signal: {err}"));
+    }
+
     let mut alarms = app_state.alarms.write().await;
     let Some(site_alarms) = alarms.get_mut(site) else {
         return;
@@ -257,9 +282,7 @@ async fn set_online_status(
         .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY);
 
     let emit_alarmmod = if new_status == SiteOnlineStatus::Offline  {
-        for alarm_with_ts in site_alarms.iter_mut() {
-            alarm_with_ts.stale = true;
-        }
+        mark_alarms_stale(site_alarms);
         if offline_alarm_idx.is_none() {
             site_alarms.push(AlarmWithTimestamp {
                 alarm: Alarm {
