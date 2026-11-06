@@ -3,7 +3,7 @@ name = "historyprovider"
 description = "historyprovider-rs"
 license = "MIT"
 repository = "https://github.com/silicon-heaven/historyprovider-rs"
-version = "3.3.12"
+version = "3.3.13"
 edition = "2024"
 
 [profile.release]
@@ -97,7 +97,6 @@ unneeded_field_pattern = "warn"
 unused_self = "warn"
 unwrap_used = "warn"
 upper_case_acronyms = "warn"
-useless_let_if_seq = "warn"
 vec_box = "warn"
 wrong_self_convention = "warn"
 
@@ -120,3 +119,5 @@ struct_excessive_bools = "allow"
 struct_field_names = "allow"
 todo = "allow"
 too_many_lines = "allow"
+# Gave false positives.
+useless_let_if_seq = "allow"
