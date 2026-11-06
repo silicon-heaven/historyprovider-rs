@@ -97,7 +97,6 @@ unneeded_field_pattern = "warn"
 unused_self = "warn"
 unwrap_used = "warn"
 upper_case_acronyms = "warn"
-useless_let_if_seq = "warn"
 vec_box = "warn"
 wrong_self_convention = "warn"
 
@@ -120,3 +119,5 @@ struct_excessive_bools = "allow"
 struct_field_names = "allow"
 todo = "allow"
 too_many_lines = "allow"
+# Gave false positives.
+useless_let_if_seq = "allow"

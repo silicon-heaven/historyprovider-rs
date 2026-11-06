@@ -298,15 +298,13 @@ async fn set_online_status(
         SiteOnlineStatus::Online => {
             let mut alarms = app_state.alarms.write().await;
             let emit_alarmmod = alarms.get_mut(site).is_some_and(|site_alarms| {
-                if let Some(idx) = site_alarms
+                site_alarms
                     .iter()
                     .position(|alarm_with_ts| alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY)
-                {
-                    site_alarms.remove(idx);
-                    true
-                } else {
-                    false
-                }
+                    .is_some_and(|idx| {
+                        site_alarms.remove(idx);
+                        true
+                    })
             });
 
             (false, emit_alarmmod)
