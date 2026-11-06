@@ -220,9 +220,15 @@ pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &m
     updated_alarms
 }
 
+const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
+
 fn mark_alarms_stale(alarms: &mut [AlarmWithTimestamp]) -> bool {
     let mut stale_updated = false;
     for alarm_with_ts in alarms {
+        if alarm_with_ts.alarm.path == SITE_OFFLINE_ALARM_KEY {
+            continue;
+        }
+
         if !alarm_with_ts.stale {
             alarm_with_ts.stale = true;
             stale_updated = true;
@@ -254,8 +260,6 @@ async fn set_online_status(
     client_commands
         .send_message(shvrpc::RpcMessage::new_signal(site, "onlinestatuschng").with_param(new_status as i32))
         .unwrap_or_else(|err| log::error!(target: "OnlineStatus", "[{site}] Cannot send 'onlinestatuschng' signal: {err}"));
-
-    const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
 
     drop(online_states);
     let (emit_statealarmmod, emit_alarmmod) = match new_status {
