@@ -89,15 +89,15 @@ fn load_client_config(cli_opts: Opts) -> shvrpc::Result<(ClientConfig, HpConfig)
     } else {
         (ClientConfig::default(), HpConfig::default())
     };
-    client_config.url = cli_opts.url.map_or_else(|| Ok(client_config.url), |url_str| Url::parse(&url_str))?;
+    client_config.url = cli_opts.url.map_or(Ok(client_config.url), |url_str| Url::parse(&url_str))?;
     client_config.device_id = cli_opts.device_id.or(client_config.device_id);
     client_config.mount = cli_opts.mount.or(client_config.mount);
-    client_config.reconnect_interval = cli_opts.reconnect_interval.map_or_else(
-        || Ok(client_config.reconnect_interval),
+    client_config.reconnect_interval = cli_opts.reconnect_interval.map_or(
+        Ok(client_config.reconnect_interval),
         |interval_str| duration_str::parse(&interval_str).map(Some)
     )?;
-    client_config.heartbeat_interval = cli_opts.heartbeat_interval.map_or_else(
-        || Ok(client_config.heartbeat_interval),
+    client_config.heartbeat_interval = cli_opts.heartbeat_interval.map_or(
+        Ok(client_config.heartbeat_interval),
         |interval_str| duration_str::parse(&interval_str)
     )?;
 
