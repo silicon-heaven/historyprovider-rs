@@ -147,7 +147,7 @@ pub(crate) fn msec_to_log2_filename(msec: i64) -> String {
 
 #[cfg(test)]
 pub mod testing {
-    use crate::{State, dirtylog::DirtyLogCommand, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::{SyncCommand, SyncInfo}, util::{DedupReceiver, dedup_channel}};
+    use crate::{State, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::{SyncCommand, SyncInfo}, util::{DedupReceiver, dedup_channel}};
     use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
     use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
@@ -372,7 +372,7 @@ pub mod testing {
         steps: &[Box<dyn TestStep<TestState>>],
         starting_files: Vec<(&str, &str)>,
         expected_file_paths: Vec<(&str, &str)>,
-        create_task: impl FnOnce(ClientCommandSender, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, UnboundedReceiver<DirtyLogCommand>, DedupReceiver<SyncCommand>, Arc<State>) -> (tokio::task::JoinHandle<()>, TestState),
+        create_task: impl FnOnce(ClientCommandSender, async_broadcast::Sender<shvclient::ClientEvent>, ClientEventsReceiver, DedupReceiver<SyncCommand>, Arc<State>) -> (tokio::task::JoinHandle<()>, TestState),
         destroy_task: impl FnOnce(&mut TestState),
         cleanup_steps: &[Box<dyn TestStep<TestState>>]
     ) -> std::result::Result<(), PrettyJoinError> {
@@ -382,7 +382,6 @@ pub mod testing {
         let (client_events_sender, client_events_rx) = async_broadcast::broadcast(10);
         let (dedup_sender, dedup_receiver) = dedup_channel::<SyncCommand>();
         let client_events_receiver = ClientEventsReceiver::from_raw(client_events_rx.clone());
-        let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded::<DirtyLogCommand>();
         let journal_dir = TempDir::with_prefix("test-hprs-sync_task.").expect("tempdir should work");
         for (starting_file_name, starting_file_content) in starting_files {
             let file_name = format!("{}/{}", journal_dir.path().to_string_lossy(), starting_file_name);
@@ -412,7 +411,6 @@ pub mod testing {
                 days_to_keep: 0,
                 periodic_sync_interval: 3,
             },
-            dirtylog_cmd_tx,
             sync_cmd_tx: dedup_sender.clone(),
             sites_data: RwLock::new(SitesData {
                 sites_info: Arc::new(BTreeMap::from([
@@ -440,7 +438,7 @@ pub mod testing {
         });
 
 
-        let (sync_task, mut task_state) = create_task(client_command_sender.clone(), client_events_sender.clone(), client_events_receiver.clone(), dirtylog_cmd_rx, dedup_receiver, state.clone());
+        let (sync_task, mut task_state) = create_task(client_command_sender.clone(), client_events_sender.clone(), client_events_receiver.clone(), dedup_receiver, state.clone());
 
         let mut subscriptions = HashMap::new();
 
