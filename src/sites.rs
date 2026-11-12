@@ -850,9 +850,10 @@ pub(crate) async fn sites_task(
                             tx.unbounded_send(SiteOnlineStatus::Online).ok();
                         }
 
-                        app_state.dirtylog_cmd_tx
-                            .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
-                            .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
+                        // TODO: Record the notification to the snapshot.
+                        // app_state.dirtylog_cmd_tx
+                        //     .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
+                        //     .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
 
                         let typeinfos = &app_state.sites_data.read().await.typeinfos;
                         let Some(Ok(type_info)) = typeinfos.get(&parsed_notification.site_path) else {
@@ -902,9 +903,9 @@ mod tests {
     use futures::{channel::mpsc::{UnboundedReceiver, UnboundedSender}, StreamExt};
     use shvclient::{clientapi::ClientCommand, ClientEvent};
     use shvproto::RpcValue;
-    use shvrpc::{RpcMessageMetaTags, rpcframe::RpcFrame};
+    use shvrpc::{RpcMessageMetaTags as _, rpcframe::RpcFrame};
 
-    use crate::{dirtylog::DirtyLogCommand, sites::{SITES_PATH, SiteInfo, SitesCommand, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
+    use crate::{sites::{SITES_PATH, SiteInfo, SitesCommand, sites_task}, sync::SyncCommand, util::{DedupReceiver, init_logger, testing::{ExpectCall, ExpectSignal, ExpectSubscription, ExpectUnsubscription, PrettyJoinError, SendSignal, TestStep, run_test}}};
 
     #[test]
     fn parse_notification() {
@@ -1000,26 +1001,6 @@ mod tests {
     }
 
     #[derive(Debug)]
-    enum ExpectDirtylogCommand {
-        ProcessNotification,
-    }
-
-    #[async_trait::async_trait]
-    impl TestStep<SitesTaskTestState> for ExpectDirtylogCommand {
-        async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>,_subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
-            let event = state.dirtylog_cmd_rx.select_next_some().await;
-            match (&event, self) {
-                (DirtyLogCommand::ProcessNotification(..), ExpectDirtylogCommand::ProcessNotification) => {
-                    log::debug!(target: "test-driver", "Got expected notification: {event:?}");
-                },
-                (got, expected) => {
-                    panic!("Unexpected dirtylog command: {got:?}, expected: {expected:?}")
-                }
-            }
-        }
-    }
-
-    #[derive(Debug)]
     enum ExpectSyncCommand {
         SyncSite{expected_site: String},
         SyncAll,
@@ -1041,7 +1022,7 @@ mod tests {
                     log::debug!(target: "test-driver", "Got expected SyncAll");
                 },
                 (got, expected) => {
-                    panic!("Unexpected dirtylog command: {got:?}, expected: {expected:?}")
+                    panic!("Unexpected sync command: {got:?}, expected: {expected:?}")
                 }
             }
         }
@@ -1049,7 +1030,6 @@ mod tests {
 
     struct SitesTaskTestState {
         sender: Sender<ClientEvent>,
-        dirtylog_cmd_rx: UnboundedReceiver<DirtyLogCommand>,
         sync_cmd_rx: DedupReceiver<SyncCommand>,
         sites_cmd_tx: UnboundedSender<SitesCommand>,
     }
@@ -1191,9 +1171,8 @@ mod tests {
                     Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(SendSignal("shv/node/*:*:chng".to_string(), "shv/node/some_value".to_string(), "chng".to_string(), RpcValue::null())),
-                    Box::new(ExpectDirtylogCommand::ProcessNotification),
-                    Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
                     Box::new(ExpectSignal("node", "onlinestatuschng", 2.into())),
+                    Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
                     Box::new(ExpectSyncCommand::SyncSite { expected_site: "node".to_string() }),
                     Box::new(ClientEvent::Disconnected),
                     Box::new(ExpectSignal("node", "onlinestatuschng", 0.into())),
@@ -1272,11 +1251,10 @@ mod tests {
                 test_case.steps,
                 test_case.starting_files,
                 test_case.expected_file_paths,
-                |ccs, ces, cer, dirtylog_cmd_rx, sync_cmd_rx, state| {
+                |ccs, ces, cer, sync_cmd_rx, state| {
                     let (sites_cmd_tx, sites_cmd_rx) = futures::channel::mpsc::unbounded();
                     let task_state = SitesTaskTestState {
                         sender: ces,
-                        dirtylog_cmd_rx,
                         sync_cmd_rx,
                         sites_cmd_tx,
                     };

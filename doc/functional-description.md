@@ -27,9 +27,8 @@ where this _hp-rs_ instance runs. If it's not present, _hp-rs_ should exit with 
 _hp-rs_ instances that can't be "seen" from parent _hp-rs_ instances.
 
 ## How does _hp-rs_ sync logs?
-There three ways _hp-rs_ can obtain logs:
+There are three ways _hp-rs_ can obtain logs:
 
-0) Capturing events.
 1) Downloading files via "file synchronization".
 2) Downloading logs via `getLog` and saving them to files.
 3) Receiving logs via pushLog.
@@ -39,11 +38,9 @@ specific leaf subdirectory is empty, _hp-rs_ only downloads history up until a s
 configuration). Afterwards, only new logs are ever downloaded, _hp-rs_ never downloads logs, that are older than it
 already has.
 
-### Capturing events
-This is the most straightforward way of getting logs and isn't really "downloading". _hp-rs_ subscribes all the sites for
-`chng` events and saves them to a file called dirtylog. The dirtylog serves as a temporary storage of logs, until actual
-logs are retrieved from other sources. When new logs are retrieved, entries that are older than the newest synced entry
-are removed. This process is called "dirty log trimming".
+### Live notifications
+_hp-rs_ subscribes to site notifications to update online status and alarms. Persisting these notifications is a TODO
+in `src/sites.rs`.
 
 ### File synchronization
 The standard way for retrieving logs is via file synchronization. _hp-rs_ retrieves a file list from a node and checks the
@@ -98,9 +95,7 @@ prevent a bug from an old _shvgate_ where you couldn't download zero-sized files
 longer to respond. This is mostly solved by downloading through chunks, but a higher timeout can't hurt.
 17) The remote filenames can't be trusted to be in the correct format (i.e. a timestamp), so always validate them.
 18) After the synchronization is done, write the rest of the files to the filesystem.
-19) Find the newest entry in the local repository. Remove all entries older than this entry from the dirtylog. Produce a
-warning if the dirtylog is too large after this process (large == 20M).
-20) The synchronization process can take quite a long time, it is possible that the timer for periodical syncing tries
+19) The synchronization process can take quite a long time, it is possible that the timer for periodical syncing tries
 to sync a site that's already being synced. Make sure that the isn't being synced twice at the same time.
 
 ### Downloading via `getLog`
@@ -125,8 +120,8 @@ _hp-rs_ iterates over all sites and syncs them periodically one by one. The inte
 (default one minute).
 
 ### On the `mntchng` signal
-Whenever a site gets a `mntchng` signal, it might mean that it has been offline for some time, and our data is stale,
-because we couldn't get events for our dirty log. Therefore, the site gets synced.
+Whenever a site gets a `mntchng` signal indicating it is mounted, it gets synced to retrieve any logs accumulated
+while it was offline.
 
 ## Sanitizer
 _hp-rs_ periodically calculates the size of all logs combined. If the size exceeds the maximum log size, the oldest file

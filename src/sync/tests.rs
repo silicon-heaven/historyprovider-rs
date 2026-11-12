@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use crate::dirtylog::DirtyLogCommand;
 use crate::record::IMap;
 use crate::sites::{SiteInfo, SitesData, SubHpInfo};
 use crate::util::{dedup_channel, testing::*};
 use crate::{State, records, sync::{sync_task, SyncCommand}, util::{init_logger, DedupSender}};
-use futures::{StreamExt, channel::mpsc::{UnboundedReceiver, UnboundedSender}};
+use futures::channel::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot};
 use log::debug;
 use shvclient::clientapi::ClientCommand;
 use shvproto::{make_list, make_map, RpcValue};
@@ -15,7 +14,7 @@ use shvrpc::rpcmessage::RpcError;
 
 struct SyncTaskTestState {
     dedup_sender: DedupSender<SyncCommand>,
-    _dirtylog_cmd_rx: UnboundedReceiver<DirtyLogCommand>,
+    sync_finished: oneshot::Receiver<()>,
     state: Arc<State>,
 }
 
@@ -76,10 +75,9 @@ struct ExpectRecordsDb {
 #[async_trait::async_trait]
 impl TestStep<SyncTaskTestState> for ExpectRecordsDb {
     async fn exec(&self, _client_command_reciever: &mut UnboundedReceiver<ClientCommand>, _subscriptions: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SyncTaskTestState) {
-        let Some(DirtyLogCommand::Trim { site }) = state._dirtylog_cmd_rx.next().await else {
-            panic!("Expected dirtylog Trim command");
-        };
-        assert_eq!(site, self.site);
+        // Finish all queued sync work before inspecting and removing the databases.
+        state.dedup_sender.close_channel();
+        (&mut state.sync_finished).await.expect("Sync task should finish successfully");
         let db_path = records::db_path(&state.state.config.journal_dir, self.site, self.record_name);
         assert_eq!(records::fetch_records(&db_path, 0, 10).await.unwrap(), self.expected);
         let site_db_path = records::site_db_path(&state.state.config.journal_dir, self.site);
@@ -322,14 +320,18 @@ async fn sync_task_test() -> std::result::Result<(), PrettyJoinError> {
             test_case.steps,
             test_case.starting_files,
             test_case.expected_file_paths,
-            |ccs, _ces, cer, dirtylog_cmd_rx, _sync_cmd_rx, state| {
+            |ccs, _ces, cer, _sync_cmd_rx, state| {
                 let (dedup_sender, receiver) = dedup_channel::<SyncCommand>();
+                let (finished_tx, sync_finished) = oneshot::channel();
                 let task_state = SyncTaskTestState {
                     dedup_sender,
-                    _dirtylog_cmd_rx: dirtylog_cmd_rx,
+                    sync_finished,
                     state: state.clone(),
                 };
-                let sync_task = tokio::spawn(sync_task(ccs, cer, state, receiver));
+                let sync_task = tokio::spawn(async move {
+                    sync_task(ccs, cer, state, receiver).await;
+                    finished_tx.send(()).expect("Sync completion receiver should remain open");
+                });
                 (sync_task, task_state)
             },
             |state| {
@@ -508,14 +510,18 @@ async fn sync_task_test_log3() -> std::result::Result<(), PrettyJoinError> {
             test_case.steps,
             test_case.starting_files,
             test_case.expected_file_paths,
-            |ccs, _ces, cer, dirtylog_cmd_rx, _sync_cmd_rx, state| {
+            |ccs, _ces, cer, _sync_cmd_rx, state| {
                 let (dedup_sender, receiver) = dedup_channel::<SyncCommand>();
+                let (finished_tx, sync_finished) = oneshot::channel();
                 let task_state = SyncTaskTestState {
                     dedup_sender,
-                    _dirtylog_cmd_rx: dirtylog_cmd_rx,
+                    sync_finished,
                     state: state.clone(),
                 };
-                let sync_task = tokio::spawn(sync_task(ccs, cer, state, receiver));
+                let sync_task = tokio::spawn(async move {
+                    sync_task(ccs, cer, state, receiver).await;
+                    finished_tx.send(()).expect("Sync completion receiver should remain open");
+                });
                 (sync_task, task_state)
             },
             |state| {
