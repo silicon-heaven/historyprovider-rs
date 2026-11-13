@@ -432,6 +432,7 @@ pub mod testing {
             alarms: RwLock::default(),
             state_alarms: RwLock::default(),
             online_states: RwLock::default(),
+            snapshots: RwLock::default(),
             app_closing: false.into(),
             last_sites_loaded: RwLock::new(None),
             sites_reload_in_progress: AtomicBool::new(false),
