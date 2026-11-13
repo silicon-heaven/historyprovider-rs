@@ -8,7 +8,9 @@ use shvproto::{DateTime, RpcValue};
 use shvrpc::journalentry::JournalEntry;
 use shvrpc::journalrw::{GetLog2Params, GetLog2Since, Log2Reader};
 use shvrpc::metamethod::AccessLevel;
+use shvrpc::rpc::{Glob, ShvRI};
 use shvrpc::rpcmessage::{RpcErrorCode, RpcErrorCodeKind};
+use shvrpc::util::strip_prefix_path;
 use tokio::sync::Semaphore;
 
 use crate::sites::{ParsedNotification, SiteInfo, SubHpInfo};
@@ -53,6 +55,55 @@ impl SiteSnapshot {
 
 fn insert(entries: &mut SnapshotEntries, entry: JournalEntry) {
     entries.insert((entry.path.clone(), entry.signal.clone(), entry.source.clone()), entry);
+}
+
+pub(crate) fn snapshot_filter(param: &RpcValue) -> Result<Option<Glob>, String> {
+    if param.is_null() {
+        return Ok(None);
+    }
+    let param = shvproto::IMap::try_from(param)?;
+    if param.contains_key(&1) {
+        return Err("getSnapshot only supports the current snapshot; Time is not supported".into());
+    }
+    param.get(&2).filter(|ri| !ri.is_null())
+        .map(|ri| ShvRI::try_from(ri)?.to_glob())
+        .transpose()
+}
+
+pub(crate) fn snapshot_to_rpcvalue(
+    entries: &SnapshotEntries,
+    path_prefix: &str,
+    filter: Option<&Glob>,
+    access_level: i32,
+) -> RpcValue {
+    entries.values().filter_map(|entry| {
+        let path = strip_prefix_path(&entry.path, path_prefix)?;
+        if entry.access_level > access_level || filter.is_some_and(|filter| {
+            !ShvRI::from_path_method_signal(path, &entry.source, Some(&entry.signal))
+                .is_ok_and(|ri| filter.match_shv_ri(&ri))
+        }) {
+            return None;
+        }
+        let mut row = shvproto::IMap::new();
+        row.insert(1, DateTime::from_epoch_msec(entry.epoch_msec).into());
+        if !path.is_empty() {
+            row.insert(3, path.into());
+        }
+        if entry.signal != "chng" {
+            row.insert(4, entry.signal.clone().into());
+        }
+        if entry.source != "get" {
+            row.insert(5, entry.source.clone().into());
+        }
+        row.insert(6, entry.value.clone());
+        if !entry.user_id.is_empty() {
+            row.insert(7, entry.user_id.clone().into());
+        }
+        if entry.repeat {
+            row.insert(8, true.into());
+        }
+        Some(RpcValue::from(row))
+    }).collect::<Vec<_>>().into()
 }
 
 pub(crate) fn notification_entry(notification: ParsedNotification, timestamp: DateTime) -> JournalEntry {

@@ -30,10 +30,12 @@ use crate::getlog::getlog_handler;
 use crate::pushlog::pushlog_impl;
 use crate::records;
 use crate::sites::{SitesData, SubHpInfo};
+use crate::snapshot::{SiteSnapshot, snapshot_filter, snapshot_to_rpcvalue};
 use crate::{AlarmWithTimestamp, HpConfig, State};
 
 // History site node methods
 const METH_GET_LOG: &str = "getLog";
+const METH_GET_SNAPSHOT: &str = "getSnapshot";
 const METH_ONLINE_STATUS: &str = "onlineStatus";
 const METH_ALARM_TABLE: &str = "alarmTable";
 const METH_STATE_ALARM_TABLE: &str = "stateAlarmTable";
@@ -42,6 +44,7 @@ const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_LS_FILES: MetaMethod = MetaMethod::new_static(METH_LS_FILES, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map|Null", "List", &[], "");
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod::new_static(METH_GET_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
+const META_METHOD_GET_SNAPSHOT: MetaMethod = MetaMethod::new_static(METH_GET_SNAPSHOT, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Browse, "i{s|n:ri:2}|n", "!getSnapshotR", &[], "Returns the current snapshot. Historical queries are not supported.");
 const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Read, "Null", "i[Unknown,Offline,Online]", &[("onlinestatuschng", None)], "");
 const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("alarmmod", Some("Null"))], "");
 const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("statealarmmod", Some("Null"))], "");
@@ -544,6 +547,36 @@ async fn time_drift_handler(
     ))
 }
 
+async fn getsnapshot_handler(
+    path: &str,
+    param: &RpcValue,
+    access_level: i32,
+    app_state: Arc<State>,
+) -> Result<RpcValue, RpcError> {
+    let filter = snapshot_filter(param)
+        .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getSnapshot parameters: {err}")))?;
+    let (site, prefix) = {
+        let sites_data = app_state.sites_data.read().await;
+        snapshot_site_for_path(&sites_data, path)
+            .map(|(site, prefix)| (site.to_string(), prefix.to_string()))
+            .ok_or_else(|| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getSnapshot path: {path}")))?
+    };
+    let snapshots = app_state.snapshots.read().await;
+    let Some(SiteSnapshot::Ready(entries)) = snapshots.get(&site) else {
+        return Err(RpcError::new(RpcErrorCode::MethodCallException, format!("Snapshot for {site} is not ready")));
+    };
+    Ok(snapshot_to_rpcvalue(entries, &prefix, filter.as_ref(), access_level))
+}
+
+fn snapshot_site_for_path<'a>(sites_data: &'a SitesData, path: &'a str) -> Option<(&'a str, &'a str)> {
+    let (site, prefix) = find_longest_path_prefix(sites_data.sites_info.as_ref(), path)?;
+    let info = sites_data.sites_info.get(site)?;
+    match sites_data.sub_hps.get(&info.sub_hp)? {
+        SubHpInfo::PushLog => None,
+        _ => Some((site, prefix)),
+    }
+}
+
 fn records_site_for_path(sites_data: &SitesData, path: &str) -> Option<(String, String, Vec<String>)> {
     let (site_path, path_prefix) = find_longest_path_prefix(sites_data.sites_info.as_ref(), path)?;
     let site_info = sites_data.sites_info.get(site_path)?;
@@ -554,21 +587,11 @@ fn records_site_for_path(sites_data: &SitesData, path: &str) -> Option<(String, 
 }
 
 #[expect(clippy::zero_sized_map_values, reason = "children_on_path needs it")]
-fn records_site_paths(sites_data: &SitesData) -> BTreeMap<String, ()> {
+fn history_site_paths(sites_data: &SitesData) -> BTreeMap<String, ()> {
     sites_data.sites_info.iter()
-        .filter(|(_, site_info)| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| match sub_hp {
-            SubHpInfo::Records { records } => !records.is_empty(),
-            _ => false,
-        }))
+        .filter(|(_, site_info)| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog)))
         .map(|(site_path, _)| (site_path.clone(), ()))
         .collect()
-}
-
-fn has_records_leaf(sites_data: &SitesData) -> bool {
-    sites_data.sites_info.values().any(|site_info| sites_data.sub_hps.get(&site_info.sub_hp).is_some_and(|sub_hp| match sub_hp {
-        SubHpInfo::Records { records } => !records.is_empty(),
-        _ => false,
-    }))
 }
 
 async fn getlog_handler_rq(
@@ -763,7 +786,7 @@ pub(crate) async fn request_handler(
                         ];
                         const ROOT_PATH: &str = "";
                         let sites_data = app_state.sites_data.read().await;
-                        if has_records_leaf(&sites_data) {
+                        if !history_site_paths(&sites_data).is_empty() {
                             nodes.push(".history".to_string());
                         }
                         nodes.append(&mut children_on_path(&sites_data.sites_info, ROOT_PATH).unwrap_or_default());
@@ -845,33 +868,45 @@ pub(crate) async fn request_handler(
         NodeType::History3 => {
             let path2 = path.strip_prefix(".history").expect("NodeType::History must have the .history prefix");
             let path = path2.strip_prefix("/").unwrap_or(path2).to_string();
-            let (methods, is_site_path, records_site) = {
+            let (methods, snapshot_site, records_site) = {
                 let sites_data = app_state.sites_data.read().await;
-                let records_site_paths = records_site_paths(&sites_data);
-                let children = children_on_path(&records_site_paths, &path);
+                let site_paths = history_site_paths(&sites_data);
+                let children = children_on_path(&site_paths, &path);
+                let snapshot_site = snapshot_site_for_path(&sites_data, &path)
+                    .map(|(site, prefix)| (site.to_string(), prefix.to_string()));
                 let records_site = records_site_for_path(&sites_data, &path);
-                if children.is_none() && records_site.is_none() {
+                if children.is_none() && snapshot_site.is_none() {
                     return err_unresolved_request();
                 }
-                let methods = if records_site.is_some() {
-                    const METHODS: &[MetaMethod] = &[META_METHOD_GET_LOG, META_METHOD_TIME_DRIFT];
-                    METHODS
-                } else {
-                    const METHODS: &[MetaMethod] = &[];
-                    METHODS
-                };
-                let is_site_path = children.as_ref().is_some_and(Vec::is_empty);
-                (methods, is_site_path, records_site)
+                let mut methods = Vec::new();
+                if records_site.is_some() {
+                    methods.extend([META_METHOD_GET_LOG, META_METHOD_TIME_DRIFT]);
+                }
+                if snapshot_site.is_some() {
+                    methods.push(META_METHOD_GET_SNAPSHOT);
+                }
+                (methods, snapshot_site, records_site)
             };
             match method {
                 Method::Dir(dir) => dir.resolve(methods),
                 Method::Ls(ls) => {
                     ls.resolve(methods, async move || {
                         let sites_data = app_state.sites_data.read().await;
-                        let records_site_paths = records_site_paths(&sites_data);
-                        let mut children = children_on_path(&records_site_paths, &path).unwrap_or_default();
-                        if is_site_path {
+                        let site_paths = history_site_paths(&sites_data);
+                        drop(sites_data);
+                        let mut children = children_on_path(&site_paths, &path).unwrap_or_default();
+                        if records_site.as_ref().is_some_and(|(_, prefix, _)| prefix.is_empty()) {
                             children.push(".records".into());
+                        }
+                        if let Some((site, prefix)) = snapshot_site
+                            && let Some(SiteSnapshot::Ready(entries)) = app_state.snapshots.read().await.get(&site)
+                        {
+                            children.extend(entries.values().filter_map(|entry| {
+                                shvrpc::util::strip_prefix_path(&entry.path, &prefix)
+                                    .and_then(|path| path.split('/').next())
+                                    .filter(|child| !child.is_empty())
+                                    .map(str::to_string)
+                            }));
                         }
                         if let Some((site_path, path_prefix, record_names)) = records_site {
                             children.extend(records::children_for_path(
@@ -888,6 +923,9 @@ pub(crate) async fn request_handler(
                 }
                 Method::Other(m) => match m.method() {
                     METH_GET_LOG if records_site.is_some() => m.resolve(methods, async move || { getlog3_handler_rq(&path, &param, app_state).await }),
+                    METH_GET_SNAPSHOT if snapshot_site.is_some() => m.resolve(methods, async move || {
+                        getsnapshot_handler(&path, &param, rq.access_level().unwrap_or_default(), app_state).await
+                    }),
                     METH_TIME_DRIFT if records_site.is_some() => m.resolve(methods, async move || { time_drift_handler(&path, app_state).await }),
                     _ => err_unresolved_request(),
                 },
@@ -984,11 +1022,12 @@ mod tests {
     }
 
     #[test]
-    fn history_subtree_requires_records_leaf_with_nodes() {
+    fn history_subtree_includes_snapshot_sites() {
         let sites_data = SitesData {
             sites_info: Arc::new(BTreeMap::from([
                 ("normal".to_string(), site_info("normal")),
                 ("empty_records".to_string(), site_info("empty_records")),
+                ("pushlog".to_string(), site_info("pushlog")),
             ])),
             sub_hps: Arc::new(BTreeMap::from([
                 ("normal".to_string(), SubHpInfo::Normal {
@@ -998,12 +1037,12 @@ mod tests {
                 ("empty_records".to_string(), SubHpInfo::Records {
                     records: vec![],
                 }),
+                ("pushlog".to_string(), SubHpInfo::PushLog),
             ])),
             typeinfos: Arc::default(),
         };
 
-        assert!(!super::has_records_leaf(&sites_data));
-        assert!(super::records_site_paths(&sites_data).is_empty());
+        assert_eq!(super::history_site_paths(&sites_data).keys().cloned().collect::<Vec<_>>(), vec!["empty_records", "normal"]);
     }
 
     #[test]
@@ -1020,7 +1059,9 @@ mod tests {
             typeinfos: Arc::default(),
         };
 
-        assert!(super::has_records_leaf(&sites_data));
-        assert_eq!(super::records_site_paths(&sites_data).keys().cloned().collect::<Vec<_>>(), vec!["records".to_string()]);
+        assert_eq!(super::history_site_paths(&sites_data).keys().cloned().collect::<Vec<_>>(), vec!["records".to_string()]);
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests;

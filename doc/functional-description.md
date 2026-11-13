@@ -135,6 +135,24 @@ _hp-rs_ has to subscribe to the whole tree for changes, so as a side effect, it 
 calls to get on all paths.
 
 ## SHV tree
+### `.history/<site>[/<path>]:getSnapshot`
+| Parameter | Result | Access |
+|-----------|--------|--------|
+| IMap\|Null | !getSnapshotR | Browse |
+
+Returns the current cached snapshot for a non-pushlog site, optionally restricted to a subtree.
+The method has the `HintLargeResult` flag. The optional IMap field `2` is an RI filter,
+relative to the requested path, matching path, source method, and signal. A null parameter
+or filter returns all matching entries permitted by the caller's access level.
+
+The result follows the [SHV snapshot format](https://silicon-heaven.github.io/shv-doc/rpcmethods/history.html#historygetsnapshot):
+a list of IMaps with timestamp (`1`), relative path (`3`), signal (`4`), source (`5`),
+value (`6`), user ID (`7`), and repeat flag (`8`). Fields with default values may be omitted.
+
+Only the current snapshot is supported; supplying the Time field (`1`) returns `InvalidParam`.
+Offline or initializing snapshots return `MethodCallException`; a ready but empty snapshot
+returns an empty list.
+
 ### `_valuecache:get`
 | Parameter | Result   | Access |
 |-----------|----------|--------|
