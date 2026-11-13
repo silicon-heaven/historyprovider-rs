@@ -5,11 +5,12 @@ use std::time::Duration;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::stream::{FusedStream, FuturesUnordered};
 use futures::StreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use shvclient::clientapi::{CallRpcMethodErrorKind, RpcCall, RpcCallDirExists, RpcCallLsList, Subscriber};
 use shvclient::clientnode::{METH_DIR, SIG_CHNG};
 use shvclient::{ClientCommandSender, ClientEvent, ClientEventsReceiver};
 use shvproto::{DateTime, RpcValue};
+use shvrpc::journalentry::JournalEntry;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::typeinfo::TypeInfo;
 use shvrpc::util::find_longest_path_prefix;
@@ -19,7 +20,7 @@ use tokio::time::timeout;
 use tokio_stream::StreamMap;
 
 use crate::alarm::{collect_alarms, collect_state_alarms, Alarm};
-use crate::getlog::{getlog_handler};
+use crate::snapshot::{SiteSnapshot, SnapshotEntries, SnapshotPaths, fetch_with_retry, notification_entry};
 use crate::util::{subscribe, subscription_prefix_path};
 use crate::{AlarmWithTimestamp, State};
 
@@ -245,6 +246,11 @@ async fn set_online_status(
 )
 {
     let site = site.as_ref();
+    if new_status != SiteOnlineStatus::Online
+        && let Some(snapshot) = app_state.snapshots.write().await.get_mut(site)
+    {
+        *snapshot = SiteSnapshot::Invalid;
+    }
     let mut online_states = app_state.online_states.write().await;
     let Some(online_state) = online_states.get_mut(site) else {
         error!(target: "OnlineStatus", "No onlineStatus for site {site}");
@@ -329,11 +335,49 @@ async fn set_online_status(
     }
 }
 
+enum SiteEvent {
+    Status(SiteOnlineStatus),
+    Notification(JournalEntry),
+}
+
+async fn update_site_alarms<'a>(
+    site: &str,
+    entries: impl Iterator<Item = &'a JournalEntry> + Clone,
+    replace: bool,
+    client_commands: &ClientCommandSender,
+    app_state: &State,
+) {
+    let sites_data = app_state.sites_data.read().await;
+    let Some(Ok(type_info)) = sites_data.typeinfos.get(site) else {
+        return;
+    };
+    for (table, collector, signal) in [
+        (&app_state.alarms, collect_alarms as AlarmCollector, "alarmmod"),
+        (&app_state.state_alarms, collect_state_alarms as AlarmCollector, "statealarmmod"),
+    ] {
+        let mut table = table.write().await;
+        let alarms = table.entry(site.to_string()).or_default();
+        let mut changed = replace && !alarms.is_empty();
+        if replace {
+            alarms.clear();
+        }
+        for entry in entries.clone() {
+            changed |= !update_alarms(collector, alarms, type_info, &entry.path, &entry.value, DateTime::from_epoch_msec(entry.epoch_msec)).is_empty();
+        }
+        if changed {
+            client_commands.send_message(shvrpc::RpcMessage::new_signal(site, signal))
+                .unwrap_or_else(|err| error!("[{site}] Cannot send {signal}: {err}"));
+        }
+    }
+}
+
 fn online_status_worker(
     site: impl Into<String>,
-    mut events: UnboundedReceiver<SiteOnlineStatus>,
+    mut events: UnboundedReceiver<SiteEvent>,
     client_commands: ClientCommandSender,
-    app_state: Arc<State>
+    app_state: Arc<State>,
+    snapshot_paths: SnapshotPaths,
+    snapshot_semaphore: Arc<Semaphore>,
 ) -> impl Future<Output = ()>
 {
     const ONLINE_TIMER: Duration = Duration::from_secs(10);
@@ -341,12 +385,23 @@ fn online_status_worker(
 
     debug!(target: "OnlineStatus", "[{site}] Worker started");
     async move {
+        let mut snapshot_fetch: Option<futures::future::BoxFuture<'static, SnapshotEntries>> = None;
         loop {
-            match timeout(ONLINE_TIMER, events.next()).await {
-                // Received a message before timeout
-                Ok(Some(status)) => {
-                    set_online_status(&site, status, &client_commands, &app_state).await;
+            let event = tokio::select! {
+                event = timeout(ONLINE_TIMER, events.next()) => event,
+                entries = async { snapshot_fetch.as_mut().expect("Snapshot fetch exists").await }, if snapshot_fetch.is_some() => {
+                    snapshot_fetch = None;
+                    let mut snapshots = app_state.snapshots.write().await;
+                    if let Some(entries) = snapshots.get_mut(&site).and_then(|snapshot| snapshot.complete(entries)) {
+                        update_site_alarms(&site, entries.values(), true, &client_commands, &app_state).await;
+                    }
+                    continue;
                 }
+            };
+            let (status, notification) = match event {
+                // Received a message before timeout
+                Ok(Some(SiteEvent::Status(status))) => (status, None),
+                Ok(Some(SiteEvent::Notification(entry))) => (SiteOnlineStatus::Online, Some(entry)),
 
                 // Channel closed
                 Ok(None) => {
@@ -364,11 +419,36 @@ fn online_status_worker(
                         .await;
                     debug!(target: "OnlineStatus", "[{site}] RPC call result: {dir_result:?}");
                     if dir_result.is_ok() {
-                        set_online_status(&site, SiteOnlineStatus::Online, &client_commands, &app_state).await;
+                        (SiteOnlineStatus::Online, None)
                     } else if let Err(err) = dir_result && matches!(err.error(), CallRpcMethodErrorKind::RpcError(RpcError { .. })) {
-                        set_online_status(&site, SiteOnlineStatus::Offline, &client_commands, &app_state).await;
+                        (SiteOnlineStatus::Offline, None)
+                    } else {
+                        continue;
                     }
                 }
+            };
+            set_online_status(&site, status, &client_commands, &app_state).await;
+            if status == SiteOnlineStatus::Online {
+                let mut snapshots = app_state.snapshots.write().await;
+                let snapshot = snapshots.get_mut(&site).expect("Non-pushlog site has snapshot state");
+                if matches!(snapshot, SiteSnapshot::Invalid) {
+                    *snapshot = SiteSnapshot::Initializing(BTreeMap::new());
+                    snapshot_fetch = Some(Box::pin(fetch_with_retry(
+                        site.clone(), snapshot_paths.clone(), client_commands.clone(), snapshot_semaphore.clone(),
+                    )));
+                }
+                if let Some(entry) = notification {
+                    snapshot.record(entry.clone());
+                    let ready = snapshot.is_ready();
+                    drop(snapshots);
+                    if ready {
+                        update_site_alarms(&site, std::iter::once(&entry), false, &client_commands, &app_state).await;
+                    }
+                }
+            } else {
+                // Dropping the in-flight future prevents an earlier online period's
+                // response from initializing a later snapshot.
+                snapshot_fetch = None;
             }
         }
         debug!(target: "OnlineStatus", "[{site}] Worker finished");
@@ -406,7 +486,7 @@ pub(crate) fn parse_notification(msg: &shvrpc::RpcMessage, sites_info: &BTreeMap
 struct SitesTaskState {
     mntchng_subscribers: StreamMap<String, Subscriber>,
     subscribers: StreamMap<String, Subscriber>,
-    online_status_channels: BTreeMap<String, UnboundedSender<SiteOnlineStatus>>,
+    online_status_channels: BTreeMap<String, UnboundedSender<SiteEvent>>,
     online_status_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -586,6 +666,15 @@ async fn reload_sites(
 
     let typeinfos = Arc::new(typeinfos);
 
+    // Finish the old workers before replacing shared state. In particular, an
+    // old snapshot response must not initialize a reloaded site's snapshot.
+    old_state.online_status_channels.clear();
+    if let Some(task) = old_state.online_status_task.take()
+        && let Err(err) = task.await
+    {
+        error!("Failed to join online_status_task: {err}");
+    }
+
     *app_state.sites_data.write().await = SitesData {
         sites_info: sites_info.clone(),
         sub_hps: sub_hps.clone(),
@@ -593,103 +682,36 @@ async fn reload_sites(
     };
 
     *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), SiteOnlineStatus::default())).collect();
+    *app_state.snapshots.write().await = sites_info.iter()
+        .filter(|(_, info)| sub_hps.get(&info.sub_hp).is_some_and(|hp| !matches!(hp, SubHpInfo::PushLog)))
+        .map(|(site, _)| (site.clone(), SiteSnapshot::Invalid))
+        .collect();
+    app_state.alarms.write().await.retain(|site, _| sites_info.contains_key(site));
+    app_state.state_alarms.write().await.retain(|site, _| sites_info.contains_key(site));
     let mut online_status_channels = BTreeMap::new();
     let mut online_status_workers = Vec::new();
+    let snapshot_semaphore = Arc::new(Semaphore::new(app_state.config.max_sync_tasks.max(1)));
     for (site, info) in sites_info.iter() {
         if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
 
-        if sub_hps.get(&info.sub_hp).is_none_or(|sub_hp| matches!(sub_hp, SubHpInfo::PushLog)) {
+        let Some(sub_hp) = sub_hps.get(&info.sub_hp).filter(|sub_hp| !matches!(sub_hp, SubHpInfo::PushLog)) else {
             continue
-        }
+        };
         let (tx, rx) = futures::channel::mpsc::unbounded();
         online_status_channels.insert(site.clone(), tx);
-        online_status_workers.push(online_status_worker(site.clone(), rx, ClientCommandSender::clone(client_cmd_tx), Arc::clone(app_state)));
+        online_status_workers.push(online_status_worker(
+            site.clone(), rx, ClientCommandSender::clone(client_cmd_tx), Arc::clone(app_state),
+            SnapshotPaths::new(site, info, sub_hp), Arc::clone(&snapshot_semaphore),
+        ));
     }
-
-    let alarms = &mut *app_state.alarms.write().await;
-    let state_alarms = &mut *app_state.state_alarms.write().await;
 
     let online_status_task = Some(tokio::spawn(async move {
         debug!(target: "OnlineStatus", "Online status task starts");
         futures::future::join_all(online_status_workers).await;
         debug!(target: "OnlineStatus", "Online status task finish");
     }));
-    *app_state.online_states.write().await = sites_info.keys().map(|site| (site.clone(), SiteOnlineStatus::default())).collect();
-
-    let params = Arc::new(shvrpc::journalrw::GetLog2Params {
-        since: shvrpc::journalrw::GetLog2Since::LastEntry,
-        with_snapshot: true,
-        ..Default::default()
-    });
-
-    let alarm_load_start = std::time::Instant::now();
-
-    let valid_sites: Vec<_> = sites_info
-        .keys()
-        .filter_map(|path| typeinfos.get(path).and_then(|type_info| type_info.as_ref().ok()).map(|type_info| (path, type_info)))
-        .collect();
-
-    let semaphore = Arc::new(Semaphore::new(app_state.config.max_sync_tasks));
-
-    let results: Vec<_> = valid_sites
-        .into_iter()
-        .map(|(site_path, type_info)| {
-            let params = Arc::clone(&params);
-            let app_state = Arc::clone(app_state);
-            let semaphore = Arc::clone(&semaphore);
-            let site_path = site_path.clone();
-            async move {
-                let _permit = semaphore
-                    .acquire()
-                    .await
-                    .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
-
-                if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-                    return (site_path, type_info, Err(RpcError::new(RpcErrorCode::InternalError, "App is closing")));
-                }
-
-                let log = getlog_handler(&site_path, &params, app_state).await;
-                (site_path, type_info, log)
-            }
-        })
-        .collect::<FuturesUnordered<_>>()
-        .filter_map(|(site_path, type_info, result)| async move {
-            match result {
-                Ok(log) => Some((site_path, type_info, log)),
-                Err(err) => {
-                    if !app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-                        log::error!("couldn't init alarms: getlog failed: {err}");
-                    }
-                    None
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .await;
-
-    let loaded_count = results.len();
-
-    for (site_path, type_info, log) in results {
-        if app_state.app_closing.load(std::sync::atomic::Ordering::Relaxed) {
-            break;
-        }
-
-        let chained_entries = log.snapshot_entries.iter().map(Arc::as_ref).chain(log.event_entries.iter().map(Arc::as_ref));
-        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector| {
-            let alarms_for_site = alarm_table.entry(site_path.clone()).or_default();
-
-            for entry in chained_entries.clone() {
-                update_alarms(alarm_collector, alarms_for_site, type_info, &entry.path, &entry.value, shvproto::DateTime::from_epoch_msec(entry.epoch_msec));
-            }
-        };
-
-        impl_update_alarms(alarms, collect_alarms);
-        impl_update_alarms(state_alarms, collect_state_alarms);
-    }
-
-    info!("Alarm init done: {loaded_count} sites in {:?}", alarm_load_start.elapsed());
     *app_state.last_sites_loaded.write().await = Some(std::time::Instant::now());
     Some(SitesTaskState { mntchng_subscribers, subscribers, online_status_channels, online_status_task })
 }
@@ -823,12 +845,12 @@ pub(crate) async fn sites_task(
                                 .unwrap_or_else(|e| panic!("Cannot send SyncSite({site_path}) command: {e}"));
 
                             if let Some(tx) = state.online_status_channels.get(&site_path) {
-                                tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                                tx.unbounded_send(SiteEvent::Status(SiteOnlineStatus::Online)).ok();
                             }
                         } else {
                             log::info!("Site unmounted: {site_path}");
                             if let Some(tx) = state.online_status_channels.get(&site_path) {
-                                tx.unbounded_send(SiteOnlineStatus::Offline).ok();
+                                tx.unbounded_send(SiteEvent::Status(SiteOnlineStatus::Offline)).ok();
                             }
                         }
                     }
@@ -847,31 +869,8 @@ pub(crate) async fn sites_task(
                             continue
                         };
                         if let Some(tx) = state.online_status_channels.get(&parsed_notification.site_path) {
-                            tx.unbounded_send(SiteOnlineStatus::Online).ok();
+                            tx.unbounded_send(SiteEvent::Notification(notification_entry(parsed_notification, DateTime::now()))).ok();
                         }
-
-                        // TODO: Record the notification to the snapshot.
-                        // app_state.dirtylog_cmd_tx
-                        //     .unbounded_send(crate::dirtylog::DirtyLogCommand::ProcessNotification(parsed_notification.clone()))
-                        //     .unwrap_or_else(|e| log::error!("Cannot send dirtylog ProcessNotification command: {e}"));
-
-                        let typeinfos = &app_state.sites_data.read().await.typeinfos;
-                        let Some(Ok(type_info)) = typeinfos.get(&parsed_notification.site_path) else {
-                            continue;
-                        };
-
-                        let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector, signal_name| {
-                            let alarms_for_site = alarm_table.entry(parsed_notification.site_path.clone()).or_default();
-
-                            let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
-                            if !updated.is_empty() {
-                                client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name))
-                                    .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
-                            }
-                        };
-
-                        impl_update_alarms(&mut *app_state.alarms.write().await, collect_alarms, "alarmmod");
-                        impl_update_alarms(&mut *app_state.state_alarms.write().await, collect_state_alarms, "statealarmmod");
                     }
                     else => break 'main_loop,
                 }
@@ -894,6 +893,9 @@ pub(crate) async fn sites_task(
 
     log::debug!("Sites task finished");
 }
+
+#[cfg(test)]
+mod snapshot_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1032,6 +1034,17 @@ mod tests {
         sender: Sender<ClientEvent>,
         sync_cmd_rx: DedupReceiver<SyncCommand>,
         sites_cmd_tx: UnboundedSender<SitesCommand>,
+        app_state: std::sync::Arc<crate::State>,
+    }
+
+    struct ExpectSnapshotSites(&'static [&'static str]);
+
+    #[async_trait::async_trait]
+    impl TestStep<SitesTaskTestState> for ExpectSnapshotSites {
+        async fn exec(&self, _: &mut UnboundedReceiver<ClientCommand>, _: &mut HashMap<String, UnboundedSender<RpcFrame>>, state: &mut SitesTaskTestState) {
+            let snapshots = state.app_state.snapshots.read().await;
+            assert_eq!(snapshots.keys().map(String::as_str).collect::<Vec<_>>(), self.0);
+        }
     }
 
     struct TestCase<'a> {
@@ -1138,8 +1151,10 @@ mod tests {
                     Box::new(ExpectSubscription("shv/records_node/*:*:cmdlog".parse().unwrap())),
                     Box::new(ExpectCall("sites/records_node/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectSyncCommand::SyncAll),
+                    Box::new(ExpectSnapshotSites(&["records_node"])),
                     Box::new(SendSignal("shv/records_node/*:*:mntchng".to_string(), "shv/records_node".to_string(), "mntchng".to_string(), true.into())),
                     Box::new(ExpectSignal("records_node", "onlinestatuschng", 2.into())),
+                    Box::new(ExpectCall("shv/records_node/.history", "getSnapshot", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectSyncCommand::SyncSite { expected_site: "records_node".to_string() }),
                     Box::new(ClientEvent::Disconnected),
                     Box::new(ExpectSignal("records_node", "onlinestatuschng", 0.into())),
@@ -1171,7 +1186,9 @@ mod tests {
                     Box::new(ExpectCall("sites/node_with_hp_meta/_files", "ls", Ok(shvproto::List::new().into()))),
                     Box::new(ExpectSyncCommand::SyncAll),
                     Box::new(SendSignal("shv/node/*:*:chng".to_string(), "shv/node/some_value".to_string(), "chng".to_string(), RpcValue::null())),
+                    Box::new(ExpectSnapshotSites(&["legacy_sync_path_device", "node", "node_with_hp_meta"])),
                     Box::new(ExpectSignal("node", "onlinestatuschng", 2.into())),
+                    Box::new(ExpectCall("shv/node/.history", "getSnapshot", Ok(shvproto::List::new().into()))),
                     Box::new(SendSignal("shv/node/*:*:mntchng".to_string(), "shv/node".to_string(), "mntchng".to_string(), true.into())),
                     Box::new(ExpectSyncCommand::SyncSite { expected_site: "node".to_string() }),
                     Box::new(ClientEvent::Disconnected),
@@ -1257,6 +1274,7 @@ mod tests {
                         sender: ces,
                         sync_cmd_rx,
                         sites_cmd_tx,
+                        app_state: state.clone(),
                     };
                     let sites_task = tokio::spawn(sites_task(ccs, cer, state, sites_cmd_rx));
                     (sites_task, task_state)

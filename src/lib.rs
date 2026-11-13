@@ -23,6 +23,7 @@ mod alarmlog;
 mod pushlog;
 mod record;
 mod sites;
+mod snapshot;
 mod tree;
 mod sync;
 mod cleanup;
@@ -113,6 +114,7 @@ pub struct State {
     alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     state_alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     online_states: RwLock<BTreeMap<String, SiteOnlineStatus>>,
+    snapshots: RwLock<BTreeMap<String, snapshot::SiteSnapshot>>,
     config: HpConfig,
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
     app_closing: AtomicBool,
@@ -155,6 +157,7 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
         alarms: RwLock::default(),
         state_alarms: RwLock::default(),
         online_states: RwLock::default(),
+        snapshots: RwLock::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
         app_closing: AtomicBool::new(false),
