@@ -279,28 +279,27 @@ async fn set_online_status(
 
             let emit_alarmmod = {
                 let mut alarms = app_state.alarms.write().await;
-                alarms.get_mut(site).is_some_and(|site_alarms| {
-                    let mut alarms_changed = mark_alarms_stale(site_alarms);
-                    if site_alarms
-                        .iter()
-                        .all(|alarm_with_ts| alarm_with_ts.alarm.path != SITE_OFFLINE_ALARM_KEY)
-                    {
-                        site_alarms.push(AlarmWithTimestamp {
-                            alarm: Alarm {
-                                path: SITE_OFFLINE_ALARM_KEY.into(),
-                                is_active: true,
-                                description: "Site is offline".into(),
-                                label: "Offline".into(),
-                                level: 0,
-                                severity: crate::alarm::Severity::Error,
-                            },
-                            timestamp: DateTime::now(),
-                            stale: false,
-                        });
-                        alarms_changed = true;
-                    }
-                    alarms_changed
-                })
+                let site_alarms = alarms.entry(site.to_string()).or_default();
+                let mut alarms_changed = mark_alarms_stale(site_alarms);
+                if let Some(alarm) = site_alarms.iter_mut().find(|alarm| alarm.alarm.path == SITE_OFFLINE_ALARM_KEY) {
+                    alarms_changed |= alarm.stale;
+                    alarm.stale = false;
+                } else {
+                    site_alarms.push(AlarmWithTimestamp {
+                        alarm: Alarm {
+                            path: SITE_OFFLINE_ALARM_KEY.into(),
+                            is_active: true,
+                            description: "Site is offline".into(),
+                            label: "Offline".into(),
+                            level: 0,
+                            severity: crate::alarm::Severity::Error,
+                        },
+                        timestamp: DateTime::now(),
+                        stale: false,
+                    });
+                    alarms_changed = true;
+                }
+                alarms_changed
             };
 
             (emit_statealarmmod, emit_alarmmod)
