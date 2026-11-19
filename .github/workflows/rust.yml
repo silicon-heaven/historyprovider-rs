@@ -29,28 +29,46 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             filename_suffix: arm64
             features: --all-features
+            cross_compiler_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           - target: armv7-unknown-linux-gnueabihf
             filename_suffix: armv7
             features: --no-default-features
+            cross_compiler_packages: gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
           - target: x86_64-unknown-linux-gnu
             filename_suffix: amd64
             features: --all-features
 
+    env:
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+      AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      CXX_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-g++
+
     steps:
       - uses: actions/checkout@v7
+      - name: Install Cross Compilers
+        if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross_compiler_packages }}
       - name: Configure cross environment
         uses: zijiren233/cargo-cross@v1.6.0
         with:
           command: setup
+          no-toolchain-setup: true
           cross-args: --target ${{matrix.target}}
 
       - name: Clippy
-        run: cargo cross clippy --release --all-targets ${{matrix.features}} --target ${{matrix.target}}
+        run: cargo cross clippy --no-toolchain-setup --release --all-targets ${{matrix.features}} --target ${{matrix.target}}
       - name: Build
-        run: cargo cross build --release ${{matrix.features}} --target ${{matrix.target}}
+        run: cargo cross build --no-toolchain-setup --release ${{matrix.features}} --target ${{matrix.target}}
       - name: Run tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo cross test --release --all-features --target ${{matrix.target}}
+        run: cargo cross test --no-toolchain-setup --release --all-features --target ${{matrix.target}}
 
       - name: Get version from Cargo.toml
         id: get-version
