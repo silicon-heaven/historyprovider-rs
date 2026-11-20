@@ -35,17 +35,20 @@ fn getlog_refresh_queues_dirty_sites_until_sync_succeeds() {
 
     let (log_tx, _log_rx) = futures::channel::mpsc::unbounded();
     let logger = super::SyncSiteLogger::new("a", log_tx);
-    let notification_seq_at_start = data.notification_seq("a");
-    data.finish_sync(Err("failed".into()), &logger, notification_seq_at_start);
+    data.begin_site_sync("a");
+    request("a", None);
+    assert_eq!(rx.next().now_or_never(), refresh);
+    data.finish_sync(Err("failed".into()), &logger);
     request("a", Some(DateTime::from_epoch_msec(1001)));
     assert_eq!(rx.next().now_or_never(), refresh);
-    data.finish_sync(Ok(()), &logger, notification_seq_at_start);
+    data.begin_site_sync("a");
+    data.finish_sync(Ok(()), &logger);
     request("a", None);
     assert_eq!(rx.next().now_or_never(), None);
 }
 
 #[test]
-fn sync_preserves_notifications_received_after_snapshot() {
+fn sync_all_preserves_notifications_received_after_start() {
     use futures::{FutureExt, StreamExt};
     use shvproto::DateTime;
 
@@ -59,16 +62,19 @@ fn sync_preserves_notifications_received_after_snapshot() {
         if initially_dirty {
             data.mark_notified("a");
         }
-        let pending_seqs = data.notification_seqs();
+        data.mark_notified("b");
+        data.begin_sync_all();
 
         data.mark_notified("a");
-        data.finish_sync(Ok(()), &logger, pending_seqs.get("a").copied());
+        data.finish_sync(Ok(()), &logger);
         data.queue_refresh("a", None, now, &tx);
         assert_eq!(rx.next().now_or_never(), Some(Some(SyncCommand::SyncSite("a".into()))));
 
-        data.finish_sync(Ok(()), &logger, data.notification_seq("a"));
+        data.begin_site_sync("a");
+        data.finish_sync(Ok(()), &logger);
         data.queue_refresh("a", None, now, &tx);
         assert_eq!(rx.next().now_or_never(), None);
+        assert!(data.is_dirty("b"));
     }
 }
 
