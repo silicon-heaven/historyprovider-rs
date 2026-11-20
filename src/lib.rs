@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use futures::channel::mpsc::{UnboundedSender, unbounded};
+use futures::channel::mpsc::unbounded;
 use log::info;
 use serde::Deserialize;
 use shvclient::client::Full;
@@ -23,10 +23,10 @@ mod alarmlog;
 mod pushlog;
 mod record;
 mod sites;
+mod snapshot;
 mod tree;
 mod sync;
 mod cleanup;
-mod dirtylog;
 mod records;
 mod util;
 pub mod alarm;
@@ -114,9 +114,9 @@ pub struct State {
     alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     state_alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     online_states: RwLock<BTreeMap<String, SiteOnlineStatus>>,
+    snapshots: RwLock<BTreeMap<String, snapshot::SiteSnapshot>>,
     config: HpConfig,
     sync_cmd_tx: DedupSender<sync::SyncCommand>,
-    dirtylog_cmd_tx: UnboundedSender<dirtylog::DirtyLogCommand>,
     app_closing: AtomicBool,
     last_sites_loaded: RwLock<Option<std::time::Instant>>,
     pub(crate) sites_reload_in_progress: AtomicBool,
@@ -126,7 +126,6 @@ pub struct State {
 pub struct AppTasks {
     sites_task: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     sync_task: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
-    dirtylog_task: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl AppTasks {
@@ -138,11 +137,6 @@ impl AppTasks {
         if let Some(task) = self.sync_task {
             task.await;
         }
-        app_state.dirtylog_cmd_tx.close_channel();
-        if let Some(task) = self.dirtylog_task {
-            task.await;
-        }
-
     }
 }
 
@@ -154,7 +148,6 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
     info!("Journal dir path: {}", std::fs::canonicalize(&hp_config.journal_dir).expect("Invalid journal dir").to_string_lossy());
 
     let (sync_cmd_tx, sync_cmd_rx) = crate::util::dedup_channel();
-    let (dirtylog_cmd_tx, dirtylog_cmd_rx) = unbounded();
     let (sites_cmd_tx, sites_cmd_rx) = unbounded();
 
     let app_state = Arc::new(State {
@@ -164,9 +157,9 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
         alarms: RwLock::default(),
         state_alarms: RwLock::default(),
         online_states: RwLock::default(),
+        snapshots: RwLock::default(),
         config: hp_config.clone(),
         sync_cmd_tx,
-        dirtylog_cmd_tx,
         app_closing: AtomicBool::new(false),
         last_sites_loaded: RwLock::new(None),
         sites_reload_in_progress: AtomicBool::new(false),
@@ -207,8 +200,7 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
             handle_signal(SignalKind::terminate());
 
             tasks.sites_task = Some(wrap_task(tokio::spawn(sites::sites_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sites_cmd_rx))));
-            tasks.sync_task = Some(wrap_task(tokio::spawn(sync::sync_task(client_cmd_tx.clone(), client_evt_rx.clone(), app_state.clone(), sync_cmd_rx))));
-            tasks.dirtylog_task = Some(wrap_task(tokio::spawn(dirtylog::dirtylog_task(client_cmd_tx, client_evt_rx, app_state.clone(), dirtylog_cmd_rx))));
+            tasks.sync_task = Some(wrap_task(tokio::spawn(sync::sync_task(client_cmd_tx, client_evt_rx, app_state.clone(), sync_cmd_rx))));
         }
     };
 
