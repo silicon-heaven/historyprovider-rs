@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::UnboundedSender;
 use futures::io::{BufReader, BufWriter};
@@ -24,21 +24,66 @@ use crate::cleanup::cleanup_log_files;
 use crate::records;
 use crate::sites::{SitesData, SubHpInfo};
 use crate::tree::{FileType, LsFilesEntry, METH_READ};
-use crate::util::{DedupReceiver, get_files, is_log_file, is_log2_file, msec_to_log2_filename};
+use crate::util::{DedupReceiver, DedupSender, get_files, is_log_file, is_log2_file, msec_to_log2_filename};
 use crate::State;
 
 #[derive(Default)]
-pub(crate) struct SyncInfo {
+pub(crate) struct SyncData {
     pub(crate) last_sync_timestamp: RwLock<Option<tokio::time::Instant>>,
     pub(crate) sites_sync_info: RwLock<BTreeMap<String, Vec<String>>>,
+    // An entry marks a site as dirty. Its flag is reset at sync start and set by notifications.
+    dirty_sites: Mutex<HashMap<String, bool>>,
 }
 
-impl SyncInfo {
-    pub(crate) async fn reset(&self, site: impl Into<String>) {
+impl SyncData {
+    pub(crate) fn mark_notified(&self, site: &str) {
+        self.dirty_sites.lock().expect("dirty sites lock").insert(site.into(), true);
+    }
+
+    fn begin_site_sync(&self, site: &str) {
+        if let Some(notified) = self.dirty_sites.lock().expect("dirty sites lock").get_mut(site) {
+            *notified = false;
+        }
+    }
+
+    fn begin_sync_all(&self) {
+        for notified in self.dirty_sites.lock().expect("dirty sites lock").values_mut() {
+            *notified = false;
+        }
+    }
+
+    fn is_dirty(&self, site: &str) -> bool {
+        self.dirty_sites.lock().expect("dirty sites lock").contains_key(site)
+    }
+
+    pub(crate) fn queue_refresh(&self, site: &str, until: Option<shvproto::DateTime>, now: shvproto::DateTime, tx: &DedupSender<SyncCommand>) {
+        if until.is_some_and(|dt| dt.epoch_msec() < now.epoch_msec()) {
+            return;
+        }
+        if self.is_dirty(site)
+            && let Err(err) = tx.send(SyncCommand::SyncSite(site.into()))
+        {
+            warn!("Cannot queue getLog refresh for {site}: {err}");
+        }
+    }
+
+    fn finish_sync(&self, result: Result<(), String>, logger: &SyncSiteLogger) {
+        match result {
+            Ok(()) => {
+                let mut dirty_sites = self.dirty_sites.lock().expect("dirty sites lock");
+                if dirty_sites.get(&logger.site) == Some(&false) {
+                    dirty_sites.remove(&logger.site);
+                }
+            }
+            Err(err) => logger.log(log::Level::Error, format!("site sync error: {err}")),
+        }
+    }
+
+    pub(crate) async fn reset_site_sync_log(&self, site: impl Into<String>) {
         self.sites_sync_info.write().await.insert(site.into(), Vec::new());
     }
 
-    pub(crate) async fn append(&self, site: impl AsRef<str>, msg: impl Into<String>) {
+    pub(crate) async fn append_site_sync_log(&self, site: impl AsRef<str>, msg: impl Into<String>) {
         if let Some(sync_info) = self.sites_sync_info.write().await.get_mut(site.as_ref()) {
             sync_info.push(msg.into());
         }
@@ -163,12 +208,12 @@ fn is_log_file_entry(entry: &LsFilesEntry) -> bool {
 
 async fn get_files_to_sync(
     client_cmd_tx: ClientCommandSender,
-    sites_data: SitesData,
+    sites_data: &SitesData,
     size_limit: u64,
 ) -> HashMap<String, Arc<Vec<LsFilesEntry>>>
 {
     info!("Getting files to sync");
-    let sites_journal_files = sites_data.sites_info
+    let mut sites_journal_files = sites_data.sites_info
         .iter()
         .filter_map(|(site_path, site_info)| {
             let Some(sub_hp) = sites_data.sub_hps.get(&site_info.sub_hp) else {
@@ -182,15 +227,16 @@ async fn get_files_to_sync(
                 let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
                 let client_cmd_tx = client_cmd_tx.clone();
                 Some(async move {
-                    let remote_files: Vec<LsFilesEntry> = RpcCall::new(&remote_journal_path, "lsfiles")
-                        .exec(&client_cmd_tx)
-                        .await
-                        .unwrap_or_default();
-                    remote_files
-                        .into_iter()
-                        .filter(is_log_file_entry)
-                        .map(|entry| (site_path, entry))
-                        .collect::<Vec<_>>()
+                    let remote_files = RpcCall::new(&remote_journal_path, "lsfiles")
+                        .exec::<Vec<LsFilesEntry>, _>(&client_cmd_tx)
+                        .await;
+                    match remote_files {
+                        Ok(files) => Some((site_path, files.into_iter().filter(is_log_file_entry).collect::<BTreeSet<_>>())),
+                        Err(err) => {
+                            warn!("Cannot list files for {site_path}: {err}");
+                            None
+                        }
+                    }
                 })
             } else {
                 None
@@ -198,24 +244,12 @@ async fn get_files_to_sync(
         }
         )
         .collect::<FuturesUnordered<_>>()
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        .filter_map(std::future::ready)
+        .collect::<HashMap<_, _>>()
+        .await;
 
-    let overall_size: u64 = sites_journal_files.iter().map(|(_, LsFilesEntry { size, .. })| size.cast_unsigned()).sum();
+    let overall_size: u64 = sites_journal_files.values().flatten().map(|entry| entry.size.cast_unsigned()).sum();
     info!("overall sync files size: {overall_size}, limit: {size_limit}");
-
-    let mut sites_journal_files = sites_journal_files
-        .into_iter()
-        .fold(HashMap::<_,BTreeSet<_>>::new(), |mut map, (site, entry)| {
-            map
-                .entry(site)
-                .or_default()
-                .insert(entry);
-            map
-        });
 
     // We keep at least one file for each site
     let mut deletable_files = sites_journal_files
@@ -852,9 +886,9 @@ pub(crate) async fn sync_task(
             while let Some(log_event) = logger_rx.next().await {
                 match log_event {
                     LogEvent::Reset { site } =>
-                        app_state.sync_info.reset(site).await,
+                        app_state.sync_data.reset_site_sync_log(site).await,
                     LogEvent::Append { site, message } =>
-                        app_state.sync_info.append(site, message).await,
+                        app_state.sync_data.append_site_sync_log(site, message).await,
                 }
             }
 
@@ -867,33 +901,25 @@ pub(crate) async fn sync_task(
     let max_journal_dir_size = app_state.config.max_journal_dir_size.bytes().cast_unsigned();
     let days_to_keep = app_state.config.days_to_keep;
 
+    // Sync commands run to completion before the next one, so syncs for a site never overlap.
     while let Some(cmd) = sync_cmd_rx.next().await {
-        fn on_sync_result(sync_result: Result<(), String>, sync_logger: &SyncSiteLogger) {
-            if let Err(err) = sync_result {
-                sync_logger.log(log::Level::Error, format!("site sync error: {err}"));
-            }
-        }
-
         match cmd {
             SyncCommand::SyncAll => {
                 log::info!("Sync logs start");
-                app_state.sync_info.last_sync_timestamp.write().await.replace(tokio::time::Instant::now());
+                app_state.sync_data.last_sync_timestamp.write().await.replace(tokio::time::Instant::now());
+                let sites_data = app_state.sites_data.read().await.clone();
+                app_state.sync_data.begin_sync_all();
                 let files_to_download = get_files_to_sync(
                     client_cmd_tx.clone(),
-                    app_state.sites_data.read().await.clone(),
+                    &sites_data,
                     max_journal_dir_size
                 ).await;
                 let max_sync_tasks = app_state.config.max_sync_tasks;
                 let semaphore = Arc::new(Semaphore::new(max_sync_tasks));
                 let mut sync_tasks = vec![];
                 let sync_start = tokio::time::Instant::now();
-                let SitesData { sites_info, sub_hps, .. } = app_state
-                    .sites_data
-                    .read()
-                    .await
-                    .clone();
-                for (site_path, site_info) in sites_info.iter() {
-                    let sub_hp = sub_hps
+                for (site_path, site_info) in sites_data.sites_info.iter() {
+                    let sub_hp = sites_data.sub_hps
                         .get(&site_info.sub_hp)
                         .unwrap_or_else(|| panic!("Sub HP for site {site_path} should be set"));
                     let permit = semaphore
@@ -916,7 +942,9 @@ pub(crate) async fn sync_task(
                                 .unwrap_or_else(|| panic!("Site {site_path} should be under its sub HP {}", site_info.sub_hp));
                             let remote_journal_path = join_path!("shv", &site_info.sub_hp, sync_path, site_suffix);
                             let download_chunk_size = *download_chunk_size;
-                            let file_list = files_to_download.get(&site_path).cloned().unwrap_or_default();
+                            let Some(file_list) = files_to_download.get(&site_path).cloned() else {
+                                continue;
+                            };
                             let sync_task = tokio::spawn(async move {
                                     let sync_logger = SyncSiteLogger::new(&site_path, logger_tx);
                                     let sync_result = sync_site_by_download(
@@ -929,7 +957,7 @@ pub(crate) async fn sync_task(
                                         Some(&file_list),
                                     ).await;
                                     sync_logger.log(log::Level::Info, "Syncing done");
-                                    on_sync_result(sync_result, &sync_logger);
+                                    app_state.sync_data.finish_sync(sync_result, &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -948,7 +976,7 @@ pub(crate) async fn sync_task(
                                     sync_logger.clone()
                                 ).await;
                                 sync_logger.log(log::Level::Info, "Syncing done");
-                                on_sync_result(sync_result, &sync_logger);
+                                app_state.sync_data.finish_sync(sync_result, &sync_logger);
                                 drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -975,7 +1003,7 @@ pub(crate) async fn sync_task(
                                         sync_logger.clone(),
                                     ).await;
                                     sync_logger.log(log::Level::Info, "syncing done");
-                                    on_sync_result(sync_result, &sync_logger);
+                                    app_state.sync_data.finish_sync(sync_result, &sync_logger);
                                     drop(permit);
                             });
                             sync_tasks.push(sync_task);
@@ -999,6 +1027,7 @@ pub(crate) async fn sync_task(
                     .await
                     .clone();
                 if let Some(site_info) = sites_info.get(&site) {
+                    app_state.sync_data.begin_site_sync(&site);
                     let sub_hp = sub_hps
                         .get(&site_info.sub_hp)
                         .unwrap_or_else(|| panic!("Sub HP for site {site} should be set"));
@@ -1021,7 +1050,7 @@ pub(crate) async fn sync_task(
                                 sync_logger.clone(),
                                 None,
                             ).await;
-                            on_sync_result(sync_result, &sync_logger);
+                            app_state.sync_data.finish_sync(sync_result, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Legacy { getlog_path } => {
@@ -1036,7 +1065,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone()
                             ).await;
-                            on_sync_result(sync_result, &sync_logger);
+                            app_state.sync_data.finish_sync(sync_result, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::Records { records } => {
@@ -1057,7 +1086,7 @@ pub(crate) async fn sync_task(
                                 &app_state.config.journal_dir,
                                 sync_logger.clone(),
                             ).await;
-                            on_sync_result(sync_result, &sync_logger);
+                            app_state.sync_data.finish_sync(sync_result, &sync_logger);
                             sync_logger.log(log::Level::Info, "syncing done");
                         }
                         SubHpInfo::PushLog => {

@@ -14,7 +14,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 
 use crate::alarm::Alarm;
-use crate::sync::SyncInfo;
+use crate::sync::SyncData;
 use self::sites::SiteOnlineStatus;
 use self::util::DedupSender;
 
@@ -110,7 +110,7 @@ impl Drop for ReloadGuard<'_> {
 pub struct State {
     start_time: std::time::Instant,
     sites_data: RwLock<sites::SitesData>,
-    sync_info: sync::SyncInfo,
+    sync_data: SyncData,
     alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     state_alarms: RwLock<BTreeMap<String, Vec<AlarmWithTimestamp>>>,
     online_states: RwLock<BTreeMap<String, SiteOnlineStatus>>,
@@ -153,7 +153,7 @@ pub fn make_client(hp_config: &HpConfig, tasks: &mut AppTasks) -> shvrpc::Result
     let app_state = Arc::new(State {
         start_time: std::time::Instant::now(),
         sites_data: RwLock::default(),
-        sync_info: SyncInfo::default(),
+        sync_data: SyncData::default(),
         alarms: RwLock::default(),
         state_alarms: RwLock::default(),
         online_states: RwLock::default(),

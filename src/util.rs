@@ -147,7 +147,7 @@ pub(crate) fn msec_to_log2_filename(msec: i64) -> String {
 
 #[cfg(test)]
 pub mod testing {
-    use crate::{State, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::{SyncCommand, SyncInfo}, util::{DedupReceiver, dedup_channel}};
+    use crate::{State, max_journal_dir_size_default, max_sync_tasks_default, sites::{SiteInfo, SitesData, SubHpInfo}, sync::{SyncCommand, SyncData}, util::{DedupReceiver, dedup_channel}};
     use futures::{channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, StreamExt};
     use log::debug;
     use shvclient::{clientapi::{ClientCommand, ClientEventsReceiver}, ClientCommandSender};
@@ -428,7 +428,7 @@ pub mod testing {
                 ])),
                 typeinfos: Arc::default(),
             }),
-            sync_info: SyncInfo::default(),
+            sync_data: SyncData::default(),
             alarms: RwLock::default(),
             state_alarms: RwLock::default(),
             online_states: RwLock::default(),

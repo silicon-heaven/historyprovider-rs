@@ -12,6 +12,72 @@ use shvproto::{make_list, make_map, RpcValue};
 use shvrpc::rpcframe::RpcFrame;
 use shvrpc::rpcmessage::RpcError;
 
+#[test]
+fn getlog_refresh_queues_dirty_sites_until_sync_succeeds() {
+    use futures::{FutureExt, StreamExt};
+    use shvproto::DateTime;
+
+    let data = super::SyncData::default();
+    let (tx, mut rx) = dedup_channel();
+    let now = DateTime::from_epoch_msec(1000);
+    let request = |site, until| data.queue_refresh(site, until, now, &tx);
+    let refresh = Some(Some(SyncCommand::SyncSite("a".into())));
+
+    data.mark_notified("a");
+    request("a", Some(DateTime::from_epoch_msec(999)));
+    request("b", None);
+    assert_eq!(rx.next().now_or_never(), None);
+
+    request("a", Some(now));
+    request("a", None);
+    assert_eq!(rx.next().now_or_never(), refresh);
+    assert_eq!(rx.next().now_or_never(), None);
+
+    let (log_tx, _log_rx) = futures::channel::mpsc::unbounded();
+    let logger = super::SyncSiteLogger::new("a", log_tx);
+    data.begin_site_sync("a");
+    request("a", None);
+    assert_eq!(rx.next().now_or_never(), refresh);
+    data.finish_sync(Err("failed".into()), &logger);
+    request("a", Some(DateTime::from_epoch_msec(1001)));
+    assert_eq!(rx.next().now_or_never(), refresh);
+    data.begin_site_sync("a");
+    data.finish_sync(Ok(()), &logger);
+    request("a", None);
+    assert_eq!(rx.next().now_or_never(), None);
+}
+
+#[test]
+fn sync_all_preserves_notifications_received_after_start() {
+    use futures::{FutureExt, StreamExt};
+    use shvproto::DateTime;
+
+    for initially_dirty in [false, true] {
+        let data = super::SyncData::default();
+        let (tx, mut rx) = dedup_channel();
+        let (log_tx, _log_rx) = futures::channel::mpsc::unbounded();
+        let logger = super::SyncSiteLogger::new("a", log_tx);
+        let now = DateTime::from_epoch_msec(1000);
+
+        if initially_dirty {
+            data.mark_notified("a");
+        }
+        data.mark_notified("b");
+        data.begin_sync_all();
+
+        data.mark_notified("a");
+        data.finish_sync(Ok(()), &logger);
+        data.queue_refresh("a", None, now, &tx);
+        assert_eq!(rx.next().now_or_never(), Some(Some(SyncCommand::SyncSite("a".into()))));
+
+        data.begin_site_sync("a");
+        data.finish_sync(Ok(()), &logger);
+        data.queue_refresh("a", None, now, &tx);
+        assert_eq!(rx.next().now_or_never(), None);
+        assert!(data.is_dirty("b"));
+    }
+}
+
 struct SyncTaskTestState {
     dedup_sender: DedupSender<SyncCommand>,
     sync_finished: oneshot::Receiver<()>,

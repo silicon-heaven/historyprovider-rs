@@ -867,6 +867,7 @@ pub(crate) async fn sites_task(
                         let Some(parsed_notification) = parse_notification(&msg, &app_state.sites_data.read().await.sites_info) else {
                             continue
                         };
+                        app_state.sync_data.mark_notified(&parsed_notification.site_path);
                         if let Some(tx) = state.online_status_channels.get(&parsed_notification.site_path) {
                             tx.unbounded_send(SiteEvent::Notification(notification_entry(parsed_notification, DateTime::now()))).ok();
                         }
