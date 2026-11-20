@@ -30,14 +30,14 @@ impl SiteSnapshot {
         matches!(self, Self::Ready(_))
     }
 
-    pub(crate) fn record(&mut self, entry: JournalEntry) {
+    pub(crate) fn upsert_record(&mut self, entry: JournalEntry) {
         match self {
             Self::Initializing(entries) | Self::Ready(entries) => insert(entries, entry),
             Self::Invalid => (),
         }
     }
 
-    pub(crate) fn complete(&mut self, mut entries: SnapshotEntries) -> Option<&SnapshotEntries> {
+    pub(crate) fn finalize(&mut self, mut entries: SnapshotEntries) -> Option<&SnapshotEntries> {
         let Self::Initializing(buffered) = self else {
             return None;
         };
@@ -57,15 +57,33 @@ fn insert(entries: &mut SnapshotEntries, entry: JournalEntry) {
     entries.insert((entry.path.clone(), entry.signal.clone(), entry.source.clone()), entry);
 }
 
+#[repr(i32)]
+enum SnapshotParam {
+    Time = 1,
+    Filter = 2,
+}
+
+// Snapshot row keys differ from the log3 record keys.
+#[repr(i32)]
+enum SnapshotField {
+    Timestamp = 1,
+    Path = 3,
+    Signal = 4,
+    Source = 5,
+    Value = 6,
+    UserId = 7,
+    Repeat = 8,
+}
+
 pub(crate) fn snapshot_filter(param: &RpcValue) -> Result<Option<Glob>, String> {
     if param.is_null() {
         return Ok(None);
     }
     let param = shvproto::IMap::try_from(param)?;
-    if param.contains_key(&1) {
+    if param.contains_key(&(SnapshotParam::Time as i32)) {
         return Err("getSnapshot only supports the current snapshot; Time is not supported".into());
     }
-    param.get(&2).filter(|ri| !ri.is_null())
+    param.get(&(SnapshotParam::Filter as i32)).filter(|ri| !ri.is_null())
         .map(|ri| ShvRI::try_from(ri)?.to_glob())
         .transpose()
 }
@@ -85,22 +103,22 @@ pub(crate) fn snapshot_to_rpcvalue(
             return None;
         }
         let mut row = shvproto::IMap::new();
-        row.insert(1, DateTime::from_epoch_msec(entry.epoch_msec).into());
+        row.insert(SnapshotField::Timestamp as i32, DateTime::from_epoch_msec(entry.epoch_msec).into());
         if !path.is_empty() {
-            row.insert(3, path.into());
+            row.insert(SnapshotField::Path as i32, path.into());
         }
         if entry.signal != "chng" {
-            row.insert(4, entry.signal.clone().into());
+            row.insert(SnapshotField::Signal as i32, entry.signal.clone().into());
         }
         if entry.source != "get" {
-            row.insert(5, entry.source.clone().into());
+            row.insert(SnapshotField::Source as i32, entry.source.clone().into());
         }
-        row.insert(6, entry.value.clone());
+        row.insert(SnapshotField::Value as i32, entry.value.clone());
         if !entry.user_id.is_empty() {
-            row.insert(7, entry.user_id.clone().into());
+            row.insert(SnapshotField::UserId as i32, entry.user_id.clone().into());
         }
         if entry.repeat {
-            row.insert(8, true.into());
+            row.insert(SnapshotField::Repeat as i32, true.into());
         }
         Some(RpcValue::from(row))
     }).collect::<Vec<_>>().into()
@@ -122,28 +140,27 @@ pub(crate) fn notification_entry(notification: ParsedNotification, timestamp: Da
     }
 }
 
-// getSnapshot uses snapshot IMap keys, which differ from the log3 record keys.
 fn parse_snapshot(value: RpcValue) -> Result<SnapshotEntries, String> {
     let rows = <Vec<RpcValue>>::try_from(value)?;
     let mut entries = SnapshotEntries::new();
     for row in rows {
         let row = shvproto::IMap::try_from(row)?;
-        let timestamp = row.get(&1).ok_or("Snapshot entry has no timestamp")?;
+        let timestamp = row.get(&(SnapshotField::Timestamp as i32)).ok_or("Snapshot entry has no timestamp")?;
         let timestamp = DateTime::try_from(timestamp)?;
-        let string_field = |key, default: &str| -> Result<String, String> {
-            row.get(&key).map_or_else(|| Ok(default.into()), String::try_from)
+        let string_field = |field: SnapshotField, default: &str| -> Result<String, String> {
+            row.get(&(field as i32)).map_or_else(|| Ok(default.into()), String::try_from)
         };
         let entry = JournalEntry {
             epoch_msec: timestamp.epoch_msec(),
             epoch_msec_orig: None,
-            path: string_field(3, "")?,
-            signal: string_field(4, "chng")?,
-            source: string_field(5, "get")?,
-            value: row.get(&6).cloned().unwrap_or_else(RpcValue::null),
+            path: string_field(SnapshotField::Path, "")?,
+            signal: string_field(SnapshotField::Signal, "chng")?,
+            source: string_field(SnapshotField::Source, "get")?,
+            value: row.get(&(SnapshotField::Value as i32)).cloned().unwrap_or_else(RpcValue::null),
             access_level: AccessLevel::Read as i32,
             short_time: -1,
-            user_id: string_field(7, "")?,
-            repeat: row.get(&8).map_or(Ok(false), bool::try_from)?,
+            user_id: string_field(SnapshotField::UserId, "")?,
+            repeat: row.get(&(SnapshotField::Repeat as i32)).map_or(Ok(false), bool::try_from)?,
             provisional: false,
         };
         insert(&mut entries, entry);

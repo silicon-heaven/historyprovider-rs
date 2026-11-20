@@ -391,7 +391,7 @@ fn online_status_worker(
                 entries = async { snapshot_fetch.as_mut().expect("Snapshot fetch exists").await }, if snapshot_fetch.is_some() => {
                     snapshot_fetch = None;
                     let mut snapshots = app_state.snapshots.write().await;
-                    if let Some(entries) = snapshots.get_mut(&site).and_then(|snapshot| snapshot.complete(entries)) {
+                    if let Some(entries) = snapshots.get_mut(&site).and_then(|snapshot| snapshot.finalize(entries)) {
                         update_site_alarms(&site, entries.values(), true, &client_commands, &app_state).await;
                     }
                     continue;
@@ -437,7 +437,7 @@ fn online_status_worker(
                     )));
                 }
                 if let Some(entry) = notification {
-                    snapshot.record(entry.clone());
+                    snapshot.upsert_record(entry.clone());
                     let ready = snapshot.is_ready();
                     drop(snapshots);
                     if ready {
