@@ -272,7 +272,7 @@ async fn shvjournal_request_handler(
                         .map_err(rpc_error_filesystem)
                 ),
                 METH_SYNC_LOG => return m.resolve(METHODS, async move || sync_log_request_handler(&param, app_state).await),
-                METH_SYNC_INFO => return m.resolve(METHODS, async move || Ok((*app_state.sync_info.sites_sync_info.read().await).clone())),
+                METH_SYNC_INFO => return m.resolve(METHODS, async move || Ok((*app_state.sync_data.sites_sync_info.read().await).clone())),
                 METH_SANITIZE_LOG => return m.resolve(METHODS, async move || app_state.sync_cmd_tx
                         .send(crate::sync::SyncCommand::Cleanup)
                         .map(|_| true)
@@ -507,6 +507,7 @@ async fn getlog3_handler_rq(
     param: &RpcValue,
     app_state: Arc<State>,
 ) -> Result<RpcValue, RpcError> {
+    let now = shvproto::DateTime::now();
     let params = GetLog3Params::try_from(param)
         .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
 
@@ -515,7 +516,7 @@ async fn getlog3_handler_rq(
         records_site_for_path(&sites_data, site_path)
             .ok_or_else(|| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog path: {site_path}")))?
     };
-    let now = shvproto::DateTime::now();
+    app_state.sync_data.queue_refresh(&site_path, params.until, now, &app_state.sync_cmd_tx);
     let since = params.since.unwrap_or(now);
     let until = params.until.unwrap_or(now);
     let records = records::getlog_records(
@@ -599,8 +600,10 @@ async fn getlog_handler_rq(
     param: &RpcValue,
     app_state: Arc<State>,
 ) -> Result<RpcValue, RpcError> {
+    let now = shvproto::DateTime::now();
     let params = GetLog2Params::try_from(param)
         .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
+    app_state.sync_data.queue_refresh(site_path, params.until, now, &app_state.sync_cmd_tx);
     let getlog_result = getlog_handler(site_path, &params, app_state).await?;
     let chained_entries = getlog_result.snapshot_entries.iter().map(Arc::as_ref).chain(getlog_result.event_entries.iter().map(Arc::as_ref));
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
