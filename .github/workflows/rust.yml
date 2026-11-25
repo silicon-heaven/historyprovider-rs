@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -98,7 +99,7 @@ jobs:
   create-releases:
     name: Create releases
     needs: [build]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/backport-fix-existing-alarms-always-resetting')
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
