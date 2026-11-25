@@ -188,8 +188,14 @@ fn collect_sub_hps(
         .collect()
 }
 
+
+pub(crate) struct UpdateAlarmsResult {
+    alarm_unstaled: bool,
+    pub(crate) updated_alarms: Vec<AlarmWithTimestamp>,
+}
+
 type AlarmCollector = fn(type_info: &TypeInfo, shv_path: &str, value: &RpcValue) -> Vec<Alarm>;
-pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<AlarmWithTimestamp> {
+pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> UpdateAlarmsResult {
     let new_alarms = alarms_colector(type_info, property_path, value)
         .into_iter()
         .map(|alarm| AlarmWithTimestamp {
@@ -198,29 +204,32 @@ pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &m
             stale: false,
         });
 
-    let mut updated_alarms = Vec::new();
+    let mut result = UpdateAlarmsResult { alarm_unstaled: false, updated_alarms: Vec::new() };
 
     for new_alarm in new_alarms {
         if new_alarm.alarm.is_active {
             if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.alarm.path) {
                 if existing.alarm != new_alarm.alarm {
                     *existing = new_alarm.clone();
-                    updated_alarms.push(new_alarm);
+
+                    result.updated_alarms.push(new_alarm);
                 }
+
+                existing.stale = false;
+                result.alarm_unstaled = true;
             } else {
                 alarms_for_site.push(new_alarm.clone());
-                updated_alarms.push(new_alarm);
             }
         } else {
             let old_len = alarms_for_site.len();
             alarms_for_site.retain(|a| a.alarm.path != new_alarm.alarm.path);
             if alarms_for_site.len() != old_len {
-                updated_alarms.push(new_alarm);
+                result.updated_alarms.push(new_alarm);
             }
         }
     }
 
-    updated_alarms
+    result
 }
 
 const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
@@ -363,7 +372,8 @@ async fn update_site_alarms<'a>(
             alarms.clear();
         }
         for entry in entries.clone() {
-            changed |= !update_alarms(collector, alarms, type_info, &entry.path, &entry.value, DateTime::from_epoch_msec(entry.epoch_msec)).is_empty();
+            let update_alarms_result = update_alarms(collector, alarms, type_info, &entry.path, &entry.value, DateTime::from_epoch_msec(entry.epoch_msec));
+            changed |= !update_alarms_result.updated_alarms.is_empty() || update_alarms_result.alarm_unstaled;
         }
         if changed {
             client_commands.send_message(shvrpc::RpcMessage::new_signal(site, signal))
