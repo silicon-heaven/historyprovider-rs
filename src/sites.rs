@@ -187,8 +187,14 @@ fn collect_sub_hps(
         .collect()
 }
 
+
+pub(crate) struct UpdateAlarmsResult {
+    alarm_unstaled: bool,
+    pub(crate) updated_alarms: Vec<AlarmWithTimestamp>,
+}
+
 type AlarmCollector = fn(type_info: &TypeInfo, shv_path: &str, value: &RpcValue) -> Vec<Alarm>;
-pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> Vec<AlarmWithTimestamp> {
+pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &mut Vec<AlarmWithTimestamp>, type_info: &TypeInfo, property_path: &str, value: &RpcValue, timestamp: shvproto::DateTime) -> UpdateAlarmsResult {
     let new_alarms = alarms_colector(type_info, property_path, value)
         .into_iter()
         .map(|alarm| AlarmWithTimestamp {
@@ -197,29 +203,32 @@ pub(crate) fn update_alarms(alarms_colector: AlarmCollector, alarms_for_site: &m
             stale: false,
         });
 
-    let mut updated_alarms = Vec::new();
+    let mut result = UpdateAlarmsResult { alarm_unstaled: false, updated_alarms: Vec::new() };
 
     for new_alarm in new_alarms {
         if new_alarm.alarm.is_active {
             if let Some(existing) = alarms_for_site.iter_mut().find(|a| a.alarm.path == new_alarm.alarm.path) {
                 if existing.alarm != new_alarm.alarm {
                     *existing = new_alarm.clone();
-                    updated_alarms.push(new_alarm);
+
+                    result.updated_alarms.push(new_alarm);
                 }
+
+                existing.stale = false;
+                result.alarm_unstaled = true;
             } else {
                 alarms_for_site.push(new_alarm.clone());
-                updated_alarms.push(new_alarm);
             }
         } else {
             let old_len = alarms_for_site.len();
             alarms_for_site.retain(|a| a.alarm.path != new_alarm.alarm.path);
             if alarms_for_site.len() != old_len {
-                updated_alarms.push(new_alarm);
+                result.updated_alarms.push(new_alarm);
             }
         }
     }
 
-    updated_alarms
+    result
 }
 
 const SITE_OFFLINE_ALARM_KEY: &str = "site-offline";
@@ -864,8 +873,8 @@ pub(crate) async fn sites_task(
                         let impl_update_alarms = |alarm_table: &mut BTreeMap<String, Vec<AlarmWithTimestamp>>, alarm_collector, signal_name| {
                             let alarms_for_site = alarm_table.entry(parsed_notification.site_path.clone()).or_default();
 
-                            let updated = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
-                            if !updated.is_empty() {
+                            let update_alarms_result = update_alarms(alarm_collector, alarms_for_site, type_info, &parsed_notification.property_path, &parsed_notification.param, shvproto::DateTime::now());
+                            if !update_alarms_result.updated_alarms.is_empty() || update_alarms_result.alarm_unstaled {
                                 client_cmd_tx.send_message(shvrpc::RpcMessage::new_signal(&parsed_notification.site_path, signal_name))
                                     .unwrap_or_else(|err| log::error!("alarms: Cannot send signal ({err})"));
                             }
