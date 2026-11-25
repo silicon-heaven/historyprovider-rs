@@ -127,7 +127,7 @@ jobs:
           name: historyprovider ${{ steps.get-version.outputs.version }}
           tag_name: ${{ steps.get-version.outputs.version }}
           fail_on_unmatched_files: true
-          make_latest: true
+          make_latest: ${{ github.event_name != 'workflow_dispatch' }}
           body: |
             historyprovider ${{ steps.get-version.outputs.version }}
 
