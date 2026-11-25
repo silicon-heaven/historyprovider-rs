@@ -88,15 +88,22 @@ pub(crate) fn snapshot_filter(param: &RpcValue) -> Result<Option<Glob>, String> 
         .transpose()
 }
 
+pub(crate) fn snapshot_entries_for_path<'a>(
+    entries: &'a SnapshotEntries,
+    path_prefix: &'a str,
+) -> impl Iterator<Item = (&'a str, &'a JournalEntry)> {
+    entries.values().filter_map(move |entry| {
+        Some((strip_prefix_path(&entry.path, path_prefix)?, entry))
+    })
+}
+
 pub(crate) fn snapshot_to_rpcvalue(
     entries: &SnapshotEntries,
     path_prefix: &str,
     filter: Option<&Glob>,
-    access_level: i32,
 ) -> RpcValue {
-    entries.values().filter_map(|entry| {
-        let path = strip_prefix_path(&entry.path, path_prefix)?;
-        if entry.access_level > access_level || filter.is_some_and(|filter| {
+    snapshot_entries_for_path(entries, path_prefix).filter_map(|(path, entry)| {
+        if filter.is_some_and(|filter| {
             !ShvRI::from_path_method_signal(path, &entry.source, Some(&entry.signal))
                 .is_ok_and(|ri| filter.match_shv_ri(&ri))
         }) {

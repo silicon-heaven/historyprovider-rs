@@ -14,7 +14,7 @@ struct TestClient {
     events: UnboundedSender<ConnectionEvent>,
     commands: UnboundedReceiver<ConnectionCommand>,
     task: tokio::task::JoinHandle<shvrpc::Result<()>>,
-    _journal_dir: tempfile::TempDir,
+    journal_dir: tempfile::TempDir,
 }
 
 impl TestClient {
@@ -36,7 +36,7 @@ impl TestClient {
         let (commands, command_receiver) = unbounded();
         events.unbounded_send(ConnectionEvent::Connected(commands)).unwrap();
         let task = tokio::spawn(client.mock_run_with_init(|_, _| {}, receiver));
-        let mut result = Self { state, events, commands: command_receiver, task, _journal_dir: journal_dir };
+        let mut result = Self { state, events, commands: command_receiver, task, journal_dir };
         let request = result.message().await;
         assert_eq!(request.shv_path(), Some(".broker"));
         let mut response = request.prepare_response().unwrap();
@@ -116,6 +116,7 @@ async fn current_snapshot_format_filtering_and_discovery() {
 
         let result = client.call(".history/group/site/device", "getSnapshot", RpcValue::null(), AccessLevel::Read).await.unwrap();
         let expected = RpcValue::from_cpon(r#"[
+            i{1:d"1970-01-01T00:00:01Z", 3:"private", 6:4},
             i{1:d"1970-01-01T00:00:01Z", 3:"status", 5:"custom", 6:3},
             i{1:d"1970-01-01T00:00:01Z", 3:"status", 6:1},
             i{1:d"1970-01-01T00:00:01Z", 3:"status", 4:"cmdlog", 5:"set", 6:2, 7:"operator", 8:true}
@@ -127,10 +128,10 @@ async fn current_snapshot_format_filtering_and_discovery() {
         let filter = RpcValue::from_cpon(r#"i{2:"**:get:chng"}"#).unwrap();
         let leaf = client.call(".history/group/site/device/status", "getSnapshot", filter, AccessLevel::Read).await.unwrap();
         assert_eq!(leaf, shvproto::make_list![shvproto::make_imap!(1 => DateTime::from_epoch_msec(1000), 6 => 1)].into());
-        let all = client.call(".history/group/site", "getSnapshot", RpcValue::null(), AccessLevel::Service).await.unwrap();
+        let all = client.call(".history/group/site", "getSnapshot", RpcValue::null(), AccessLevel::Read).await.unwrap();
         assert_eq!(all.as_list().len(), 5);
-        let browse = client.call(".history/group/site", "getSnapshot", RpcValue::null(), AccessLevel::Browse).await.unwrap();
-        assert_eq!(browse, shvproto::List::new().into());
+        let error = client.call(".history/group/site", "getSnapshot", RpcValue::null(), AccessLevel::Browse).await.unwrap_err();
+        assert_eq!(error.code, RpcErrorCode::PermissionDenied.into());
         client.close().await;
     }
 }
@@ -162,5 +163,76 @@ async fn snapshot_unavailable_empty_and_invalid_requests() {
     assert!(!root.as_list().contains(&".history".into()));
     let error = client.call(".history/group/site", "getSnapshot", RpcValue::null(), AccessLevel::Read).await.unwrap_err();
     assert_eq!(error.code, RpcErrorCode::MethodNotFound.into());
+    client.close().await;
+}
+
+#[tokio::test]
+async fn legacy_getlog_last_uses_current_snapshot() {
+    let mut client = TestClient::new(SubHpInfo::Normal {
+        sync_path: ".app/history".into(), download_chunk_size: 1,
+    }).await;
+    let error = client.call(
+        "group/site", METH_GET_LOG, shvproto::make_map!("since" => "last").into(), AccessLevel::Read,
+    ).await.unwrap_err();
+    assert_eq!(error.code, RpcErrorCode::MethodCallException.into());
+
+    client.set_snapshot(SiteSnapshot::Ready(entries())).await;
+    for with_paths_dict in [true, false] {
+        let params = shvproto::make_map!(
+            "since" => "last",
+            "pathPattern" => "device/**",
+            "withPathsDict" => with_paths_dict,
+            "recordCountLimit" => 1,
+        );
+        let result = client.call("group/site", METH_GET_LOG, params.into(), AccessLevel::Read).await.unwrap();
+        let log = Log2Reader::new(result).unwrap();
+        let header = log.header();
+        assert_eq!(header.log_version, 2);
+        assert_eq!(header.record_count, 4);
+        assert_eq!(header.record_count_limit, 1);
+        assert!(header.with_snapshot);
+        assert!(matches!(header.log_params.since, GetLog2Since::LastEntry));
+        assert_eq!(header.since.epoch_msec(), 1000);
+        assert_eq!(header.until, header.since);
+        assert_eq!(header.with_paths_dict, with_paths_dict);
+        assert_eq!(header.paths_dict.is_empty(), !with_paths_dict);
+
+        let rows = log.collect::<Result<Vec<_>, _>>().unwrap();
+        assert!(rows.iter().all(|row| row.epoch_msec == 1000 && row.repeat));
+        assert_eq!(rows.iter().map(|row| (row.path.as_str(), row.value.as_i64())).collect::<Vec<_>>(),
+            vec![("device/private", 4), ("device/status", 3), ("device/status", 1), ("device/status", 2)]);
+        assert_eq!(rows.last().unwrap().signal, "cmdlog");
+        assert_eq!(rows.last().unwrap().user_id, "operator");
+    }
+    client.close().await;
+}
+
+#[tokio::test]
+async fn legacy_getlog_datetime_uses_journal() {
+    let mut client = TestClient::new(SubHpInfo::Normal {
+        sync_path: ".app/history".into(), download_chunk_size: 1,
+    }).await;
+    client.set_snapshot(SiteSnapshot::Ready(entries())).await;
+    let dir = client.journal_dir.path().join("group/site");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let mut data = Vec::new();
+    let mut writer = shvrpc::journalrw::JournalWriterLog2::new(&mut data);
+    writer.append(&JournalEntry {
+        epoch_msec: 500,
+        path: "from-journal".into(),
+        value: 42.into(),
+        ..entries().into_values().next().unwrap()
+    }).await.unwrap();
+    tokio::fs::write(dir.join("1970-01-01T00-00-00-500.log2"), data).await.unwrap();
+
+    for since in [DateTime::from_epoch_msec(100), DateTime::from_epoch_msec(4_102_444_800_000)] {
+        let params = shvproto::make_map!("since" => since, "withSnapshot" => true);
+        let result = client.call("group/site", METH_GET_LOG, params.into(), AccessLevel::Read).await.unwrap();
+        let mut log = Log2Reader::new(result).unwrap();
+        let entry = log.next().unwrap().unwrap();
+        assert_eq!(entry.path, "from-journal");
+        assert_eq!(entry.value, 42.into());
+        assert!(log.next().is_none());
+    }
     client.close().await;
 }
