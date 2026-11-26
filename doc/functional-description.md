@@ -138,12 +138,12 @@ calls to get on all paths.
 ### `.history/<site>[/<path>]:getSnapshot`
 | Parameter | Result | Access |
 |-----------|--------|--------|
-| IMap\|Null | !getSnapshotR | Browse |
+| IMap\|Null | !getSnapshotR | rd |
 
 Returns the current cached snapshot for a non-pushlog site, optionally restricted to a subtree.
 The method has the `HintLargeResult` flag. The optional IMap field `2` is an RI filter,
 relative to the requested path, matching path, source method, and signal. A null parameter
-or filter returns all matching entries permitted by the caller's access level.
+or filter returns all entries under the requested path. Entries are not filtered by access level.
 
 The result follows the [SHV snapshot format](https://silicon-heaven.github.io/shv-doc/rpcmethods/history.html#historygetsnapshot):
 a list of IMaps with timestamp (`1`), relative path (`3`), signal (`4`), source (`5`),
@@ -226,7 +226,7 @@ Total log size of all files for this site.
 |-----------|----------|--------|
 | Map       | List     | rd     |
 
-Retrieves logs for the site. The parameter is in this format:
+Retrieves logs for the site without filtering entries by access level. The parameter is in this format:
 ```typescript
 {
     recordCountLimit: Int; // The maximum records in the result.

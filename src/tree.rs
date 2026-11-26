@@ -18,7 +18,7 @@ use shvrpc::rpc::ShvRI;
 use shvrpc::rpcmessage::{RpcError, RpcErrorCode};
 use shvrpc::util::{children_on_path, find_longest_path_prefix};
 use shvrpc::{RpcMessage, RpcMessageMetaTags};
-use shvrpc::journalrw::{journal_entries_to_rpcvalue, GetLog2Params, Log2Header, Log2Reader};
+use shvrpc::journalrw::{journal_entries_to_rpcvalue, matches_path_pattern, GetLog2Params, GetLog2Since, Log2Header, Log2Reader};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLockReadGuard;
 use tokio_stream::wrappers::ReadDirStream;
@@ -26,11 +26,11 @@ use tokio_util::io::ReaderStream;
 
 use crate::alarmlog::{alarmlog_impl, AlarmLogParams};
 use crate::cleanup::collect_log_files;
-use crate::getlog::getlog_handler;
+use crate::getlog::{getlog_handler, GetLogResult, RECORD_COUNT_LIMIT_MAX};
 use crate::pushlog::pushlog_impl;
 use crate::records;
 use crate::sites::{SitesData, SubHpInfo};
-use crate::snapshot::{SiteSnapshot, snapshot_filter, snapshot_to_rpcvalue};
+use crate::snapshot::{SiteSnapshot, SnapshotEntries, snapshot_entries_for_path, snapshot_filter, snapshot_to_rpcvalue};
 use crate::{AlarmWithTimestamp, HpConfig, State};
 
 // History site node methods
@@ -44,7 +44,7 @@ const METH_PUSH_LOG: &str = "pushLog";
 
 const META_METHOD_LS_FILES: MetaMethod = MetaMethod::new_static(METH_LS_FILES, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Map|Null", "List", &[], "");
 const META_METHOD_GET_LOG: MetaMethod = MetaMethod::new_static(METH_GET_LOG, shvrpc::metamethod::Flags::None, AccessLevel::Read, "RpcValue", "RpcValue", &[], "");
-const META_METHOD_GET_SNAPSHOT: MetaMethod = MetaMethod::new_static(METH_GET_SNAPSHOT, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Browse, "i{s|n:ri:2}|n", "!getSnapshotR", &[], "Returns the current snapshot. Historical queries are not supported.");
+const META_METHOD_GET_SNAPSHOT: MetaMethod = MetaMethod::new_static(METH_GET_SNAPSHOT, shvrpc::metamethod::Flags::LargeResultHint, AccessLevel::Read, "i{s|n:ri:2}|n", "!getSnapshotR", &[], "Returns the current snapshot. Historical queries are not supported.");
 const META_METHOD_ONLINE_STATUS: MetaMethod = MetaMethod::new_static(METH_ONLINE_STATUS, shvrpc::metamethod::Flags::IsGetter, AccessLevel::Read, "Null", "i[Unknown,Offline,Online]", &[("onlinestatuschng", None)], "");
 const META_METHOD_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("alarmmod", Some("Null"))], "");
 const META_METHOD_STATE_ALARM_TABLE: MetaMethod = MetaMethod::new_static(METH_STATE_ALARM_TABLE, shvrpc::metamethod::Flags::None, AccessLevel::Read, "Null", "List", &[("statealarmmod", Some("Null"))], "");
@@ -551,11 +551,20 @@ async fn time_drift_handler(
 async fn getsnapshot_handler(
     path: &str,
     param: &RpcValue,
-    access_level: i32,
     app_state: Arc<State>,
 ) -> Result<RpcValue, RpcError> {
     let filter = snapshot_filter(param)
         .map_err(|err| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getSnapshot parameters: {err}")))?;
+    with_current_snapshot(path, &app_state, |entries, prefix| {
+        snapshot_to_rpcvalue(entries, prefix, filter.as_ref())
+    }).await
+}
+
+async fn with_current_snapshot<T>(
+    path: &str,
+    app_state: &State,
+    format_snapshot: impl FnOnce(&SnapshotEntries, &str) -> T,
+) -> Result<T, RpcError> {
     let (site, prefix) = {
         let sites_data = app_state.sites_data.read().await;
         snapshot_site_for_path(&sites_data, path)
@@ -566,7 +575,7 @@ async fn getsnapshot_handler(
     let Some(SiteSnapshot::Ready(entries)) = snapshots.get(&site) else {
         return Err(RpcError::new(RpcErrorCode::MethodCallException, format!("Snapshot for {site} is not ready")));
     };
-    Ok(snapshot_to_rpcvalue(entries, &prefix, filter.as_ref(), access_level))
+    Ok(format_snapshot(entries, &prefix))
 }
 
 fn snapshot_site_for_path<'a>(sites_data: &'a SitesData, path: &'a str) -> Option<(&'a str, &'a str)> {
@@ -604,7 +613,37 @@ async fn getlog_handler_rq(
     let params = GetLog2Params::try_from(param)
         .map_err(|e| RpcError::new(RpcErrorCode::InvalidParam, format!("Wrong getLog parameters: {e}")))?;
     app_state.sync_data.queue_refresh(site_path, params.until, now, &app_state.sync_cmd_tx);
-    let getlog_result = getlog_handler(site_path, &params, app_state).await?;
+    let getlog_result = if matches!(params.since, GetLog2Since::LastEntry) {
+        with_current_snapshot(site_path, &app_state, |entries, prefix| {
+            let entries = snapshot_entries_for_path(entries, prefix)
+                .filter(|(path, _)| params.path_pattern.as_ref().is_none_or(|pattern| matches_path_pattern(path, pattern)))
+                .collect::<Vec<_>>();
+            let since_ms = entries.iter().map(|(_, entry)| entry.epoch_msec).max().unwrap_or(0);
+            let since = shvproto::DateTime::from_epoch_msec(since_ms);
+            let snapshot_entries = entries.into_iter()
+                .map(|(path, entry)| Arc::new(shvrpc::journalentry::JournalEntry {
+                    epoch_msec: since_ms,
+                    path: path.into(),
+                    repeat: true,
+                    ..entry.clone()
+                }))
+                .collect::<Vec<_>>();
+            GetLogResult {
+                record_count: i64::try_from(snapshot_entries.len()).expect("Snapshot count fits in i64"),
+                record_count_limit: params.record_count_limit.clamp(0, RECORD_COUNT_LIMIT_MAX),
+                record_count_limit_hit: false,
+                date_time: now,
+                since,
+                until: since,
+                with_paths_dict: params.with_paths_dict,
+                with_snapshot: true,
+                snapshot_entries,
+                event_entries: Vec::new(),
+            }
+        }).await?
+    } else {
+        getlog_handler(site_path, &params, app_state).await?
+    };
     let chained_entries = getlog_result.snapshot_entries.iter().map(Arc::as_ref).chain(getlog_result.event_entries.iter().map(Arc::as_ref));
     let (mut result, paths_dict) = journal_entries_to_rpcvalue(
         chained_entries,
@@ -858,7 +897,9 @@ pub(crate) async fn request_handler(
                     })
                 }
                 Method::Other(m) => match m.method() {
-                    METH_GET_LOG => m.resolve(methods, async move || { getlog_handler_rq(&path, &param, app_state).await }),
+                    METH_GET_LOG => m.resolve(methods, async move || {
+                        getlog_handler_rq(&path, &param, app_state).await
+                    }),
                     METH_ONLINE_STATUS => m.resolve(methods, async move || { online_status_handler(&path, app_state).await }),
                     METH_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<CommonAlarm>(&path, app_state).await }),
                     METH_STATE_ALARM_TABLE => m.resolve(methods, async move || { alarmtable_handler::<StateAlarm>(&path, app_state).await }),
@@ -927,7 +968,7 @@ pub(crate) async fn request_handler(
                 Method::Other(m) => match m.method() {
                     METH_GET_LOG if records_site.is_some() => m.resolve(methods, async move || { getlog3_handler_rq(&path, &param, app_state).await }),
                     METH_GET_SNAPSHOT if snapshot_site.is_some() => m.resolve(methods, async move || {
-                        getsnapshot_handler(&path, &param, rq.access_level().unwrap_or_default(), app_state).await
+                        getsnapshot_handler(&path, &param, app_state).await
                     }),
                     METH_TIME_DRIFT if records_site.is_some() => m.resolve(methods, async move || { time_drift_handler(&path, app_state).await }),
                     _ => err_unresolved_request(),

@@ -17,6 +17,8 @@ use shvrpc::journalrw::{GetLog2Params, GetLog2Since, JournalReaderLog2, JournalR
 use crate::util::{get_files, is_log_file};
 use crate::State;
 
+pub(crate) const RECORD_COUNT_LIMIT_MAX: i64 = 100_000;
+
 pub(crate) struct GetLogResult {
     pub(crate) record_count: i64,
     pub(crate) record_count_limit: i64,
@@ -143,8 +145,6 @@ pub(crate) async fn getlog_impl(
     params: &GetLog2Params
 ) -> GetLogResult
 {
-    const RECORD_COUNT_LIMIT_MAX: i64 = 100_000;
-
     enum Since {
         Msec(i64),
         Last,
