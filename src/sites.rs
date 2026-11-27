@@ -690,6 +690,7 @@ async fn reload_sites(
         .collect::<BTreeMap<_, _>>()
         .await;
 
+    log::info!("Typeinfo loaded");
     let typeinfos = Arc::new(typeinfos);
 
     // Finish the old workers before replacing shared state. In particular, an
