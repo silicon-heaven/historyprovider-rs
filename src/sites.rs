@@ -672,7 +672,9 @@ async fn reload_sites(
                         .acquire_owned()
                         .await
                         .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
-                    let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read").exec(&client_cmd_tx)
+                    let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read")
+                        .timeout(Duration::from_secs(60))
+                        .exec(&client_cmd_tx)
                         .await
                         .unwrap_or_else(|err| panic!("Retrieving {type_info_filepath} failed: {err}"));
                     drop(permit);
