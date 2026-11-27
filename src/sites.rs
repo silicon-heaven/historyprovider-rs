@@ -639,9 +639,13 @@ async fn reload_sites(
             })
     ).await;
 
+    const MAX_TYPEINFO_DOWNLOADS: usize = 100;
+    let semaphore = Arc::new(Semaphore::new(MAX_TYPEINFO_DOWNLOADS));
+
     let typeinfos = sites_without_pushlog
         .map(|(path, _)| {
             let client_cmd_tx = ClientCommandSender::clone(client_cmd_tx);
+            let semaphore = semaphore.clone();
             async move {
                 let result = 'result: {
                     let files_path = join_path!(SITES_PATH, &path, "_files");
@@ -663,9 +667,15 @@ async fn reload_sites(
                             break 'result Err(format!("No typeInfo.cpon or nodesTree.cpon found for site {path}"));
                         };
                     let type_info_filepath = join_path!(files_path, type_info_filename);
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .unwrap_or_else(|e| panic!("Cannot acquire semaphore: {e}"));
                     let type_info_file: RpcValue = RpcCall::new(&type_info_filepath, "read").exec(&client_cmd_tx)
                         .await
                         .unwrap_or_else(|err| panic!("Retrieving {type_info_filepath} failed: {err}"));
+                    drop(permit);
                     RpcValue::from_cpon(String::from_utf8_lossy(type_info_file.as_blob()))
                         .map_err(|err| format!("Couldn't parse typeinfo file as cpon: {err}"))
                         .and_then(|rv| rv.try_into().map_err(|err| format!("Failed to parse typeinfo for {path}: {err}")))
