@@ -625,7 +625,6 @@ async fn reload_sites(
         sites_without_pushlog.clone().map(|(path, _)| (subscription_prefix_path(join_path!("shv", path), &shv_api_version), "mntchng".to_string()))
     ).await;
 
-    log::info!("Loading typeinfo");
     let subscribers = init_subscribers(
         &mut old_state.subscribers,
         client_cmd_tx,
@@ -642,6 +641,7 @@ async fn reload_sites(
     const MAX_TYPEINFO_DOWNLOADS: usize = 100;
     let semaphore = Arc::new(Semaphore::new(MAX_TYPEINFO_DOWNLOADS));
 
+    log::info!("Loading typeinfo");
     let typeinfos = sites_without_pushlog
         .map(|(path, _)| {
             let client_cmd_tx = ClientCommandSender::clone(client_cmd_tx);
